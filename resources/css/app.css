@@ -1,0 +1,573 @@
+@import 'tailwindcss';
+
+@source '../views/**/*.blade.php';
+@source '../js/**/*.{ts,tsx}';
+
+/* Critical for Tailwind CSS v4 class-based dark mode switching */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   SPARC v3 — Material Design 3 Semantic Color, Surface, Status & Motion Tokens
+   Adapted for Editorial Content Operations Workspace (Light & Dark)
+   ========================================================================== */
+:root {
+    color-scheme: light;
+
+    /* Brand Primary (SPARC Royal Blue) */
+    --md-sys-color-primary: #1546D8;
+    --md-sys-color-primary-filled: #1546D8;
+    --md-sys-color-primary-hover: #0F37B3;
+    --md-sys-color-on-primary: #FFFFFF;
+    --md-sys-color-primary-container: #DCE7FF;
+    --md-sys-color-on-primary-container: #001957;
+
+    /* Secondary (SPARC Emerald — Success & Published) */
+    --md-sys-color-secondary: #057A55;
+    --md-sys-color-on-secondary: #FFFFFF;
+    --md-sys-color-secondary-container: #D1FAE5;
+    --md-sys-color-on-secondary-container: #022C22;
+
+    /* Tertiary / Warning (SPARC Amber — Review & Caution) */
+    --md-sys-color-tertiary: #B45309;
+    --md-sys-color-on-tertiary: #FFFFFF;
+    --md-sys-color-tertiary-container: #FEF3C7;
+    --md-sys-color-on-tertiary-container: #451A03;
+
+    /* Error (SPARC Crimson — Overdue & Destructive) */
+    --md-sys-color-error: #BE123C;
+    --md-sys-color-on-error: #FFFFFF;
+    --md-sys-color-error-container: #FFE4E6;
+    --md-sys-color-on-error-container: #4C0519;
+
+    /* Info */
+    --md-sys-color-info: #0369A1;
+    --md-sys-color-info-container: #E0F2FE;
+    --md-sys-color-on-info-container: #082F49;
+
+    /* MD3 Tonal Background & 5-Level Surface Hierarchy (Calm Editorial Light) */
+    --md-sys-color-background: #F5F7FA;
+    --md-sys-color-on-background: #0F172A;
+
+    --md-sys-color-surface: #FFFFFF;
+    --md-sys-color-surface-dim: #E7ECF3;
+    --md-sys-color-surface-bright: #FFFFFF;
+    --md-sys-color-surface-container-lowest: #FFFFFF;
+    --md-sys-color-surface-container-low: #F3F6FA;
+    --md-sys-color-surface-container: #ECEFF5;
+    --md-sys-color-surface-container-high: #E3E8F0;
+    --md-sys-color-surface-container-highest: #D9E0EB;
+
+    /* Text Hierarchy: Primary, Secondary, Quiet/Muted, Disabled */
+    --md-sys-color-on-surface: #0F172A;
+    --md-sys-color-surface-variant: #EEF2F7;
+    --md-sys-color-on-surface-variant: #475569;
+    --md-sys-color-on-surface-muted: #64748B;
+    --md-sys-color-on-surface-disabled: #94A3B8;
+
+    /* Outlines & Scrim */
+    --md-sys-color-outline: #94A3B8;
+    --md-sys-color-outline-variant: #DDE3ED;
+    --md-sys-color-scrim: rgba(15, 23, 42, 0.45);
+
+    /* Workflow Status Tokens (Distinct from Priority & Pillar) */
+    --sparc-status-inbox-bg: #F1F5F9;
+    --sparc-status-inbox-fg: #334155;
+    --sparc-status-inbox-bd: #CBD5E1;
+
+    --sparc-status-briefing-bg: #E0F2FE;
+    --sparc-status-briefing-fg: #0369A1;
+    --sparc-status-briefing-bd: #BAE6FD;
+
+    --sparc-status-production-bg: #E0E7FF;
+    --sparc-status-production-fg: #1D4ED8;
+    --sparc-status-production-bd: #C7D2FE;
+
+    --sparc-status-review-bg: #FEF3C7;
+    --sparc-status-review-fg: #B45309;
+    --sparc-status-review-bd: #FDE68A;
+
+    --sparc-status-ready-bg: #CCFBF1;
+    --sparc-status-ready-fg: #0F766E;
+    --sparc-status-ready-bd: #99F6E4;
+
+    --sparc-status-published-bg: #DCFCE7;
+    --sparc-status-published-fg: #15803D;
+    --sparc-status-published-bd: #BBF7D0;
+
+    /* Priority Tokens (Distinct Severity Scale) */
+    --sparc-priority-critical-bg: #FFF1F2;
+    --sparc-priority-critical-fg: #BE123C;
+    --sparc-priority-critical-bd: #FECDD3;
+
+    --sparc-priority-high-bg: #FFF7ED;
+    --sparc-priority-high-fg: #C2410C;
+    --sparc-priority-high-bd: #FED7AA;
+
+    --sparc-priority-normal-bg: transparent;
+    --sparc-priority-normal-fg: #475569;
+    --sparc-priority-normal-bd: #CBD5E1;
+
+    --sparc-priority-low-bg: transparent;
+    --sparc-priority-low-fg: #64748B;
+    --sparc-priority-low-bd: #E2E8F0;
+
+    /* Component Radii & Spacing Tokens */
+    --sparc-radius-xs: 0.375rem;
+    --sparc-radius-sm: 0.625rem;
+    --sparc-radius-md: 0.875rem;
+    --sparc-radius-lg: 1.125rem;
+    --sparc-radius-xl: 1.375rem;
+
+    /* MD3 Elevation Tokens (Subtle & Calm) */
+    --md-elevation-0: 0 0 0 0 transparent;
+    --md-elevation-1: 0 1px 2px 0 rgba(15, 23, 42, 0.04), 0 1px 3px 0 rgba(15, 23, 42, 0.03);
+    --md-elevation-2: 0 3px 8px -1px rgba(15, 23, 42, 0.06), 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+    --md-elevation-3: 0 8px 18px -3px rgba(15, 23, 42, 0.09), 0 2px 6px -1px rgba(15, 23, 42, 0.05);
+    --md-elevation-4: 0 14px 30px -5px rgba(15, 23, 42, 0.14), 0 4px 10px -2px rgba(15, 23, 42, 0.07);
+
+    /* MD3 Motion Tokens */
+    --md-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+    --md-motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+    --md-motion-easing-decelerated: cubic-bezier(0.05, 0.7, 0.1, 1);
+    --md-motion-easing-accelerated: cubic-bezier(0.3, 0, 0.8, 0.15);
+
+    --md-motion-duration-short1: 110ms;
+    --md-motion-duration-short2: 150ms;
+    --md-motion-duration-medium1: 185ms;
+    --md-motion-duration-medium2: 230ms;
+    --md-motion-duration-long1: 300ms;
+}
+
+.dark {
+    color-scheme: dark;
+
+    /* Brand Primary (Accessible Dark Mode Tonal Adaptation) */
+    --md-sys-color-primary: #7BA4FF;
+    --md-sys-color-primary-filled: #295BE7;
+    --md-sys-color-primary-hover: #3B6DF5;
+    --md-sys-color-on-primary: #FFFFFF;
+    --md-sys-color-primary-container: #172B59;
+    --md-sys-color-on-primary-container: #DCE7FF;
+
+    /* Secondary */
+    --md-sys-color-secondary: #34D399;
+    --md-sys-color-on-secondary: #022C22;
+    --md-sys-color-secondary-container: #0B3829;
+    --md-sys-color-on-secondary-container: #B7F5DC;
+
+    /* Tertiary / Warning */
+    --md-sys-color-tertiary: #FBBF24;
+    --md-sys-color-on-tertiary: #3E1F00;
+    --md-sys-color-tertiary-container: #422908;
+    --md-sys-color-on-tertiary-container: #FDE68A;
+
+    /* Error */
+    --md-sys-color-error: #FB7185;
+    --md-sys-color-on-error: #4C0519;
+    --md-sys-color-error-container: #4B1322;
+    --md-sys-color-on-error-container: #FECDD3;
+
+    /* Info */
+    --md-sys-color-info: #38BDF8;
+    --md-sys-color-info-container: #0C354E;
+    --md-sys-color-on-info-container: #BAE6FD;
+
+    /* MD3 Tonal Background & 5-Level Surface Hierarchy (Cool Slate Obsidian, Never Pure #000) */
+    --md-sys-color-background: #0B101B;
+    --md-sys-color-on-background: #F1F5F9;
+
+    --md-sys-color-surface: #121929;
+    --md-sys-color-surface-dim: #0B101B;
+    --md-sys-color-surface-bright: #25324B;
+    --md-sys-color-surface-container-lowest: #090D16;
+    --md-sys-color-surface-container-low: #101726;
+    --md-sys-color-surface-container: #151E30;
+    --md-sys-color-surface-container-high: #1C273D;
+    --md-sys-color-surface-container-highest: #25334E;
+
+    --md-sys-color-on-surface: #F1F5F9;
+    --md-sys-color-surface-variant: #1A2438;
+    --md-sys-color-on-surface-variant: #94A3B8;
+    --md-sys-color-on-surface-muted: #64748B;
+    --md-sys-color-on-surface-disabled: #475569;
+
+    /* Outlines & Scrim */
+    --md-sys-color-outline: #475569;
+    --md-sys-color-outline-variant: #222F46;
+    --md-sys-color-scrim: rgba(2, 6, 23, 0.7);
+
+    /* Workflow Status Tokens (Dark Tonal Hierarchy) */
+    --sparc-status-inbox-bg: #1E293B;
+    --sparc-status-inbox-fg: #CBD5E1;
+    --sparc-status-inbox-bd: #334155;
+
+    --sparc-status-briefing-bg: #0C2D48;
+    --sparc-status-briefing-fg: #7DD3FC;
+    --sparc-status-briefing-bd: #075985;
+
+    --sparc-status-production-bg: #172554;
+    --sparc-status-production-fg: #93C5FD;
+    --sparc-status-production-bd: #1E40AF;
+
+    --sparc-status-review-bg: #3F2708;
+    --sparc-status-review-fg: #FCD34D;
+    --sparc-status-review-bd: #78350F;
+
+    --sparc-status-ready-bg: #0A3634;
+    --sparc-status-ready-fg: #5EEAD4;
+    --sparc-status-ready-bd: #115E59;
+
+    --sparc-status-published-bg: #0A3622;
+    --sparc-status-published-fg: #86EFAC;
+    --sparc-status-published-bd: #14532D;
+
+    /* Priority Tokens (Dark Mode) */
+    --sparc-priority-critical-bg: #450A1B;
+    --sparc-priority-critical-fg: #FDA4AF;
+    --sparc-priority-critical-bd: #881337;
+
+    --sparc-priority-high-bg: #431807;
+    --sparc-priority-high-fg: #FDBA74;
+    --sparc-priority-high-bd: #7C2D12;
+
+    --sparc-priority-normal-bg: transparent;
+    --sparc-priority-normal-fg: #94A3B8;
+    --sparc-priority-normal-bd: #334155;
+
+    --sparc-priority-low-bg: transparent;
+    --sparc-priority-low-fg: #64748B;
+    --sparc-priority-low-bd: #1E293B;
+
+    /* MD3 Dark Elevation Tokens */
+    --md-elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 1px 2px -1px rgba(0, 0, 0, 0.3);
+    --md-elevation-2: 0 4px 10px -1px rgba(0, 0, 0, 0.42), 0 2px 4px -2px rgba(0, 0, 0, 0.32);
+    --md-elevation-3: 0 10px 22px -3px rgba(0, 0, 0, 0.5), 0 4px 8px -4px rgba(0, 0, 0, 0.38);
+    --md-elevation-4: 0 18px 36px -6px rgba(0, 0, 0, 0.62), 0 6px 14px -4px rgba(0, 0, 0, 0.45);
+}
+
+@theme inline {
+    --color-sparc-blue: #1546D8;
+    --color-sparc-green: #057A55;
+    --color-sparc-red: #BE123C;
+    --color-sparc-yellow: #D97706;
+
+    --color-md-primary: var(--md-sys-color-primary);
+    --color-md-primary-filled: var(--md-sys-color-primary-filled);
+    --color-md-primary-hover: var(--md-sys-color-primary-hover);
+    --color-md-on-primary: var(--md-sys-color-on-primary);
+    --color-md-primary-container: var(--md-sys-color-primary-container);
+    --color-md-on-primary-container: var(--md-sys-color-on-primary-container);
+
+    --color-md-secondary: var(--md-sys-color-secondary);
+    --color-md-secondary-container: var(--md-sys-color-secondary-container);
+    --color-md-on-secondary-container: var(--md-sys-color-on-secondary-container);
+
+    --color-md-tertiary: var(--md-sys-color-tertiary);
+    --color-md-tertiary-container: var(--md-sys-color-tertiary-container);
+    --color-md-on-tertiary-container: var(--md-sys-color-tertiary-container);
+
+    --color-md-error: var(--md-sys-color-error);
+    --color-md-error-container: var(--md-sys-color-error-container);
+    --color-md-on-error-container: var(--md-sys-color-on-error-container);
+
+    --color-md-bg: var(--md-sys-color-background);
+    --color-md-on-bg: var(--md-sys-color-on-background);
+    --color-md-surface: var(--md-sys-color-surface);
+    --color-md-surface-lowest: var(--md-sys-color-surface-container-lowest);
+    --color-md-surface-low: var(--md-sys-color-surface-container-low);
+    --color-md-surface-container: var(--md-sys-color-surface-container);
+    --color-md-surface-high: var(--md-sys-color-surface-container-high);
+    --color-md-surface-highest: var(--md-sys-color-surface-container-highest);
+    --color-md-on-surface: var(--md-sys-color-on-surface);
+    --color-md-on-surface-variant: var(--md-sys-color-on-surface-variant);
+    --color-md-outline: var(--md-sys-color-outline);
+    --color-md-outline-variant: var(--md-sys-color-outline-variant);
+}
+
+/* ==========================================================================
+   Fino-style Circular Ripple / Wipe Transition (View Transitions API)
+   ========================================================================== */
+/* Mencegah blending warna aneh saat transisi */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* Tampilan lama tetap di latar belakang */
+::view-transition-old(root) {
+  z-index: 0;
+}
+
+/* Tampilan baru mekar dari koordinat klik */
+::view-transition-new(root) {
+  z-index: 1;
+  animation: fino-theme-wipe 0.7s cubic-bezier(0.05, 0.7, 0.1, 1) forwards;
+}
+
+@keyframes fino-theme-wipe {
+  0% {
+    clip-path: circle(0 at var(--theme-origin-x, 50%) var(--theme-origin-y, 0));
+  }
+  100% {
+    clip-path: circle(var(--theme-origin-r, 150vmax) at var(--theme-origin-x, 50%) var(--theme-origin-y, 0));
+  }
+}
+
+/* Aksesibilitas: Matikan animasi bagi yang sensitif motion */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}
+/* Fallback Controlled Transition (for browsers without View Transitions API) */
+html.theme-transitioning,
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+    transition-property: background-color, border-color, color, box-shadow, outline-color !important;
+    transition-duration: 200ms !important;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.theme-transitioning,
+    html.theme-transitioning *,
+    html.theme-transitioning *::before,
+    html.theme-transitioning *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}
+
+/* Editorial & Tabular Typography Utilities */
+.sparc-code-id {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    letter-spacing: -0.01em;
+}
+
+.sparc-eyebrow {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    color: var(--md-sys-color-on-surface-muted);
+}
+
+/* Material Design 3 Surface & Card Utilities */
+.md-card {
+    background-color: var(--md-sys-color-surface);
+    border: 1px solid var(--md-sys-color-outline-variant);
+    box-shadow: var(--md-elevation-1);
+    transition:
+        transform var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        box-shadow var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        border-color var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        background-color var(--md-motion-duration-short2) var(--md-motion-easing-standard);
+}
+
+.md-card-interactive {
+    cursor: pointer;
+}
+
+.md-card-interactive:hover {
+    transform: translateY(-1.5px);
+    box-shadow: var(--md-elevation-2);
+    border-color: var(--md-sys-color-primary);
+}
+
+.md-card-interactive:active {
+    transform: translateY(0) scale(0.992);
+    box-shadow: var(--md-elevation-1);
+}
+
+.md-btn-tactile {
+    transition:
+        transform var(--md-motion-duration-short1) var(--md-motion-easing-standard),
+        box-shadow var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        background-color var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        border-color var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        color var(--md-motion-duration-short2) var(--md-motion-easing-standard);
+}
+
+.md-btn-tactile:active:not(:disabled) {
+    transform: scale(0.975);
+}
+
+/* Kanban Dragging Overlay Elevation */
+.md-drag-overlay {
+    box-shadow: var(--md-elevation-4);
+    transform: rotate(1.2deg) scale(1.015);
+}
+
+/* Interactive Table Row Highlight (Light & Dark Tonal Support) */
+.notion-row {
+    transition: background-color var(--md-motion-duration-short1) var(--md-motion-easing-standard);
+}
+
+.notion-row:hover {
+    background-color: var(--md-sys-color-surface-container-low);
+}
+
+/* Shimmer Loading Skeleton (MD3 Tonal Light & Dark) */
+@keyframes shimmer {
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+.shimmer-placeholder {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--md-sys-color-surface-container-high);
+}
+
+.shimmer-placeholder::after {
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+        90deg,
+        transparent 0,
+        rgba(255, 255, 255, 0.35) 50%,
+        transparent 100%
+    );
+    animation: shimmer 1.5s infinite;
+    content: '';
+}
+
+.dark .shimmer-placeholder::after {
+    background-image: linear-gradient(
+        90deg,
+        transparent 0,
+        rgba(148, 163, 184, 0.14) 50%,
+        transparent 100%
+    );
+}
+
+/* Subtle Custom Scrollbars Matching MD3 Theme */
+::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-outline-variant);
+    border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--md-sys-color-outline);
+}
+
+/* ==========================================================================
+   Panze Bento Dashboard Surface, Capsule Pill & Pastel Task Card Tokens
+   Full Light & Dark Mode Tonal Adaptation
+   ========================================================================== */
+.panze-bento-card {
+    background-color: var(--md-sys-color-surface);
+    border: 1px solid rgba(221, 227, 237, 0.85);
+    box-shadow: 0 2px 14px -3px rgba(15, 23, 42, 0.045), 0 1px 3px 0 rgba(15, 23, 42, 0.025);
+    border-radius: 1.625rem;
+}
+
+.dark .panze-bento-card {
+    border-color: var(--md-sys-color-outline-variant);
+    box-shadow: var(--md-elevation-1);
+}
+
+.panze-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 9999px;
+    border: 1px solid var(--md-sys-color-outline-variant);
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface-variant);
+    transition:
+        transform var(--md-motion-duration-short1) var(--md-motion-easing-standard),
+        background-color var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        border-color var(--md-motion-duration-short2) var(--md-motion-easing-standard),
+        color var(--md-motion-duration-short2) var(--md-motion-easing-standard);
+}
+
+.panze-icon-btn:hover {
+    background-color: var(--md-sys-color-surface-container);
+    color: var(--md-sys-color-on-surface);
+    border-color: var(--md-sys-color-outline);
+}
+
+.panze-icon-btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.panze-pill-active {
+    background-color: #0F172A;
+    color: #FFFFFF;
+    border-color: #0F172A;
+}
+
+.dark .panze-pill-active {
+    background-color: #F1F5F9;
+    color: #0F172A;
+    border-color: #F1F5F9;
+}
+
+.panze-pastel-peach {
+    background-color: #FFF4EB;
+    border: 1px solid #FDE4CF;
+}
+
+.dark .panze-pastel-peach {
+    background-color: rgba(120, 53, 15, 0.24);
+    border-color: rgba(217, 119, 6, 0.28);
+}
+
+.panze-pastel-blue {
+    background-color: #EDF6FF;
+    border: 1px solid #D6E8FF;
+}
+
+.dark .panze-pastel-blue {
+    background-color: rgba(12, 74, 110, 0.26);
+    border-color: rgba(56, 189, 248, 0.26);
+}
+
+.panze-pastel-pink {
+    background-color: #FDF2F8;
+    border: 1px solid #FCE1F0;
+}
+
+.dark .panze-pastel-pink {
+    background-color: rgba(131, 24, 67, 0.24);
+    border-color: rgba(244, 114, 182, 0.26);
+}
+
+.panze-pastel-mint {
+    background-color: #ECFDF5;
+    border: 1px solid #CCFBF1;
+}
+
+.dark .panze-pastel-mint {
+    background-color: rgba(6, 78, 59, 0.26);
+    border-color: rgba(52, 211, 153, 0.26);
+}
+
+/* Accessibility: Strict Reduced Motion Compliance */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
