@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\HaloApuOperationsController;
 use App\Http\Controllers\InstagramOperationsController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\WorkspaceActionController;
 use App\Http\Controllers\WorkspaceV3Controller;
 use Illuminate\Http\Request;
@@ -36,6 +38,13 @@ Route::middleware('auth')->group(function () {
 
     Route::post('/incoming/{id}/convert', [WorkspaceActionController::class, 'convertIncomingTicket'])
         ->name('incoming.convert');
+    Route::post('/incoming/{id}/convert-db', [HaloApuOperationsController::class, 'convertTicket'])->name('incoming.convert.db');
+    Route::post('/incoming/{id}/ignore', [HaloApuOperationsController::class, 'ignoreTicket'])->name('incoming.ignore');
+    Route::post('/incoming/{id}/reply', [HaloApuOperationsController::class, 'replyTicket'])->name('incoming.reply');
+    Route::patch('/incoming/{id}/remote-status', [HaloApuOperationsController::class, 'updateRemoteStatus'])->name('incoming.remoteStatus');
+    Route::post('/incoming/{id}/deliver', [HaloApuOperationsController::class, 'deliverResult'])->name('incoming.deliver');
+    Route::get('/incoming/{id}/attachments/{attachmentId}/proxy', [HaloApuOperationsController::class, 'proxyAttachment'])->name('incoming.attachment.proxy');
+    Route::post('/incoming/{id}/attachments/{attachmentId}/save-asset', [HaloApuOperationsController::class, 'saveAttachmentToAssets'])->name('incoming.attachment.saveAsset');
 
     // =====================================================================
     // 2. CONTENT WORKFLOW — Content Plan, Production Board (Kanban) & Calendar
@@ -84,7 +93,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/instagram/comments/{comment}/convert', [InstagramOperationsController::class, 'convertToContent'])->name('instagram.comments.convert');
 
     Route::get('/report', [WorkspaceV3Controller::class, 'report'])->name('report.index');
+    Route::get('/report/export-excel', [WorkspaceV3Controller::class, 'exportReportExcel'])->name('report.export.excel');
+    Route::get('/report/template-excel', [WorkspaceV3Controller::class, 'downloadReportTemplateExcel'])->name('report.template.excel');
     Route::post('/report/metrics', [WorkspaceV3Controller::class, 'storeReportMetric'])->name('report.metrics.store');
+    Route::post('/report/metrics/import-excel', [WorkspaceV3Controller::class, 'importReportCsv'])->name('report.metrics.excel');
     Route::post('/report/metrics/import-csv', [WorkspaceV3Controller::class, 'importReportCsv'])->name('report.metrics.csv');
 
     Route::get('/analytics', function (Request $request) {
@@ -96,6 +108,7 @@ Route::middleware('auth')->group(function () {
             'publications' => $state['publications'],
             'team' => $state['team'],
             'sessionMetrics' => $request->session()->get('sparc.analytics_posts', []),
+            'instagramSettings' => $state['settings']['instagram'] ?? [],
         ]);
     })->name('analytics.index');
     Route::post('/analytics/metrics', [WorkspaceActionController::class, 'storeAnalyticsMetric'])->name('analytics.metrics.store');
@@ -129,12 +142,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/grid/slots', [InstagramOperationsController::class, 'saveGridSlot'])->name('grid.slots.store');
     Route::patch('/grid/reorder', [InstagramOperationsController::class, 'reorderGrid'])->name('grid.reorder');
     Route::delete('/grid/slots/{slot}', [InstagramOperationsController::class, 'destroyGridSlot'])->name('grid.slots.destroy');
-
-    Route::get('/resources', function (Request $request) {
-        WorkspaceV3Controller::hydrateWorkspace($request);
-
-        return Inertia::render('Resources/Index');
-    })->name('resources.index');
+    Route::post('/grid/sync-live-feed', [InstagramOperationsController::class, 'syncLiveGridFeed'])->name('grid.syncLiveFeed');
 
     Route::get('/assets', [WorkspaceV3Controller::class, 'assets'])->name('assets.index');
     Route::post('/assets', [WorkspaceV3Controller::class, 'storeAsset'])->name('assets.store');
@@ -145,6 +153,8 @@ Route::middleware('auth')->group(function () {
     // =====================================================================
     Route::get('/team', [WorkspaceV3Controller::class, 'team'])->name('team.index');
     Route::post('/team/invite', [WorkspaceV3Controller::class, 'inviteTeamMember'])->name('team.invite');
+    Route::patch('/team/{id}/role', [WorkspaceV3Controller::class, 'updateTeamMemberRole'])->name('team.role');
+    Route::delete('/team/{id}', [WorkspaceV3Controller::class, 'destroyTeamMember'])->name('team.destroy');
 
     // =====================================================================
     // 6. ADMINISTRATION, ROLE SWITCHING & REAL POLLING NOTIFICATIONS
@@ -152,6 +162,8 @@ Route::middleware('auth')->group(function () {
     Route::get('/settings', [WorkspaceV3Controller::class, 'settings'])->name('settings.index');
     Route::patch('/settings', [WorkspaceV3Controller::class, 'updateSettings'])->name('settings.update');
     Route::post('/settings/haloapu/sync', [WorkspaceV3Controller::class, 'syncHaloApu'])->name('settings.haloapu.sync');
+    Route::post('/settings/haloapu/test', [WorkspaceV3Controller::class, 'testHaloApuConnection'])->name('settings.haloapu.test');
+    Route::patch('/settings/haloapu', [WorkspaceV3Controller::class, 'updateHaloApuSettings'])->name('settings.haloapu.update');
     Route::patch('/settings/instagram', [WorkspaceV3Controller::class, 'updateInstagramSettings'])->name('settings.instagram.update');
     Route::post('/settings/instagram/test', [WorkspaceV3Controller::class, 'testInstagramConnection'])->name('settings.instagram.test');
     Route::get('/settings/instagram/oauth/redirect', [WorkspaceV3Controller::class, 'redirectToInstagramOAuth'])->name('settings.instagram.oauth.redirect');
@@ -159,6 +171,10 @@ Route::middleware('auth')->group(function () {
     Route::post('/settings/instagram/select-account', [WorkspaceV3Controller::class, 'selectInstagramAccount'])->name('settings.instagram.selectAccount');
     Route::post('/settings/instagram/refresh-token', [InstagramOperationsController::class, 'refreshToken'])->name('settings.instagram.refreshToken');
     Route::post('/settings/instagram/sync-profile', [InstagramOperationsController::class, 'syncProfileAndInsights'])->name('settings.instagram.syncProfile');
+    Route::post('/settings/instagram/sync-ads', [InstagramOperationsController::class, 'syncAds'])->name('settings.instagram.syncAds');
+    Route::post('/settings/instagram/sync-demographics', [InstagramOperationsController::class, 'syncDemographics'])->name('settings.instagram.syncDemographics');
+    Route::post('/settings/instagram/sync-stories', [InstagramOperationsController::class, 'syncStories'])->name('settings.instagram.syncStories');
+    Route::post('/settings/instagram/sync-mentions', [InstagramOperationsController::class, 'syncMentions'])->name('settings.instagram.syncMentions');
     Route::delete('/settings/instagram/disconnect', [WorkspaceV3Controller::class, 'disconnectInstagram'])->name('settings.instagram.disconnect');
 
     Route::get('/trash', function (Request $request) {
@@ -173,4 +189,12 @@ Route::middleware('auth')->group(function () {
     Route::get('/poll/updates', [WorkspaceV3Controller::class, 'pollUpdates'])->name('poll.updates');
     Route::post('/notifications/{id}/read', [WorkspaceV3Controller::class, 'markNotificationRead'])->name('notifications.read');
     Route::post('/notifications/read-all', [WorkspaceV3Controller::class, 'markAllNotificationsRead'])->name('notifications.readAll');
+
+    // =====================================================================
+    // 7. USER PROFILE & ACCOUNT MANAGEMENT
+    // =====================================================================
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar'])->name('profile.avatar');
+    Route::put('/profile/password', [ProfileController::class, 'updatePassword'])->name('profile.password');
 });

@@ -40,9 +40,11 @@ class AuthenticatedSessionController extends Controller
         $password = (string) $request->string('password');
         $remember = $request->boolean('remember');
 
-        $user = User::where('email', $loginInput)
-            ->orWhere('name', $loginInput)
-            ->first();
+        $user = match (strtolower($loginInput)) {
+            'test', 'demo' => User::where('email', 'test@example.com')->orWhere('email', 'admin@sparc.go.id')->first(),
+            'admin' => User::where('email', 'admin@sparc.go.id')->orWhere('email', 'test@example.com')->first(),
+            default => User::where('email', $loginInput)->orWhere('name', $loginInput)->first(),
+        };
 
         $attemptSuccessful = false;
         if ($user && Auth::attempt(['email' => $user->email, 'password' => $password], $remember)) {

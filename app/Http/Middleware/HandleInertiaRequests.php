@@ -103,6 +103,8 @@ class HandleInertiaRequests extends Middleware
             'connected' => ! empty($ig['connected']),
             'username' => (string) ($ig['username'] ?? ''),
             'name' => (string) ($ig['name'] ?? ''),
+            'biography' => (string) ($ig['biography'] ?? ''),
+            'website' => (string) ($ig['website'] ?? ''),
             'profilePictureUrl' => $ig['profilePictureUrl'] ?? null,
             'followersCount' => $ig['followersCount'] ?? null,
             'mediaCount' => $ig['mediaCount'] ?? null,

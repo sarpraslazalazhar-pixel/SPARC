@@ -3,10 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\ContentItem;
+use App\Models\HaloApuTicket;
 use App\Models\InstagramConnection;
 use App\Models\User;
+use App\Services\SparcExcelReportService;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia;
@@ -19,6 +22,94 @@ class WorkspaceFlowTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Http::fake([
+            '*/api/integrations/sparc/*' => Http::response(['status' => 'ok', 'data' => []], 200),
+        ]);
+
+        HaloApuTicket::create([
+            'id' => 1,
+            'haloapu_ticket_id' => '045-812-901',
+            'raw_ticket_id' => 101,
+            'source_type' => 'video_reels',
+            'sub_unit_name' => 'Editing & Produksi Video',
+            'title' => 'Tutorial Pendaftaran Online Layanan Informasi Publik',
+            'brief' => 'Mohon dibuatkan video reels panduan singkat cara pendaftaran online dan verifikasi akun untuk masyarakat umum.',
+            'requester_name' => 'Budi Santoso (Dit. Layanan)',
+            'target_date' => '2026-11-02',
+            'haloapu_status' => 'open',
+            'sync_status' => 'pending',
+            'haloapu_created_at' => '2026-10-27 09:15:00',
+        ]);
+        HaloApuTicket::create([
+            'id' => 2,
+            'haloapu_ticket_id' => '042-119-002',
+            'raw_ticket_id' => 102,
+            'source_type' => 'desain_feed',
+            'sub_unit_name' => 'Pengajuan Desain Grafis',
+            'title' => 'Feed IG - Infografis Capaian Kinerja Triwulan III',
+            'brief' => 'Desain infografis carousel 5 slide mengenai capaian dan realisasi program prioritas tahun 2026.',
+            'requester_name' => 'Siti Rahma (Biro Perencanaan)',
+            'target_date' => '2026-10-31',
+            'haloapu_status' => 'on_proses',
+            'sync_status' => 'converted',
+            'haloapu_created_at' => '2026-10-26 14:00:00',
+        ]);
+        HaloApuTicket::create([
+            'id' => 3,
+            'haloapu_ticket_id' => '041-908-112',
+            'raw_ticket_id' => 103,
+            'source_type' => 'desain_feed',
+            'sub_unit_name' => 'Pengajuan Desain Grafis',
+            'title' => 'Feed IG - Peringatan Hari Sumpah Pemuda 2026',
+            'brief' => 'Desain single feed ucapan peringatan resmi Hari Sumpah Pemuda dengan nuansa dinamis dan berani.',
+            'requester_name' => 'Ahmad Faiz (Bagian Protokol)',
+            'target_date' => '2026-10-28',
+            'haloapu_status' => 'open',
+            'sync_status' => 'pending',
+            'haloapu_created_at' => '2026-10-26 11:30:00',
+        ]);
+        HaloApuTicket::create([
+            'id' => 4,
+            'haloapu_ticket_id' => '039-551-789',
+            'raw_ticket_id' => 104,
+            'source_type' => 'video_reels',
+            'sub_unit_name' => 'Editing & Produksi Video',
+            'title' => 'Reels Liputan Serah Terima Jabatan Pejabat Baru',
+            'brief' => 'Dokumentasi video singkat suasana serah terima jabatan pejabat fungsional di aula utama.',
+            'requester_name' => 'Hendra Setiawan (Bagian Kepegawaian)',
+            'target_date' => '2026-10-25',
+            'haloapu_status' => 'solve',
+            'sync_status' => 'converted',
+            'haloapu_created_at' => '2026-10-24 16:45:00',
+        ]);
+        HaloApuTicket::create([
+            'id' => 5,
+            'haloapu_ticket_id' => '038-102-445',
+            'raw_ticket_id' => 105,
+            'source_type' => 'desain_feed',
+            'sub_unit_name' => 'Pengajuan Desain Grafis',
+            'title' => 'Feed IG - Poster Sayembara Desain Maskot',
+            'brief' => 'Poster publikasi sayembara logo dan maskot terbuka untuk umum.',
+            'requester_name' => 'Rina Kusuma (Bagian Tata Usaha)',
+            'target_date' => '2026-10-20',
+            'haloapu_status' => 'dibatalkan',
+            'sync_status' => 'ignored',
+            'haloapu_created_at' => '2026-10-20 10:00:00',
+        ]);
+        HaloApuTicket::create([
+            'id' => 6,
+            'haloapu_ticket_id' => '046-330-518',
+            'raw_ticket_id' => 106,
+            'source_type' => 'video_reels',
+            'sub_unit_name' => 'Editing & Produksi Video',
+            'title' => 'Reels Sosialisasi Kanal Pengaduan Terpadu 24 Jam',
+            'brief' => 'Permintaan video edukasi 45 detik mengenai tata cara pelaporan cepat melalui aplikasi mobile dan WhatsApp resmi.',
+            'requester_name' => 'Dewi Lestari (Biro Hukum & Humas)',
+            'target_date' => '2026-11-04',
+            'haloapu_status' => 'open',
+            'sync_status' => 'pending',
+            'haloapu_created_at' => '2026-10-27 13:40:00',
+        ]);
 
         ContentItem::factory(3)->create();
 
@@ -45,7 +136,6 @@ class WorkspaceFlowTest extends TestCase
             '/studio' => 'Studio/Index',
             '/studio/proj-1' => 'Studio/Show',
             '/grid' => 'Grid/Index',
-            '/resources' => 'Resources/Index',
             '/assets' => 'Assets/Index',
             '/team' => 'Team/Index',
             '/settings' => 'Settings/Index',
@@ -312,6 +402,27 @@ class WorkspaceFlowTest extends TestCase
         $this->postJson(route('notifications.readAll'))
             ->assertOk()
             ->assertJsonPath('unread_notification_count', 0);
+
+        session()->put('sparc_v3.publications', [
+            [
+                'id' => 'pub-1',
+                'contentItemId' => 'ci-4',
+                'contentId' => 'SPARC-2026-0004',
+                'title' => 'Rilis Berita Peluncuran Portal Layanan Terpadu Versi Mobile',
+                'platform' => 'website',
+                'scheduledAt' => '2026-10-27 16:00',
+                'publishedActualAt' => null,
+                'publishedUrl' => null,
+                'picName' => 'Fajar Nugroho',
+                'checklist' => [
+                    ['key' => 'judul_artikel', 'label' => 'Judul rilis berita telah disunting redaktur', 'checked' => true],
+                    ['key' => 'meta_description', 'label' => 'Meta description SEO (150-160 karakter) terisi', 'checked' => true],
+                    ['key' => 'featured_image', 'label' => 'Foto utama beserta alt-text aksesibilitas', 'checked' => true],
+                    ['key' => 'internal_link', 'label' => 'Tautan rujukan layanan publik berfungsi', 'checked' => false],
+                ],
+                'metrics' => null,
+            ],
+        ]);
 
         // Publishing slot `pub-1` cannot be marked live while checklist has unchecked items
         $this->from(route('publishing.index'))
@@ -712,5 +823,66 @@ class WorkspaceFlowTest extends TestCase
 
         $exitCode = Artisan::call('instagram:sync-metrics');
         $this->assertSame(0, $exitCode);
+    }
+
+    public function test_excel_report_export_template_and_import_roundtrip(): void
+    {
+        $targetItem = ContentItem::firstOrFail();
+        $targetItem->update([
+            'platform' => 'instagram',
+            'status' => 'published',
+        ]);
+        $targetCode = (string) $targetItem->content_id;
+
+        $exportResponse = $this->get(route('report.export.excel', ['platform' => 'all', 'layer' => 'creator']));
+        $exportResponse->assertOk();
+        $this->assertStringContainsString(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            (string) $exportResponse->headers->get('Content-Type')
+        );
+        $this->assertStringStartsWith("PK\x03\x04", (string) $exportResponse->getContent());
+
+        $templateResponse = $this->get(route('report.template.excel'));
+        $templateResponse->assertOk();
+        $this->assertStringStartsWith("PK\x03\x04", (string) $templateResponse->getContent());
+
+        // Generate an .xlsx workbook with updated metrics for $targetCode and upload it
+        $excelService = app(SparcExcelReportService::class);
+        $xlsxBinary = $excelService->generateImportTemplateWorkbook([
+            [
+                'contentId' => $targetCode,
+                'title' => 'Panduan Layanan Informasi Publik Terpadu',
+                'platform' => 'instagram',
+                'metrics' => [
+                    'reach' => 54200,
+                    'impressions' => 68100,
+                    'views' => 79500,
+                    'likes' => 4120,
+                    'comments' => 315,
+                    'shares' => 890,
+                    'saves' => 1450,
+                    'clicks' => null,
+                ],
+            ],
+        ], '2026-10-27');
+
+        $uploadedFile = UploadedFile::fake()->createWithContent('metrik-performa.xlsx', $xlsxBinary);
+
+        $this->from(route('report.index'))
+            ->post(route('report.metrics.excel'), [
+                'excel_file' => $uploadedFile,
+            ])
+            ->assertRedirect(route('report.index'))
+            ->assertSessionHas('toast.type', 'success');
+
+        $updatedPub = collect(session('sparc_v3.publications', []))
+            ->first(fn (array $p): bool => ($p['contentId'] ?? '') === $targetCode && ($p['platform'] ?? '') === 'instagram');
+
+        $this->assertNotNull($updatedPub);
+        $this->assertSame(54200, $updatedPub['metrics']['reach']);
+        $this->assertSame(79500, $updatedPub['metrics']['views']);
+        $this->assertSame(4120, $updatedPub['metrics']['likes']);
+        $this->assertNull($updatedPub['metrics']['clicks']);
+        $this->assertSame('excel', $updatedPub['metrics']['source']);
     }
 }

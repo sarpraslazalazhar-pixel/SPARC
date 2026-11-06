@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Head, router, useForm } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import {
     Search,
     Video,
@@ -14,12 +14,13 @@ import {
     Ban,
     RotateCcw,
     Sparkles,
+    RefreshCw,
+    CheckCircle2,
+    MessageSquare,
 } from 'lucide-react';
 import { AppLayout } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
 import { Badge } from '@/Components/UI/Badge';
-import { Input } from '@/Components/UI/Input';
-import { Select } from '@/Components/UI/Select';
 import { Sheet } from '@/Components/UI/Sheet';
 import { Modal } from '@/Components/UI/Modal';
 import { Tabs } from '@/Components/UI/Tabs';
@@ -55,6 +56,18 @@ export interface IncomingTicket {
     updateLogs?: TicketUpdateLog[];
     convertedProjectId?: string;
     createdAt: string;
+    revisionCount?: number;
+    isResultAccepted?: boolean;
+    isSlaBreached?: boolean;
+    slaResponseDeadline?: string;
+    slaResolutionDeadline?: string;
+    logs?: Array<{
+        id: string;
+        aksi: string;
+        actor: string;
+        catatan: string;
+        timestamp: string;
+    }>;
 }
 
 interface IncomingProps {
@@ -62,129 +75,13 @@ interface IncomingProps {
     ticketOverrides?: Record<string, IncomingTicket['syncStatus']>;
 }
 
-const DEFAULT_TICKETS: IncomingTicket[] = [
-    {
-        id: '1',
-        haloapuTicketId: '045-812-901',
-        sourceType: 'video_reels',
-        title: 'Tutorial Pendaftaran Online Layanan Informasi Publik',
-        brief: 'Mohon dibuatkan video reels panduan singkat cara pendaftaran online dan verifikasi akun untuk masyarakat umum.',
-        requesterName: 'Budi Santoso (Dit. Layanan)',
-        targetDate: '2026-11-02',
-        haloapuStatus: 'open',
-        syncStatus: 'pending',
-        createdAt: '27 Okt 2026, 09:15 WIB',
-        formSnapshot: {
-            'Judul/Tema Video': 'Tutorial Pendaftaran Online Layanan Informasi Publik',
-            'Jenis Video': 'Reels',
-            'Durasi Estimasi': '60 Detik',
-            'Deadline Tayang': '2026-11-02',
-            'Brief Video': 'Fokus pada alur 3 langkah: 1. Buka web, 2. Isi NIK, 3. Konfirmasi email.',
-            'Link Referensi': 'https://instagram.com/p/sample-reels',
-            'Keterangan Tambahan': 'Gunakan voiceover santai dan human-touch.',
-        },
-        attachments: [
-            { fileName: 'alur-pendaftaran.pdf', url: 'https://example.com/storage/alur-pendaftaran.pdf', fileSize: '1.2 MB' },
-            { fileName: 'screenshot-portal.png', url: 'https://example.com/storage/screenshot-portal.png', fileSize: '850 KB' },
-        ],
-        updateLogs: [
-            {
-                id: 'log-1',
-                label: 'Deadline Tayang',
-                oldValue: '2026-10-30',
-                newValue: '2026-11-02',
-                updatedAt: '27 Okt 2026, 10:20 WIB',
-            },
-        ],
-    },
-    {
-        id: '2',
-        haloapuTicketId: '042-119-002',
-        sourceType: 'desain_feed',
-        title: 'Feed IG - Infografis Capaian Kinerja Triwulan III',
-        brief: 'Desain infografis carousel 5 slide mengenai capaian dan realisasi program prioritas tahun 2026.',
-        requesterName: 'Siti Rahma (Biro Perencanaan)',
-        targetDate: '2026-10-31',
-        haloapuStatus: 'on_proses',
-        syncStatus: 'converted',
-        convertedProjectId: 'proj-101',
-        createdAt: '26 Okt 2026, 14:00 WIB',
-        formSnapshot: {
-            'Jenis Produksi Desain': 'Feed Instagram / Meme',
-            'Tujuan Penggunaan': 'Publikasi media sosial Instagram & LinkedIn.',
-            'Brief Materi': '5 Slide Carousel: Slide 1 Cover Hook, Slide 2 Anggaran, Slide 3 Program Unggulan, Slide 4 Testimoni, Slide 5 CTA Website.',
-            'Deadline': '2026-10-31',
-            'Jumlah Produksi': '1 Paket (5 Slide)',
-        },
-        attachments: [
-            { fileName: 'data-rekap-triwulan.xlsx', url: 'https://example.com/storage/data-rekap.xlsx', fileSize: '2.4 MB' },
-        ],
-    },
-    {
-        id: '3',
-        haloapuTicketId: '041-908-112',
-        sourceType: 'desain_feed',
-        title: 'Feed IG - Peringatan Hari Sumpah Pemuda 2026',
-        brief: 'Desain single feed ucapan peringatan resmi Hari Sumpah Pemuda dengan nuansa dinamis dan berani.',
-        requesterName: 'Ahmad Faiz (Bagian Protokol)',
-        targetDate: '2026-10-28',
-        haloapuStatus: 'open',
-        syncStatus: 'pending',
-        createdAt: '26 Okt 2026, 11:30 WIB',
-        formSnapshot: {
-            'Jenis Produksi Desain': 'Feed Instagram / Meme',
-            'Tujuan Penggunaan': 'Ucapan resmi lembaga di feed Instagram.',
-            'Brief Materi': 'Sertakan foto pimpinan dan kutipan tema nasional Sumpah Pemuda 2026.',
-            'Deadline': '2026-10-28',
-        },
-        attachments: [
-            { fileName: 'foto-pimpinan-resmi.png', url: 'https://example.com/storage/foto-pimpinan.png', fileSize: '4.8 MB' },
-        ],
-    },
-    {
-        id: '4',
-        haloapuTicketId: '039-551-789',
-        sourceType: 'video_reels',
-        title: 'Reels Liputan Serah Terima Jabatan Pejabat Baru',
-        brief: 'Dokumentasi video singkat suasana serah terima jabatan pejabat fungsional di aula utama.',
-        requesterName: 'Hendra Setiawan (Bagian Kepegawaian)',
-        targetDate: '2026-10-25',
-        haloapuStatus: 'solve',
-        syncStatus: 'converted',
-        convertedProjectId: 'proj-099',
-        createdAt: '24 Okt 2026, 16:45 WIB',
-        formSnapshot: {
-            'Judul/Tema Video': 'Liputan Serah Terima Jabatan Pejabat Baru',
-            'Jenis Video': 'Reels',
-            'Durasi Estimasi': '45 Detik',
-            'Deadline Tayang': '2026-10-25',
-        },
-        attachments: [],
-    },
-    {
-        id: '5',
-        haloapuTicketId: '038-102-445',
-        sourceType: 'desain_feed',
-        title: 'Feed IG - Poster Sayembara Desain Maskot',
-        brief: 'Poster publikasi sayembara logo dan maskot terbuka untuk umum.',
-        requesterName: 'Rina Kusuma (Bagian Tata Usaha)',
-        targetDate: '2026-10-20',
-        haloapuStatus: 'dibatalkan',
-        syncStatus: 'ignored',
-        createdAt: '20 Okt 2026, 10:00 WIB',
-        formSnapshot: {
-            'Jenis Produksi Desain': 'Feed Instagram / Meme',
-            'Brief Materi': 'Pengumuman dibatalkan karena perubahan petunjuk teknis sayembara.',
-        },
-        attachments: [],
-    },
-];
+const DEFAULT_TICKETS: IncomingTicket[] = [];
 
 export default function IncomingIndex({
     tickets: initialTickets,
     ticketOverrides = {},
 }: IncomingProps) {
-    const { warning, info, error } = useToast();
+    const { success: toastSuccess, warning, info, error } = useToast();
 
     const mergedTickets = useMemo(() => {
         const source = initialTickets || DEFAULT_TICKETS;
@@ -201,22 +98,15 @@ export default function IncomingIndex({
 
     const [selectedTicket, setSelectedTicket] = useState<IncomingTicket | null>(null);
     const [sheetOpen, setSheetOpen] = useState(false);
-    const [convertModalOpen, setConvertModalOpen] = useState(false);
-
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
+    const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
+    const [savedAssetIds, setSavedAssetIds] = useState<string[]>([]);
     // Filter states
     const [activeTab, setActiveTab] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState('');
 
-    // Inertia useForm for Convert Modal
-    const convertForm = useForm({
-        title: '',
-        ticket_code: '',
-        format: 'reels_shorts' as 'reels_shorts' | 'carousel_feed' | 'single_feed',
-        pillar: 'edukasi' as 'edukasi' | 'event_liputan' | 'sosialisasi_prestasi' | 'pengumuman' | 'human_touch',
-        pic_name: 'Aldwin (Writer)',
-        target_date: '',
-    });
 
     const filteredTickets = useMemo(() => {
         return tickets.filter((ticket) => {
@@ -249,49 +139,57 @@ export default function IncomingIndex({
         setSheetOpen(true);
     };
 
-    const handleOpenConvert = (ticket: IncomingTicket) => {
-        setSelectedTicket(ticket);
-        convertForm.clearErrors();
-        convertForm.setData({
-            title: ticket.title,
-            ticket_code: ticket.haloapuTicketId,
-            format: ticket.sourceType === 'video_reels' ? 'reels_shorts' : 'carousel_feed',
-            pillar: 'edukasi',
-            pic_name: 'Aldwin (Writer)',
-            target_date: ticket.targetDate || '2026-11-15',
-        });
-        setConvertModalOpen(true);
-    };
 
-    const handleSaveConvert = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!selectedTicket) {
-            return;
-        }
-
-        convertForm.post(`/incoming/${selectedTicket.id}/convert`, {
-            onSuccess: () => {
-                setConvertModalOpen(false);
-                setSheetOpen(false);
-            },
-            onError: () => {
-                error('Validasi Konversi Gagal', 'Pastikan judul proyek dan target tanggal tayang sudah benar.');
-            },
+    const handleSyncHaloApu = () => {
+        setIsSyncing(true);
+        router.post('/settings/haloapu/sync', {}, {
+            preserveScroll: true,
+            onFinish: () => setIsSyncing(false),
         });
     };
+
+
+    const handleSaveToAsset = (ticketId: string, attachmentId: string, fileName: string) => {
+        setSavingAssetId(attachmentId);
+        router.post(
+            `/incoming/${ticketId}/attachments/${attachmentId}/save-asset`,
+            {},
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setSavedAssetIds((prev) => [...prev, attachmentId]);
+                    toastSuccess(
+                        'Aset Berhasil Disimpan',
+                        `Berkas "${fileName}" berhasil ditambahkan ke katalog Visual Assets (/assets).`
+                    );
+                },
+                onError: () => {
+                    error('Gagal Menyimpan Aset', 'Terjadi kesalahan saat menyimpan berkas ke katalog aset visual.');
+                },
+                onFinish: () => {
+                    setSavingAssetId(null);
+                },
+            }
+        );
+    };
+
 
     const handleToggleIgnore = (ticketId: string, ignore: boolean) => {
-        setTickets((prev) =>
-            prev.map((t) => (t.id === ticketId ? { ...t, syncStatus: ignore ? 'ignored' : 'pending' } : t))
+        router.post(
+            `/incoming/${ticketId}/ignore`,
+            { action: ignore ? 'ignore' : 'unignore' },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setTickets((prev) =>
+                        prev.map((t) => (t.id === ticketId ? { ...t, syncStatus: ignore ? 'ignored' : 'pending' } : t))
+                    );
+                    if (selectedTicket && selectedTicket.id === ticketId) {
+                        setSelectedTicket((prev) => (prev ? { ...prev, syncStatus: ignore ? 'ignored' : 'pending' } : null));
+                    }
+                },
+            }
         );
-        if (selectedTicket && selectedTicket.id === ticketId) {
-            setSelectedTicket((prev) => (prev ? { ...prev, syncStatus: ignore ? 'ignored' : 'pending' } : null));
-        }
-        if (ignore) {
-            warning('Tiket Diabaikan', 'Tiket telah dipindahkan ke daftar tiket yang diabaikan.');
-        } else {
-            info('Tiket Dipulihkan', 'Tiket dikembalikan ke antrean aktif untuk ditindaklanjuti.');
-        }
     };
 
     const getSourceBadge = (type: IncomingTicket['sourceType']) => {
@@ -359,9 +257,20 @@ export default function IncomingIndex({
             title="Incoming Requests (API)"
             subtitle="Sinkronisasi pengajuan produksi konten dari portal layanan HaloAPU"
             actions={
-                <Button variant="outline" size="sm" onClick={() => router.visit('/content')}>
-                    Ke Content Planner <ArrowRight className="w-3.5 h-3.5" />
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        isLoading={isSyncing}
+                        icon={<RefreshCw className="w-3.5 h-3.5" />}
+                        onClick={handleSyncHaloApu}
+                    >
+                        Sync HaloAPU
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => router.visit('/content')}>
+                        Ke Content Planner <ArrowRight className="w-3.5 h-3.5" />
+                    </Button>
+                </div>
             }
         >
             <Head title="Incoming Requests - SPARC" />
@@ -471,9 +380,25 @@ export default function IncomingIndex({
                                             </td>
 
                                             <td className="py-3.5 px-4 whitespace-nowrap">
-                                                {getHaloApuStatusBadge(ticket.haloapuStatus)}
+                                                <div className="flex flex-col gap-1 items-start">
+                                                    {getHaloApuStatusBadge(ticket.haloapuStatus)}
+                                                    {ticket.isResultAccepted && (
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-green-600 dark:text-green-400">
+                                                            <CheckCircle2 className="w-2.5 h-2.5" /> Disetujui Pemohon
+                                                        </span>
+                                                    )}
+                                                    {Boolean(ticket.revisionCount && ticket.revisionCount > 0) && (
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                                                            Revisi ke-{ticket.revisionCount}
+                                                        </span>
+                                                    )}
+                                                    {ticket.isSlaBreached && (
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600 dark:text-red-400">
+                                                            <AlertTriangle className="w-2.5 h-2.5" /> SLA Lewat
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </td>
-
                                             <td className="py-3.5 px-4 whitespace-nowrap">
                                                 {getSyncBadge(ticket.syncStatus)}
                                             </td>
@@ -483,16 +408,16 @@ export default function IncomingIndex({
                                                 onClick={(e) => e.stopPropagation()}
                                             >
                                                 <div className="flex items-center justify-end gap-1.5">
-                                                    {ticket.syncStatus === 'pending' && (
+                                                    <Link href="/content">
                                                         <Button
                                                             size="sm"
-                                                            variant="primary"
-                                                            icon={<Sparkles className="w-3 h-3" />}
-                                                            onClick={() => handleOpenConvert(ticket)}
+                                                            variant="outline"
+                                                            icon={<Sparkles className="w-3 h-3 text-[var(--md-sys-color-primary)]" />}
+                                                            title="Buka di Content Planner"
                                                         >
-                                                            Convert
+                                                            Lihat di Planner
                                                         </Button>
-                                                    )}
+                                                    </Link>
                                                     <Button
                                                         size="sm"
                                                         variant="ghost"
@@ -533,6 +458,21 @@ export default function IncomingIndex({
                                 {getSourceBadge(selectedTicket.sourceType)}
                                 {getHaloApuStatusBadge(selectedTicket.haloapuStatus)}
                                 {getSyncBadge(selectedTicket.syncStatus)}
+                                {selectedTicket.isSlaBreached && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-bold">
+                                        <AlertTriangle className="w-3 h-3" /> SLA Lewat
+                                    </span>
+                                )}
+                                {Boolean(selectedTicket.revisionCount && selectedTicket.revisionCount > 0) && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold">
+                                        Revisi ke-{selectedTicket.revisionCount}
+                                    </span>
+                                )}
+                                {selectedTicket.isResultAccepted && (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
+                                        <CheckCircle2 className="w-3 h-3" /> Disetujui Pemohon
+                                    </span>
+                                )}
                             </div>
 
                             <a
@@ -570,6 +510,82 @@ export default function IncomingIndex({
                             </div>
                         )}
 
+                        {/* HaloAPU Ticket Activity & Revision Logs */}
+                        {selectedTicket.logs && selectedTicket.logs.length > 0 && (
+                            <div className="p-4 rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-xs font-bold text-[var(--md-sys-color-on-surface)] flex items-center gap-1.5">
+                                        <MessageSquare className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
+                                        Riwayat Interaksi & Revisi HaloAPU ({selectedTicket.logs.length})
+                                    </h4>
+                                    {Boolean(selectedTicket.revisionCount && selectedTicket.revisionCount > 0) && (
+                                        <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                                            Total: {selectedTicket.revisionCount}x Revisi
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="space-y-2.5 divide-y divide-[var(--md-sys-color-outline-variant)]/60">
+                                    {selectedTicket.logs.map((log, idx) => {
+                                        const isRevision = log.aksi === 'need_revision';
+                                        const isSolve = log.aksi === 'solve';
+                                        const isReply = log.aksi === 'balasan';
+                                        const isAccepted = log.aksi === 'accepted';
+                                        const isPending = log.aksi === 'pending';
+
+                                        return (
+                                            <div key={log.id || idx} className={idx > 0 ? 'pt-2.5' : ''}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            {log.actor}
+                                                        </span>
+                                                        <Badge
+                                                            variant={
+                                                                isRevision
+                                                                    ? 'danger'
+                                                                    : isSolve || isAccepted
+                                                                      ? 'success'
+                                                                      : isPending
+                                                                        ? 'warning'
+                                                                        : isReply
+                                                                          ? 'primary'
+                                                                          : 'default'
+                                                            }
+                                                            className="text-[10px] py-0 px-1.5"
+                                                        >
+                                                            {log.aksi === 'need_revision'
+                                                                ? 'Butuh Revisi'
+                                                                : log.aksi === 'solve'
+                                                                  ? 'Selesai'
+                                                                  : log.aksi === 'balasan'
+                                                                    ? 'Balasan'
+                                                                    : log.aksi === 'accepted'
+                                                                      ? 'Disetujui'
+                                                                      : log.aksi}
+                                                        </Badge>
+                                                    </div>
+                                                    <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                        {log.timestamp}
+                                                    </span>
+                                                </div>
+                                                {log.catatan && (
+                                                    <p
+                                                        className={`text-xs mt-1 leading-relaxed ${
+                                                            isRevision
+                                                                 ? 'text-amber-800 dark:text-amber-300 font-medium p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20'
+                                                                : 'text-[var(--md-sys-color-on-surface-variant)]'
+                                                        }`}
+                                                    >
+                                                        {log.catatan}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="space-y-1.5">
                             <h4 className="text-sm font-black text-[var(--md-sys-color-on-surface)]">
                                 {selectedTicket.title}
@@ -578,6 +594,26 @@ export default function IncomingIndex({
                                 {selectedTicket.brief}
                             </p>
                         </div>
+
+                        {(selectedTicket.slaResponseDeadline || selectedTicket.slaResolutionDeadline) && (
+                            <div className="p-3.5 rounded-2xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] space-y-1.5 text-xs">
+                                <span className="sparc-eyebrow block">Pemantauan SLA HaloAPU</span>
+                                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                    <div>
+                                        <span className="text-[var(--md-sys-color-on-surface-muted)] block">Tenggat Respons:</span>
+                                        <span className="font-semibold text-[var(--md-sys-color-on-surface)]">
+                                            {selectedTicket.slaResponseDeadline ? new Date(selectedTicket.slaResponseDeadline).toLocaleString('id-ID') : '-'}
+                                        </span>
+                                    </div>
+                                    <div>
+                                        <span className="text-[var(--md-sys-color-on-surface-muted)] block">Tenggat Selesai:</span>
+                                        <span className="font-semibold text-[var(--md-sys-color-on-surface)]">
+                                            {selectedTicket.slaResolutionDeadline ? new Date(selectedTicket.slaResolutionDeadline).toLocaleString('id-ID') : '-'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="space-y-3">
                             <h5 className="text-xs font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
@@ -613,169 +649,180 @@ export default function IncomingIndex({
                                     Tidak ada berkas lampiran pada tiket ini.
                                 </p>
                             ) : (
-                                <div className="space-y-2">
-                                    {selectedTicket.attachments.map((file, i) => (
-                                        <a
-                                            key={i}
-                                            href={file.url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="flex items-center justify-between p-3 rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] hover:border-[var(--md-sys-color-primary)]/60 transition-colors group"
-                                        >
-                                            <div className="flex items-center gap-2.5">
-                                                <Paperclip className="w-4 h-4 text-[var(--md-sys-color-on-surface-variant)] group-hover:text-[var(--md-sys-color-primary)]" />
-                                                <span className="text-xs font-medium text-[var(--md-sys-color-on-surface)] group-hover:text-[var(--md-sys-color-primary)]">
-                                                    {file.fileName}
-                                                </span>
+                                <div className="space-y-3">
+                                    {selectedTicket.attachments.map((file, i) => {
+                                        const fileProxyUrl = file.id ? `/incoming/${selectedTicket.id}/attachments/${file.id}/proxy` : file.url;
+                                        const isImg = /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(file.fileName);
+
+                                        return (
+                                            <div
+                                                key={file.id || i}
+                                                className="rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] p-3 space-y-2.5"
+                                            >
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2.5 min-w-0">
+                                                        {isImg ? (
+                                                            <ImageIcon className="w-4 h-4 text-[var(--md-sys-color-primary)] shrink-0" />
+                                                        ) : (
+                                                            <Paperclip className="w-4 h-4 text-[var(--md-sys-color-on-surface-variant)] shrink-0" />
+                                                        )}
+                                                        <span className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] truncate">
+                                                            {file.fileName}
+                                                        </span>
+                                                        {file.fileSize && (
+                                                            <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] shrink-0">
+                                                                ({file.fileSize})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setPreviewImage({ url: fileProxyUrl, title: file.fileName })}
+                                                            className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-[var(--md-sys-color-surface-container-high)] text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-primary)] hover:text-white transition-colors"
+                                                        >
+                                                            Lihat
+                                                        </button>
+                                                        <a
+                                                            href={fileProxyUrl}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="p-1 rounded-lg text-[var(--md-sys-color-on-surface-muted)] hover:text-[var(--md-sys-color-primary)] transition-colors"
+                                                            title="Buka / Unduh di Tab Baru"
+                                                        >
+                                                            <ExternalLink className="w-3.5 h-3.5" />
+                                                        </a>
+                                                        {file.id && (
+                                                            savedAssetIds.includes(String(file.id)) ? (
+                                                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                                    <CheckCircle2 className="w-3.5 h-3.5" /> Tersimpan
+                                                                </span>
+                                                            ) : (
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="ghost"
+                                                                    size="sm"
+                                                                    isLoading={savingAssetId === String(file.id)}
+                                                                    onClick={() => handleSaveToAsset(selectedTicket.id, String(file.id), file.fileName)}
+                                                                >
+                                                                    + Simpan Aset
+                                                                </Button>
+                                                            )
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* Inline Image Preview Thumbnail */}
+                                                {isImg && (
+                                                    <div
+                                                        className="rounded-xl overflow-hidden border border-[var(--md-sys-color-outline-variant)]/60 bg-black/5 dark:bg-black/20 max-h-52 flex items-center justify-center cursor-pointer group relative"
+                                                        onClick={() => setPreviewImage({ url: fileProxyUrl, title: file.fileName })}
+                                                    >
+                                                        <img
+                                                            src={fileProxyUrl}
+                                                            alt={file.fileName}
+                                                            className="max-h-52 w-full object-contain group-hover:scale-[1.02] transition-transform duration-200"
+                                                            loading="lazy"
+                                                        />
+                                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs font-bold gap-1.5">
+                                                            <Eye className="w-4 h-4" /> Klik untuk Memperbesar
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
-                                            <span className="text-[10px] text-[var(--md-sys-color-on-surface-variant)]">
-                                                {file.fileSize || 'Unduh'}
-                                            </span>
-                                        </a>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
 
-                        <div className="pt-4 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-3">
-                            {selectedTicket.syncStatus === 'ignored' ? (
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    icon={<RotateCcw className="w-3.5 h-3.5" />}
-                                    onClick={() => handleToggleIgnore(selectedTicket.id, false)}
-                                >
-                                    Batalkan Abaikan
-                                </Button>
-                            ) : (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    icon={<Ban className="w-3.5 h-3.5" />}
-                                    onClick={() => handleToggleIgnore(selectedTicket.id, true)}
-                                >
-                                    Abaikan Tiket
-                                </Button>
-                            )}
+                        <div className="pt-4 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                                {selectedTicket.syncStatus === 'ignored' ? (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        icon={<RotateCcw className="w-3.5 h-3.5" />}
+                                        onClick={() => handleToggleIgnore(selectedTicket.id, false)}
+                                    >
+                                        Pulihkan
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        icon={<Ban className="w-3.5 h-3.5" />}
+                                        onClick={() => handleToggleIgnore(selectedTicket.id, true)}
+                                    >
+                                        Abaikan
+                                    </Button>
+                                )}
+                            </div>
 
-                            {selectedTicket.syncStatus === 'pending' && (
+                            <div className="flex items-center gap-2">
+                                <Link href="/content">
+                                    <Button
+                                        type="button"
+                                        variant="primary"
+                                        size="sm"
+                                        icon={<Sparkles className="w-4 h-4" />}
+                                    >
+                                        Buka di Planner
+                                    </Button>
+                                </Link>
                                 <Button
-                                    variant="primary"
-                                    size="md"
-                                    icon={<Sparkles className="w-4 h-4" />}
-                                    onClick={() => {
-                                        setSheetOpen(false);
-                                        handleOpenConvert(selectedTicket);
-                                    }}
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => setSheetOpen(false)}
                                 >
-                                    Konversi ke Proyek
+                                    Tutup
                                 </Button>
-                            )}
+                            </div>
                         </div>
                     </div>
                 )}
             </Sheet>
 
-            {/* Convert to Project Modal connected to Laravel Validation */}
+
+            {/* Image Preview Lightbox Modal */}
             <Modal
-                isOpen={convertModalOpen}
-                onClose={() => setConvertModalOpen(false)}
-                title="Konversi Tiket ke Proyek Konten"
-                description={`Menghubungkan tiket #${selectedTicket?.haloapuTicketId} ke alur produksi SPARC`}
-                maxWidth="lg"
+                isOpen={Boolean(previewImage)}
+                onClose={() => setPreviewImage(null)}
+                title={previewImage?.title || 'Pratinjau Lampiran'}
+                maxWidth="2xl"
             >
-                <form onSubmit={handleSaveConvert} className="space-y-4" noValidate>
-                    <Input
-                        label="Judul Proyek Konten"
-                        required
-                        value={convertForm.data.title}
-                        onChange={(e) => convertForm.setData('title', e.target.value)}
-                        error={convertForm.errors.title}
-                        placeholder="Masukkan judul proyek..."
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Select
-                            label="Format Konten"
-                            required
-                            value={convertForm.data.format}
-                            onChange={(e) =>
-                                convertForm.setData(
-                                    'format',
-                                    e.target.value as typeof convertForm.data.format
-                                )
-                            }
-                            error={convertForm.errors.format}
-                        >
-                            <option value="reels_shorts">Video Reels / Shorts (Hook-Body-CTA)</option>
-                            <option value="carousel_feed">Carousel Feed (Multi-Slide)</option>
-                            <option value="single_feed">Single Image Feed</option>
-                        </Select>
-
-                        <Select
-                            label="Pilar Konten Humas"
-                            required
-                            value={convertForm.data.pillar}
-                            onChange={(e) =>
-                                convertForm.setData(
-                                    'pillar',
-                                    e.target.value as typeof convertForm.data.pillar
-                                )
-                            }
-                            error={convertForm.errors.pillar}
-                        >
-                            <option value="edukasi">Pilar 1: Edukasi Publik</option>
-                            <option value="event_liputan">Pilar 2: Liputan Event</option>
-                            <option value="sosialisasi_prestasi">Pilar 3: Sosialisasi & Prestasi</option>
-                            <option value="pengumuman">Pilar 4: Pengumuman Resmi</option>
-                            <option value="human_touch">Pilar 5: Human Touch</option>
-                        </Select>
+                {previewImage && (
+                    <div className="space-y-3">
+                        <div className="rounded-2xl overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-black/5 dark:bg-black/20 flex items-center justify-center max-h-[75vh]">
+                            <img
+                                src={previewImage.url}
+                                alt={previewImage.title}
+                                className="max-h-[70vh] w-auto object-contain rounded-xl"
+                            />
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1 text-xs">
+                            <span className="text-[var(--md-sys-color-on-surface-muted)] truncate max-w-sm">
+                                {previewImage.title}
+                            </span>
+                            <div className="flex items-center gap-2">
+                                <a
+                                    href={previewImage.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1 font-bold text-[var(--md-sys-color-primary)] hover:underline"
+                                >
+                                    Buka Ukuran Asli <ExternalLink className="w-3.5 h-3.5" />
+                                </a>
+                                <Button type="button" variant="secondary" size="sm" onClick={() => setPreviewImage(null)}>
+                                    Tutup
+                                </Button>
+                            </div>
+                        </div>
                     </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Select
-                            label="Penanggung Jawab (PIC)"
-                            required
-                            value={convertForm.data.pic_name}
-                            onChange={(e) => convertForm.setData('pic_name', e.target.value)}
-                            error={convertForm.errors.pic_name}
-                        >
-                            <option value="Aldwin (Writer)">Aldwin (Writer)</option>
-                            <option value="Designer 1">Designer 1</option>
-                            <option value="Designer 2">Designer 2</option>
-                            <option value="Editor Video">Editor Video</option>
-                        </Select>
-
-                        <Input
-                            label="Target Tanggal Tayang"
-                            type="date"
-                            required
-                            value={convertForm.data.target_date}
-                            onChange={(e) => convertForm.setData('target_date', e.target.value)}
-                            error={convertForm.errors.target_date}
-                        />
-                    </div>
-
-                    <div className="pt-4 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2.5">
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="md"
-                            onClick={() => setConvertModalOpen(false)}
-                            disabled={convertForm.processing}
-                        >
-                            Batal
-                        </Button>
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            size="md"
-                            isLoading={convertForm.processing}
-                        >
-                            Buat Proyek & Buka Planner
-                        </Button>
-                    </div>
-                </form>
+                )}
             </Modal>
         </AppLayout>
     );

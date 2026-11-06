@@ -5,12 +5,20 @@ namespace App\Http\Controllers;
 use App\Http\Resources\ContentItemResource;
 use App\Models\ContentItem;
 use App\Models\ContentTask;
+use App\Models\HaloApuConnection;
+use App\Models\HaloApuSyncLog;
+use App\Models\HaloApuTicket;
 use App\Models\InstagramConnection;
 use App\Models\InstagramSchedule;
+use App\Models\User;
+use App\Services\HaloApuClientService;
 use App\Services\InstagramGraphService;
+use App\Services\SparcExcelReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response as HttpResponse;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -39,25 +47,43 @@ class WorkspaceV3Controller extends Controller
 
         $session = $request->session();
 
-        if (! $session->has('sparc_v3.initialized')) {
+        if (! $session->has('sparc_v3.initialized') || $session->get('sparc_v3.seed_version') !== 2) {
             $seed = self::defaultSeed();
             foreach ($seed as $key => $value) {
                 $session->put("sparc_v3.{$key}", $value);
             }
             $session->put('sparc_v3.initialized', true);
+            $session->put('sparc_v3.seed_version', 2);
         }
 
-        $activeRole = (string) $session->get('sparc_v3.active_role', 'admin');
+        $roleLabels = [
+            'admin' => 'Administrator',
+            'manager' => 'Kepala HUMAS',
+            'planner' => 'Content Planner',
+            'creator' => 'Creator / Designer',
+            'publisher' => 'Publisher',
+            'viewer' => 'Pemantau Eksekutif',
+        ];
+
         $personas = self::rolePersonas();
-        $currentUser = $personas[$activeRole] ?? $personas['admin'];
 
         if ($authUser = $request->user()) {
-            $currentUser['id'] = (string) $authUser->id;
-            $currentUser['name'] = $authUser->name;
-            $currentUser['email'] = $authUser->email;
-            if (! empty($authUser->avatar)) {
-                $currentUser['avatar'] = $authUser->avatar;
-            }
+            $sessionRole = $session->get('sparc_v3.active_role');
+            $userRole = ! empty($sessionRole)
+                ? (string) $sessionRole
+                : (string) ($authUser->role ?: $authUser->primary_role ?: 'admin');
+            $activeRole = $userRole;
+            $currentUser = [
+                'id' => (string) $authUser->id,
+                'name' => $authUser->name,
+                'email' => $authUser->email,
+                'role' => $userRole,
+                'roleLabel' => $roleLabels[$userRole] ?? ucfirst($userRole),
+                'avatar' => $authUser->avatar ?: 'https://ui-avatars.com/api/?name='.urlencode($authUser->name).'&background=1546D8&color=fff&size=128&bold=true',
+            ];
+        } else {
+            $activeRole = (string) $session->get('sparc_v3.active_role', 'admin');
+            $currentUser = $personas[$activeRole] ?? $personas['admin'];
         }
         /** @var array<int, array<string, mixed>> $contentItems */
         $contentItems = $session->get('sparc_v3.content_items', []);
@@ -133,7 +159,19 @@ class WorkspaceV3Controller extends Controller
 
         if (Schema::hasTable('content_items')) {
             try {
-                $dbItems = ContentItem::with(['tasks', 'comments', 'history'])
+                if (Schema::hasTable('haloapu_tickets')) {
+                    $unconverted = HaloApuTicket::whereNull('content_item_id')
+                        ->where('sync_status', '!=', 'ignored')
+                        ->get();
+                    if ($unconverted->isNotEmpty()) {
+                        $haloService = app(HaloApuClientService::class);
+                        foreach ($unconverted as $uTicket) {
+                            $haloService->autoConvertToInbox($uTicket, keepPendingSyncStatus: true);
+                        }
+                    }
+                }
+
+                $dbItems = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
                     ->orderByDesc('publish_date')
                     ->orderByDesc('id')
                     ->get();
@@ -175,15 +213,20 @@ class WorkspaceV3Controller extends Controller
 
                     $effectiveReach = $dbItem->reach !== null
                         ? (int) $dbItem->reach
-                        : ((int) $dbItem->views > 0 ? (int) $dbItem->views : null);
+                        : ((int) $dbItem->views > 0
+                            ? (int) $dbItem->views
+                            : (($dbItem->likes !== null || $dbItem->comments_count !== null) && ((int) $dbItem->likes > 0 || (int) $dbItem->comments_count > 0)
+                                ? ((int) $dbItem->likes + (int) $dbItem->comments_count)
+                                : null));
 
-                    $schedStr = ($dbItem->publish_date?->toDateString() ?? self::TODAY).' '.($dbItem->publish_time ?: '10:00');
+                    $schedStr = ($dbItem->publish_date?->toDateString() ?? now()->toDateString()).' '.($dbItem->publish_time ?: '10:00');
 
                     if ($matchedPubIdx !== null) {
                         if ($dbItem->status === 'published' && empty($publications[$matchedPubIdx]['publishedUrl']) && ! empty($dbItem->published_url)) {
                             $publications[$matchedPubIdx]['publishedUrl'] = $dbItem->published_url;
                         }
-                        if ($dbItem->status === 'published' && $hasApiMetrics && $dbItem->metrics_synced_at !== null) {
+                        $existingMetricSource = (string) ($publications[$matchedPubIdx]['metrics']['source'] ?? 'api');
+                        if ($dbItem->status === 'published' && $hasApiMetrics && $dbItem->metrics_synced_at !== null && $existingMetricSource === 'api') {
                             $publications[$matchedPubIdx]['metrics'] = [
                                 'reach' => $effectiveReach,
                                 'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
@@ -246,10 +289,11 @@ class WorkspaceV3Controller extends Controller
             'activities' => $session->get('sparc_v3.activities', []),
             'publications' => $publications,
             'assets' => $session->get('sparc_v3.assets', []),
-            'team' => $session->get('sparc_v3.team', []),
+            'team' => self::loadRealTeam(),
             'settings' => (function () use ($session, $request) {
                 $s = $session->get('sparc_v3.settings', []);
                 $s['instagram'] = self::resolveInstagramSettingsPayload($request);
+                $s['haloApu'] = self::resolveHaloApuSettingsPayload();
 
                 return $s;
             })(),
@@ -385,158 +429,72 @@ class WorkspaceV3Controller extends Controller
      */
     public static function defaultIncomingTickets(Request $request): array
     {
+        if (! Schema::hasTable('haloapu_tickets')) {
+            return [];
+        }
+
         /** @var array<string, string> $overrides */
         $overrides = $request->hasSession() ? $request->session()->get('sparc.ticket_overrides', []) : [];
 
-        $tickets = [
-            [
-                'id' => '1',
-                'haloapuTicketId' => '045-812-901',
-                'sourceType' => 'video_reels',
-                'title' => 'Tutorial Pendaftaran Online Layanan Informasi Publik',
-                'brief' => 'Mohon dibuatkan video reels panduan singkat cara pendaftaran online dan verifikasi akun untuk masyarakat umum.',
-                'requesterName' => 'Budi Santoso (Dit. Layanan)',
-                'requesterUnit' => 'Direktorat Layanan',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-11-02',
-                'haloapuStatus' => 'open',
-                'syncStatus' => 'pending',
-                'createdAt' => '27 Okt 2026, 09:15 WIB',
-                'formSnapshot' => [
-                    'Judul/Tema Video' => 'Tutorial Pendaftaran Online Layanan Informasi Publik',
-                    'Jenis Video' => 'Reels',
-                    'Durasi Estimasi' => '60 Detik',
-                    'Deadline Tayang' => '2026-11-02',
-                    'Brief Video' => 'Fokus pada alur 3 langkah: 1. Buka web, 2. Isi NIK, 3. Konfirmasi email.',
-                    'Link Referensi' => 'https://instagram.com/p/sample-reels',
-                    'Keterangan Tambahan' => 'Gunakan voiceover santai dan human-touch.',
-                ],
-                'attachments' => [
-                    ['fileName' => 'alur-pendaftaran.pdf', 'url' => 'https://example.com/storage/alur-pendaftaran.pdf', 'fileSize' => '1.2 MB'],
-                    ['fileName' => 'screenshot-portal.png', 'url' => 'https://example.com/storage/screenshot-portal.png', 'fileSize' => '850 KB'],
-                ],
-            ],
-            [
-                'id' => '2',
-                'haloapuTicketId' => '042-119-002',
-                'sourceType' => 'desain_feed',
-                'title' => 'Feed IG - Infografis Capaian Kinerja Triwulan III',
-                'brief' => 'Desain infografis carousel 5 slide mengenai capaian dan realisasi program prioritas tahun 2026.',
-                'requesterName' => 'Siti Rahma (Biro Perencanaan)',
-                'requesterUnit' => 'Biro Perencanaan',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-10-31',
-                'haloapuStatus' => 'on_proses',
-                'syncStatus' => 'converted',
-                'convertedProjectId' => 'proj-101',
-                'createdAt' => '26 Okt 2026, 14:00 WIB',
-                'formSnapshot' => [
-                    'Jenis Produksi Desain' => 'Feed Instagram / Meme',
-                    'Tujuan Penggunaan' => 'Publikasi media sosial Instagram & LinkedIn.',
-                    'Brief Materi' => '5 Slide Carousel: Slide 1 Cover Hook, Slide 2 Anggaran, Slide 3 Program Unggulan, Slide 4 Testimoni, Slide 5 CTA Website.',
-                    'Deadline' => '2026-10-31',
-                    'Jumlah Produksi' => '1 Paket (5 Slide)',
-                ],
-                'attachments' => [
-                    ['fileName' => 'data-rekap-triwulan.xlsx', 'url' => 'https://example.com/storage/data-rekap.xlsx', 'fileSize' => '2.4 MB'],
-                ],
-            ],
-            [
-                'id' => '3',
-                'haloapuTicketId' => '041-908-112',
-                'sourceType' => 'desain_feed',
-                'title' => 'Feed IG - Peringatan Hari Sumpah Pemuda 2026',
-                'brief' => 'Desain single feed ucapan peringatan resmi Hari Sumpah Pemuda dengan nuansa dinamis dan berani.',
-                'requesterName' => 'Ahmad Faiz (Bagian Protokol)',
-                'requesterUnit' => 'Bagian Protokol',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-10-28',
-                'haloapuStatus' => 'open',
-                'syncStatus' => 'pending',
-                'createdAt' => '26 Okt 2026, 11:30 WIB',
-                'formSnapshot' => [
-                    'Jenis Produksi Desain' => 'Feed Instagram / Meme',
-                    'Tujuan Penggunaan' => 'Ucapan resmi lembaga di feed Instagram.',
-                    'Brief Materi' => 'Sertakan foto pimpinan dan kutipan tema nasional Sumpah Pemuda 2026.',
-                    'Deadline' => '2026-10-28',
-                ],
-                'attachments' => [
-                    ['fileName' => 'foto-pimpinan-resmi.png', 'url' => 'https://example.com/storage/foto-pimpinan.png', 'fileSize' => '4.8 MB'],
-                ],
-            ],
-            [
-                'id' => '6',
-                'haloapuTicketId' => '046-330-518',
-                'sourceType' => 'video_reels',
-                'title' => 'Reels Sosialisasi Kanal Pengaduan Terpadu 24 Jam',
-                'brief' => 'Permintaan video edukasi 45 detik mengenai tata cara pelaporan cepat melalui aplikasi mobile dan WhatsApp resmi.',
-                'requesterName' => 'Dewi Lestari (Biro Hukum & Humas)',
-                'requesterUnit' => 'Biro Hukum & Humas',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-11-04',
-                'haloapuStatus' => 'open',
-                'syncStatus' => 'pending',
-                'createdAt' => '27 Okt 2026, 13:40 WIB',
-                'formSnapshot' => [
-                    'Judul/Tema Video' => 'Sosialisasi Kanal Pengaduan Terpadu 24 Jam',
-                    'Jenis Video' => 'Reels & TikTok',
-                    'Durasi Estimasi' => '45 Detik',
-                    'Deadline Tayang' => '2026-11-04',
-                    'Brief Video' => 'Tonjolkan kecepatan respons dan jaminan kerahasiaan identitas pelapor.',
-                ],
-                'attachments' => [],
-            ],
-            [
-                'id' => '4',
-                'haloapuTicketId' => '039-551-789',
-                'sourceType' => 'video_reels',
-                'title' => 'Reels Liputan Serah Terima Jabatan Pejabat Baru',
-                'brief' => 'Dokumentasi video singkat suasana serah terima jabatan pejabat fungsional di aula utama.',
-                'requesterName' => 'Hendra Setiawan (Bagian Kepegawaian)',
-                'requesterUnit' => 'Bagian Kepegawaian',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-10-25',
-                'haloapuStatus' => 'solve',
-                'syncStatus' => 'converted',
-                'convertedProjectId' => 'proj-099',
-                'createdAt' => '24 Okt 2026, 16:45 WIB',
-                'formSnapshot' => [
-                    'Judul/Tema Video' => 'Liputan Serah Terima Jabatan Pejabat Baru',
-                    'Jenis Video' => 'Reels',
-                    'Durasi Estimasi' => '45 Detik',
-                    'Deadline Tayang' => '2026-10-25',
-                ],
-                'attachments' => [],
-            ],
-            [
-                'id' => '5',
-                'haloapuTicketId' => '038-102-445',
-                'sourceType' => 'desain_feed',
-                'title' => 'Feed IG - Poster Sayembara Desain Maskot',
-                'brief' => 'Poster publikasi sayembara logo dan maskot terbuka untuk umum.',
-                'requesterName' => 'Rina Kusuma (Bagian Tata Usaha)',
-                'requesterUnit' => 'Bagian Tata Usaha',
-                'requesterAvatar' => 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
-                'targetDate' => '2026-10-20',
-                'haloapuStatus' => 'dibatalkan',
-                'syncStatus' => 'ignored',
-                'createdAt' => '20 Okt 2026, 10:00 WIB',
-                'formSnapshot' => [
-                    'Jenis Produksi Desain' => 'Feed Instagram / Meme',
-                    'Brief Materi' => 'Pengumuman dibatalkan karena perubahan petunjuk teknis sayembara.',
-                ],
-                'attachments' => [],
-            ],
-        ];
+        return HaloApuTicket::orderBy('id')
+            ->limit(50)
+            ->get()
+            ->map(function (HaloApuTicket $t) use ($overrides): array {
+                $id = (string) $t->id;
+                $statusOverride = $overrides[$id] ?? ($overrides[$t->haloapu_ticket_id] ?? null);
 
-        return array_map(function (array $ticket) use ($overrides): array {
-            $id = (string) $ticket['id'];
-            if (isset($overrides[$id])) {
-                $ticket['syncStatus'] = $overrides[$id];
-            }
+                return [
+                    'id' => $id,
+                    'haloapuTicketId' => $t->haloapu_ticket_id,
+                    'sourceType' => $t->source_type,
+                    'title' => $t->title,
+                    'brief' => $t->brief ?? '',
+                    'requesterName' => $t->requester_name,
+                    'requesterUnit' => $t->requester_unit ?? '',
+                    'requesterAvatar' => (function () use ($t) {
+                        $avatar = (string) ($t->requester_avatar ?? '');
+                        if (! empty($avatar)) {
+                            if (! str_starts_with($avatar, 'http')) {
+                                $conn = HaloApuConnection::current();
+                                $haloBase = rtrim((string) ($conn->base_url ?: 'http://127.0.0.1:8001'), '/');
 
-            return $ticket;
-        }, $tickets);
+                                return $haloBase.'/'.ltrim($avatar, '/');
+                            }
+                            if (str_contains($avatar, ':8000/storage/avatars/')) {
+                                return str_replace(':8000/storage/avatars/', ':8001/storage/avatars/', $avatar);
+                            }
+
+                            return $avatar;
+                        }
+
+                        return 'https://ui-avatars.com/api/?name='.urlencode($t->requester_name ?: 'HaloAPU').'&background=1546D8&color=fff&size=128&bold=true';
+                    })(),
+                    'targetDate' => $t->target_date?->toDateString() ?? '',
+                    'haloapuStatus' => $statusOverride ?: $t->haloapu_status,
+                    'syncStatus' => $statusOverride ? 'converted' : $t->sync_status,
+                    'revisionCount' => (int) $t->revision_count,
+                    'isResultAccepted' => (bool) $t->is_result_accepted,
+                    'isSlaBreached' => (bool) $t->is_sla_breached,
+                    'slaResponseDeadline' => $t->sla_response_deadline?->toIso8601String(),
+                    'slaResolutionDeadline' => $t->sla_resolution_deadline?->toIso8601String(),
+                    'createdAt' => $t->haloapu_created_at ? $t->haloapu_created_at->format('d M Y, H:i').' WIB' : '',
+                    'formSnapshot' => (array) ($t->form_snapshot ?? []),
+                    'attachments' => collect($t->attachments_payload ?? [])->map(fn ($a): array => [
+                        'id' => isset($a['id']) ? (string) $a['id'] : null,
+                        'fileName' => (string) ($a['fileName'] ?? 'Lampiran'),
+                        'url' => (string) ($a['url'] ?? ''),
+                        'fileSize' => isset($a['fileSize']) ? (string) $a['fileSize'] : null,
+                    ])->all(),
+                    'logs' => collect($t->logs_payload ?? [])->map(fn ($l): array => [
+                        'id' => (string) ($l['id'] ?? Str::uuid()->toString()),
+                        'aksi' => (string) ($l['aksi'] ?? 'update'),
+                        'actor' => (string) ($l['actor'] ?? 'Sistem'),
+                        'catatan' => (string) ($l['catatan'] ?? ''),
+                        'timestamp' => (string) ($l['timestamp'] ?? ''),
+                    ])->all(),
+                ];
+            })
+            ->all();
     }
 
     /**
@@ -547,95 +505,69 @@ class WorkspaceV3Controller extends Controller
      */
     public static function buildPerformanceTrend(array $publications): array
     {
-        $historical = [
-            [
-                'key' => '2026-05',
-                'label' => 'Mei',
-                'fullLabel' => 'Mei 2026',
-                'byPlatform' => [
-                    'instagram' => ['reach' => 18200, 'interactions' => 1950],
-                    'youtube' => ['reach' => 8400, 'interactions' => 720],
-                    'tiktok' => ['reach' => 9100, 'interactions' => 1120],
-                    'website' => ['reach' => 4200, 'interactions' => 310],
-                ],
-            ],
-            [
-                'key' => '2026-06',
-                'label' => 'Jun',
-                'fullLabel' => 'Juni 2026',
-                'byPlatform' => [
-                    'instagram' => ['reach' => 22600, 'interactions' => 2480],
-                    'youtube' => ['reach' => 11200, 'interactions' => 940],
-                    'tiktok' => ['reach' => 12400, 'interactions' => 1510],
-                    'website' => ['reach' => 5100, 'interactions' => 420],
-                ],
-            ],
-            [
-                'key' => '2026-07',
-                'label' => 'Jul',
-                'fullLabel' => 'Juli 2026',
-                'byPlatform' => [
-                    'instagram' => ['reach' => 19400, 'interactions' => 2110],
-                    'youtube' => ['reach' => 9800, 'interactions' => 810],
-                    'tiktok' => ['reach' => 10900, 'interactions' => 1290],
-                    'website' => ['reach' => 4700, 'interactions' => 360],
-                ],
-            ],
-            [
-                'key' => '2026-08',
-                'label' => 'Agu',
-                'fullLabel' => 'Agustus 2026',
-                'byPlatform' => [
-                    'instagram' => ['reach' => 29800, 'interactions' => 3420],
-                    'youtube' => ['reach' => 15600, 'interactions' => 1390],
-                    'tiktok' => ['reach' => 16800, 'interactions' => 2180],
-                    'website' => ['reach' => 6900, 'interactions' => 590],
-                ],
-            ],
-            [
-                'key' => '2026-09',
-                'label' => 'Sep',
-                'fullLabel' => 'September 2026',
-                'byPlatform' => [
-                    'instagram' => ['reach' => 24500, 'interactions' => 2790],
-                    'youtube' => ['reach' => 12900, 'interactions' => 1080],
-                    'tiktok' => ['reach' => 14100, 'interactions' => 1760],
-                    'website' => ['reach' => 5800, 'interactions' => 470],
-                ],
-            ],
+        $shortLabels = [
+            1 => 'Jan', 2 => 'Feb', 3 => 'Mar', 4 => 'Apr', 5 => 'Mei', 6 => 'Jun',
+            7 => 'Jul', 8 => 'Agu', 9 => 'Sep', 10 => 'Okt', 11 => 'Nov', 12 => 'Des',
+        ];
+        $fullLabels = [
+            1 => 'Januari', 2 => 'Februari', 3 => 'Maret', 4 => 'April', 5 => 'Mei', 6 => 'Juni',
+            7 => 'Juli', 8 => 'Agustus', 9 => 'September', 10 => 'Oktober', 11 => 'November', 12 => 'Desember',
         ];
 
-        $octByPlatform = [
-            'instagram' => ['reach' => 0, 'interactions' => 0],
-            'youtube' => ['reach' => 0, 'interactions' => 0],
-            'tiktok' => ['reach' => 13200, 'interactions' => 1640],
-            'website' => ['reach' => 6100, 'interactions' => 520],
-        ];
+        // Trailing 6 months ending at current operational month
+        $referenceDate = Carbon::parse(self::TODAY);
+        if (now()->gt($referenceDate)) {
+            $referenceDate = now();
+        }
 
+        $historical = [];
+        $byKey = [];
+
+        for ($i = 5; $i >= 0; $i--) {
+            $d = $referenceDate->copy()->subMonths($i);
+            $mNum = (int) $d->format('n');
+            $y = $d->format('Y');
+            $key = $d->format('Y-m');
+
+            $historical[] = [
+                'key' => $key,
+                'label' => $shortLabels[$mNum] ?? $d->format('M'),
+                'fullLabel' => ($fullLabels[$mNum] ?? $d->format('F')).' '.$y,
+                'byPlatform' => [
+                    'instagram' => ['reach' => 0, 'interactions' => 0],
+                    'youtube' => ['reach' => 0, 'interactions' => 0],
+                    'tiktok' => ['reach' => 0, 'interactions' => 0],
+                    'website' => ['reach' => 0, 'interactions' => 0],
+                ],
+            ];
+            $byKey[$key] = count($historical) - 1;
+        }
+
+        // Dynamically add live publication metrics into their respective month bucket
         foreach ($publications as $pub) {
             $metrics = $pub['metrics'] ?? null;
             if (! is_array($metrics)) {
                 continue;
             }
-            $platform = (string) ($pub['platform'] ?? 'other');
-            if (! isset($octByPlatform[$platform])) {
-                $octByPlatform[$platform] = ['reach' => 0, 'interactions' => 0];
+            $date = (string) ($pub['publishedActualAt'] ?? $pub['scheduledAt'] ?? '');
+            $monthKey = strlen($date) >= 7 ? substr($date, 0, 7) : '';
+            if (! isset($byKey[$monthKey])) {
+                continue;
             }
-            $octByPlatform[$platform]['reach'] += (int) ($metrics['reach'] ?? 0);
-            $octByPlatform[$platform]['interactions'] +=
+            $targetIdx = $byKey[$monthKey];
+
+            $platform = (string) ($pub['platform'] ?? 'other');
+            if (! isset($historical[$targetIdx]['byPlatform'][$platform])) {
+                $historical[$targetIdx]['byPlatform'][$platform] = ['reach' => 0, 'interactions' => 0];
+            }
+            $historical[$targetIdx]['byPlatform'][$platform]['reach'] += (int) ($metrics['reach'] ?? 0);
+            $historical[$targetIdx]['byPlatform'][$platform]['interactions'] +=
                 (int) ($metrics['likes'] ?? 0) +
                 (int) ($metrics['comments'] ?? 0) +
                 (int) ($metrics['shares'] ?? 0) +
                 (int) ($metrics['saves'] ?? 0) +
                 (int) ($metrics['clicks'] ?? 0);
         }
-
-        $historical[] = [
-            'key' => '2026-10',
-            'label' => 'Okt',
-            'fullLabel' => 'Oktober 2026',
-            'byPlatform' => $octByPlatform,
-        ];
 
         return array_map(function (array $row): array {
             $reach = 0;
@@ -662,7 +594,7 @@ class WorkspaceV3Controller extends Controller
     public function contentPlan(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $items = ContentItem::with(['tasks', 'comments', 'history'])
+        $items = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
             ->orderBy('publish_date')
             ->get();
 
@@ -689,7 +621,7 @@ class WorkspaceV3Controller extends Controller
     public function productionBoard(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $items = ContentItem::with(['tasks', 'comments', 'history'])
+        $items = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
             ->orderBy('publish_date')
             ->get();
 
@@ -710,7 +642,7 @@ class WorkspaceV3Controller extends Controller
     public function calendar(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $dbItems = ContentItem::with(['tasks', 'comments', 'history'])
+        $dbItems = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
             ->orderBy('publish_date')
             ->get();
 
@@ -781,12 +713,112 @@ class WorkspaceV3Controller extends Controller
         $state = self::hydrateWorkspace($request);
 
         return Inertia::render('Report/Index', [
-            'today' => self::TODAY,
+            'today' => now()->toDateString(),
             'contentItems' => $state['contentItems'],
             'publications' => $state['publications'],
-            'team' => $state['team'],
+            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
             'instagramSettings' => $state['settings']['instagram'] ?? [],
         ]);
+    }
+
+    /**
+     * Load real team directory directly from the database `users` table.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function loadRealTeam(): array
+    {
+        if (! Schema::hasTable('users')) {
+            return [];
+        }
+
+        return User::orderBy('id')->get()->map(function (User $u): array {
+            $role = (string) ($u->role ?: $u->primary_role ?: 'creator');
+
+            return [
+                'id' => (string) $u->id,
+                'name' => $u->name,
+                'email' => $u->email,
+                'roles' => [$role],
+                'primaryRole' => $role,
+                'avatar' => $u->avatar ?: 'https://ui-avatars.com/api/?name='.urlencode($u->name).'&background=1546D8&color=fff&size=128&bold=true',
+                'activeTasks' => 0,
+                'dueThisWeek' => 0,
+                'overdueTasks' => 0,
+                'effortHours' => 0,
+                'capacityHours' => (int) ($u->capacity_hours ?: 30),
+                'status' => 'Aktif',
+            ];
+        })->all();
+    }
+
+    /**
+     * Build real operational team workload dynamically from assigned content items and deadlines.
+     *
+     * @param  array<int, array<string, mixed>>  $team
+     * @param  array<int, array<string, mixed>>  $contentItems
+     * @return array<int, array<string, mixed>>
+     */
+    public static function buildRealTeamWorkload(array $team, array $contentItems): array
+    {
+        $todayStr = now()->toDateString();
+        $nextWeekStr = now()->addDays(7)->toDateString();
+
+        return array_map(function (array $member) use ($contentItems, $todayStr, $nextWeekStr): array {
+            $memberName = (string) ($member['name'] ?? '');
+            $memberRole = (string) ($member['primaryRole'] ?? '');
+            $memberId = (string) ($member['id'] ?? '');
+
+            $assigned = collect($contentItems)->filter(function (array $item) use ($memberName, $memberId): bool {
+                $picName = (string) ($item['picName'] ?? '');
+                $createdBy = (string) ($item['created_by'] ?? $item['createdBy'] ?? '');
+
+                return ($memberName !== '' && strcasecmp($picName, $memberName) === 0)
+                    || ($memberId !== '' && $createdBy === $memberId);
+            });
+
+            $activeTasks = $assigned->filter(fn (array $i): bool => ($i['status'] ?? '') !== 'published')->count();
+
+            $dueThisWeek = $assigned->filter(function (array $i) use ($todayStr, $nextWeekStr): bool {
+                $deadline = (string) ($i['productionDeadline'] ?? ($i['publishDate'] ?? ''));
+
+                return $deadline !== '' && $deadline >= $todayStr && $deadline <= $nextWeekStr;
+            })->count();
+
+            $overdueTasks = $assigned->filter(function (array $i) use ($todayStr): bool {
+                $deadline = (string) ($i['productionDeadline'] ?? ($i['publishDate'] ?? ''));
+
+                return ($i['status'] ?? '') !== 'published' && $deadline !== '' && $deadline < $todayStr;
+            })->count();
+
+            $capacityHours = (int) ($member['capacityHours'] ?? 30);
+            $effortHours = $activeTasks * 5;
+
+            $status = 'Aktif';
+            if ($memberRole === 'viewer') {
+                $status = 'Pemantau Eksekutif';
+            } elseif ($overdueTasks > 0) {
+                $status = 'Perlu Perhatian';
+            } elseif ($effortHours > $capacityHours) {
+                $status = 'Beban Tinggi';
+            } elseif ($activeTasks > 0) {
+                $status = 'Optimal';
+            }
+
+            $avatar = ! empty($member['avatar'])
+                ? $member['avatar']
+                : 'https://ui-avatars.com/api/?name='.urlencode($memberName).'&background=1546D8&color=fff&size=128&bold=true';
+
+            return array_merge($member, [
+                'activeTasks' => $activeTasks,
+                'dueThisWeek' => $dueThisWeek,
+                'overdueTasks' => $overdueTasks,
+                'effortHours' => $effortHours,
+                'capacityHours' => $capacityHours,
+                'avatar' => $avatar,
+                'status' => $status,
+            ]);
+        }, $team);
     }
 
     /**
@@ -810,7 +842,7 @@ class WorkspaceV3Controller extends Controller
         $state = self::hydrateWorkspace($request);
 
         return Inertia::render('Team/Index', [
-            'team' => $state['team'],
+            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
             'contentItems' => $state['contentItems'],
         ]);
     }
@@ -929,6 +961,18 @@ class WorkspaceV3Controller extends Controller
                     }
                 } catch (\Throwable) {
                     // Background fallback should never disrupt request lifecycle
+                }
+            })->afterResponse();
+        }
+        if (! app()->runningUnitTests() && Cache::add('sparc_haloapu_poll_heartbeat', true, now()->addSeconds(30))) {
+            dispatch(static function (): void {
+                try {
+                    $conn = HaloApuConnection::current();
+                    if ($conn->is_enabled && ! empty($conn->base_url)) {
+                        app(HaloApuClientService::class)->syncTickets();
+                    }
+                } catch (\Throwable) {
+                    // Background fallback
                 }
             })->afterResponse();
         }
@@ -1201,6 +1245,10 @@ class WorkspaceV3Controller extends Controller
             'actor' => auth()->user()->name ?? ($state['currentUser']['name'] ?? 'System'),
             'note' => (string) $request->input('note', sprintf('Status diubah dari %s ke %s.', $old, $targetStatus)),
         ]);
+
+        if ($targetStatus === 'published') {
+            app(HaloApuClientService::class)->handlePublishedContent($item, $item->published_url);
+        }
 
         /** @var array<int, array<string, mixed>> $sItems */
         $sItems = $request->session()->get('sparc_v3.content_items', []);
@@ -1617,7 +1665,7 @@ class WorkspaceV3Controller extends Controller
             return back();
         }
 
-        $result = $service->syncAllContentMetrics();
+        $result = $service->syncAndAutoImportRecentMedia(30, true);
 
         if (! ($result['success'] ?? false)) {
             self::flashToast(
@@ -1803,6 +1851,37 @@ class WorkspaceV3Controller extends Controller
             'key' => ['required', 'string'],
             'checked' => ['required', 'boolean'],
         ]);
+        if ($validated['key'] === '__all__') {
+            if (str_starts_with($id, 'pub-db-')) {
+                $dbItem = ContentItem::find((int) substr($id, 7));
+                if ($dbItem) {
+                    $dbChecklists = $request->session()->get('sparc_v3.db_pub_checklists', []);
+                    $checklist = $dbChecklists[$id] ?? self::defaultChecklistForPlatform((string) $dbItem->platform);
+                    foreach ($checklist as $cIdx => $cItem) {
+                        $checklist[$cIdx]['checked'] = $validated['checked'];
+                    }
+                    $dbChecklists[$id] = $checklist;
+                    $request->session()->put('sparc_v3.db_pub_checklists', $dbChecklists);
+                }
+
+                return back();
+            }
+
+            /** @var array<int, array<string, mixed>> $pubs */
+            $pubs = $request->session()->get('sparc_v3.publications', []);
+            foreach ($pubs as $idx => $pub) {
+                if (($pub['id'] ?? '') === $id) {
+                    $checklist = is_array($pub['checklist'] ?? null) ? $pub['checklist'] : [];
+                    foreach ($checklist as $cIdx => $cItem) {
+                        $checklist[$cIdx]['checked'] = $validated['checked'];
+                    }
+                    $pubs[$idx]['checklist'] = $checklist;
+                }
+            }
+            $request->session()->put('sparc_v3.publications', $pubs);
+
+            return back();
+        }
 
         if (str_starts_with($id, 'pub-db-')) {
             $dbItem = ContentItem::find((int) substr($id, 7));
@@ -1938,6 +2017,7 @@ class WorkspaceV3Controller extends Controller
                     'actor' => auth()->user()->name ?? ($state['currentUser']['name'] ?? 'Publisher'),
                     'note' => sprintf('Ditandai tayang secara manual (%s).', $validated['published_url']),
                 ]);
+                app(HaloApuClientService::class)->handlePublishedContent($dbItem, $validated['published_url'] ?? null);
 
                 self::flashToast(
                     $request,
@@ -2012,6 +2092,53 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
+     * Export complete 5-sheet styled OpenXML Excel (.xlsx) Performance Report (`GET /report/export-excel`).
+     */
+    public function exportReportExcel(Request $request, SparcExcelReportService $excelService): HttpResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        $today = now()->toDateString();
+        $platformFilter = (string) $request->query('platform', 'all');
+        $activeLayer = (string) $request->query('layer', 'content');
+
+        $binary = $excelService->generateReportWorkbook([
+            'today' => $today,
+            'platformFilter' => $platformFilter,
+            'activeLayer' => $activeLayer,
+            'publications' => $state['publications'],
+            'contentItems' => $state['contentItems'],
+            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
+            'instagramSettings' => $state['settings']['instagram'] ?? [],
+        ]);
+
+        $filename = sprintf('Laporan-Performa-SPARC-%s.xlsx', $today);
+
+        return response($binary, 200, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+        ]);
+    }
+
+    /**
+     * Download pre-populated Excel (.xlsx) template for batch metric import (`GET /report/template-excel`).
+     */
+    public function downloadReportTemplateExcel(Request $request, SparcExcelReportService $excelService): HttpResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        $today = now()->toDateString();
+
+        $binary = $excelService->generateImportTemplateWorkbook($state['publications'], $today);
+        $filename = sprintf('Template-Impor-Metrik-SPARC-%s.xlsx', $today);
+
+        return response($binary, 200, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => 'attachment; filename="'.$filename.'"',
+            'Cache-Control' => 'max-age=0, no-cache, no-store, must-revalidate',
+        ]);
+    }
+
+    /**
      * Store manual publication metrics (`POST /report/metrics`) preserving NULL != 0 semantics.
      */
     public function storeReportMetric(Request $request): RedirectResponse
@@ -2039,7 +2166,7 @@ class WorkspaceV3Controller extends Controller
         );
 
         /** @var array<int, array<string, mixed>> $pubs */
-        $pubs = $request->session()->get('sparc_v3.publications', []);
+        $pubs = $state['publications'];
         $targetTitle = 'Publikasi';
 
         $nullableMetric = static fn (array $data, string $key): ?int => isset($data[$key]) && $data[$key] !== ''
@@ -2049,7 +2176,7 @@ class WorkspaceV3Controller extends Controller
         foreach ($pubs as $idx => $pub) {
             if (($pub['id'] ?? '') === $validated['publication_id']) {
                 $targetTitle = (string) ($pub['title'] ?? 'Publikasi');
-                $pubs[$idx]['metrics'] = [
+                $newMetrics = [
                     'reach' => $nullableMetric($validated, 'reach'),
                     'impressions' => $nullableMetric($validated, 'impressions'),
                     'views' => $nullableMetric($validated, 'views'),
@@ -2061,6 +2188,8 @@ class WorkspaceV3Controller extends Controller
                     'source' => 'manual',
                     'recordedAt' => self::TODAY.' '.now()->format('H:i'),
                 ];
+                $pubs[$idx]['metrics'] = $newMetrics;
+                self::syncPublicationMetricsToDb($pub, $newMetrics);
             }
         }
         $request->session()->put('sparc_v3.publications', $pubs);
@@ -2076,47 +2205,59 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
-     * Parse and import CSV performance rows (`POST /report/metrics/import-csv`).
+     * Parse and import Excel (.xlsx) or CSV/TSV performance rows (`POST /report/metrics/import-excel` & `/report/metrics/import-csv`).
      */
-    public function importReportCsv(Request $request): RedirectResponse
+    public function importReportCsv(Request $request, SparcExcelReportService $excelService): RedirectResponse
     {
         $state = self::hydrateWorkspace($request);
         if (! $state['can']['managePublishing']) {
-            abort(403, 'Peran Anda tidak diizinkan mengimpor CSV performa.');
+            abort(403, 'Peran Anda tidak diizinkan mengimpor data performa.');
         }
 
         $validated = $request->validate(
             [
-                'csv_text' => ['required', 'string', 'min:10'],
-            ],
-            [
-                'csv_text.required' => 'Tempelkan baris data CSV sesuai format template.',
+                'excel_file' => ['nullable', 'file', 'max:10240'],
+                'csv_text' => ['nullable', 'string'],
             ]
         );
 
-        $lines = preg_split('/\r\n|\r|\n/', trim($validated['csv_text'])) ?: [];
+        $hasFile = $request->hasFile('excel_file') && $request->file('excel_file')?->isValid();
+        $csvText = trim((string) ($validated['csv_text'] ?? ''));
+
+        if (! $hasFile && $csvText === '') {
+            throw ValidationException::withMessages([
+                'excel_file' => 'Pilih berkas Excel (.xlsx) atau tempelkan baris data dari tabel Excel.',
+                'csv_text' => 'Pilih berkas Excel (.xlsx) atau tempelkan baris data dari tabel Excel.',
+            ]);
+        }
+
+        try {
+            $parsedRows = $hasFile
+                ? $excelService->parseUploadedFile($request->file('excel_file'))
+                : $excelService->parseTabularText($csvText);
+        } catch (\Throwable $e) {
+            throw ValidationException::withMessages([
+                'excel_file' => $e->getMessage(),
+                'csv_text' => $e->getMessage(),
+            ]);
+        }
+
         /** @var array<int, array<string, mixed>> $pubs */
-        $pubs = $request->session()->get('sparc_v3.publications', []);
+        $pubs = $state['publications'];
+        $sourceLabel = $hasFile ? 'excel' : 'csv';
 
         $matchedCount = 0;
         $skippedCount = 0;
 
-        foreach ($lines as $lineIdx => $rawLine) {
-            $line = trim($rawLine);
-            if ($line === '' || ($lineIdx === 0 && str_starts_with(strtolower($line), 'content_id,'))) {
-                continue;
-            }
+        foreach ($parsedRows as $row) {
+            $cId = trim((string) ($row['content_id'] ?? ''));
+            $platform = strtolower(trim((string) ($row['platform'] ?? '')));
 
-            $cols = str_getcsv($line);
-            if (count($cols) < 10) {
+            if ($cId === '' || $platform === '') {
                 $skippedCount++;
 
                 continue;
             }
-
-            [$cId, $platform, $reach, $impressions, $views, $likes, $comments, $shares, $saves, $clicks] = $cols;
-            $cId = trim((string) $cId);
-            $platform = strtolower(trim((string) $platform));
 
             $found = false;
             foreach ($pubs as $idx => $pub) {
@@ -2124,25 +2265,61 @@ class WorkspaceV3Controller extends Controller
                     strcasecmp((string) ($pub['contentId'] ?? ''), $cId) === 0
                     && strtolower((string) ($pub['platform'] ?? '')) === $platform
                 ) {
-                    $toNullableInt = fn (?string $val): ?int => ($val !== null && trim($val) !== '' && is_numeric(trim($val)))
-                        ? max(0, (int) trim($val))
-                        : null;
-
-                    $pubs[$idx]['metrics'] = [
-                        'reach' => $toNullableInt($reach),
-                        'impressions' => $toNullableInt($impressions),
-                        'views' => $toNullableInt($views),
-                        'likes' => $toNullableInt($likes),
-                        'comments' => $toNullableInt($comments),
-                        'shares' => $toNullableInt($shares),
-                        'saves' => $toNullableInt($saves),
-                        'clicks' => $toNullableInt($clicks),
-                        'source' => 'csv',
+                    $newMetrics = [
+                        'reach' => $row['reach'],
+                        'impressions' => $row['impressions'],
+                        'views' => $row['views'],
+                        'likes' => $row['likes'],
+                        'comments' => $row['comments'],
+                        'shares' => $row['shares'],
+                        'saves' => $row['saves'],
+                        'clicks' => $row['clicks'],
+                        'source' => $sourceLabel,
                         'recordedAt' => self::TODAY.' '.now()->format('H:i'),
                     ];
+                    $pubs[$idx]['metrics'] = $newMetrics;
+                    self::syncPublicationMetricsToDb($pub, $newMetrics);
                     $found = true;
                     $matchedCount++;
                     break;
+                }
+            }
+
+            if (! $found) {
+                // Also check if a matching ContentItem exists in the workspace and auto-register its publication slot
+                foreach ($state['contentItems'] as $cItem) {
+                    if (strcasecmp((string) ($cItem['contentId'] ?? ''), $cId) === 0) {
+                        $newMetrics = [
+                            'reach' => $row['reach'],
+                            'impressions' => $row['impressions'],
+                            'views' => $row['views'],
+                            'likes' => $row['likes'],
+                            'comments' => $row['comments'],
+                            'shares' => $row['shares'],
+                            'saves' => $row['saves'],
+                            'clicks' => $row['clicks'],
+                            'source' => $sourceLabel,
+                            'recordedAt' => self::TODAY.' '.now()->format('H:i'),
+                        ];
+                        $newPub = [
+                            'id' => 'pub-excel-'.($cItem['id'] ?? Str::lower(Str::random(6))),
+                            'contentItemId' => (string) ($cItem['id'] ?? ''),
+                            'contentId' => (string) $cItem['contentId'],
+                            'title' => (string) ($cItem['title'] ?? 'Konten Publikasi'),
+                            'platform' => $platform !== '' ? $platform : strtolower((string) ($cItem['platform'] ?? 'instagram')),
+                            'scheduledAt' => ((string) ($cItem['publishDate'] ?? self::TODAY)).' '.((string) ($cItem['publishTime'] ?? '10:00')),
+                            'publishedActualAt' => self::TODAY.' '.now()->format('H:i'),
+                            'publishedUrl' => $cItem['publishedUrl'] ?? null,
+                            'picName' => (string) ($cItem['picName'] ?? 'Publisher HUMAS'),
+                            'checklist' => [],
+                            'metrics' => $newMetrics,
+                        ];
+                        $pubs[] = $newPub;
+                        self::syncPublicationMetricsToDb($newPub, $newMetrics);
+                        $found = true;
+                        $matchedCount++;
+                        break;
+                    }
                 }
             }
 
@@ -2154,19 +2331,65 @@ class WorkspaceV3Controller extends Controller
         $request->session()->put('sparc_v3.publications', $pubs);
 
         if ($matchedCount === 0) {
+            $errorMsg = sprintf(
+                'Tidak ada baris yang cocok dengan kombinasi Kode Konten + Platform (%d baris dilewati). Pastikan Kode Konten sesuai dengan daftar publikasi.',
+                $skippedCount
+            );
             throw ValidationException::withMessages([
-                'csv_text' => sprintf('Tidak ada baris yang cocok dengan kombinasi content_id + platform (%d baris dilewati).', $skippedCount),
+                'excel_file' => $errorMsg,
+                'csv_text' => $errorMsg,
             ]);
         }
 
         self::flashToast(
             $request,
             $skippedCount > 0 ? 'warning' : 'success',
-            'Impor CSV Selesai',
-            sprintf('%d publikasi diperbarui%s.', $matchedCount, $skippedCount > 0 ? ", {$skippedCount} baris dilewati" : '')
+            'Impor Data Excel Selesai',
+            sprintf('%d publikasi berhasil diperbarui%s.', $matchedCount, $skippedCount > 0 ? ", {$skippedCount} baris dilewati" : '')
         );
 
         return back();
+    }
+
+    /**
+     * Synchronize manual or Excel-imported publication metrics back to the database `content_items` row when present.
+     *
+     * @param  array<string, mixed>  $pub
+     * @param  array<string, mixed>  $metrics
+     */
+    protected static function syncPublicationMetricsToDb(array $pub, array $metrics): void
+    {
+        if (! Schema::hasTable('content_items')) {
+            return;
+        }
+
+        try {
+            $contentId = (string) ($pub['contentId'] ?? '');
+            $platform = strtolower((string) ($pub['platform'] ?? ''));
+            if ($contentId === '') {
+                return;
+            }
+
+            $item = ContentItem::query()
+                ->where('content_id', $contentId)
+                ->when($platform !== '', static fn ($q) => $q->whereRaw('LOWER(platform) = ?', [$platform]))
+                ->first();
+
+            if (! $item) {
+                return;
+            }
+
+            $item->update([
+                'reach' => $metrics['reach'] ?? $item->reach,
+                'views' => $metrics['views'] ?? $item->views ?? 0,
+                'likes' => $metrics['likes'] ?? $item->likes ?? 0,
+                'comments_count' => $metrics['comments'] ?? $item->comments_count ?? 0,
+                'shares' => $metrics['shares'] ?? $item->shares ?? 0,
+                'saves' => $metrics['saves'] ?? $item->saves,
+            ]);
+        } catch (\Throwable) {
+            // Non-blocking sync to database
+        }
     }
 
     /**
@@ -2207,7 +2430,7 @@ class WorkspaceV3Controller extends Controller
             'category' => $validated['category'],
             'tags' => $tagList ?: ['humas', 'resmi'],
             'externalUrl' => $validated['external_url'],
-            'thumbnailUrl' => 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
+            'thumbnailUrl' => self::deriveAssetThumbnailUrl($validated['external_url']),
             'contentId' => ($validated['content_id'] ?? null) ?: null,
             'uploadedBy' => $state['currentUser']['name'],
             'createdAt' => '27 Okt 2026',
@@ -2223,6 +2446,41 @@ class WorkspaceV3Controller extends Controller
         );
 
         return back();
+    }
+
+    /**
+     * Derive a direct image thumbnail or domain favicon from an external asset URL.
+     */
+    public static function deriveAssetThumbnailUrl(string $url): string
+    {
+        $clean = trim($url);
+
+        // YouTube video thumbnail
+        if (preg_match('/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/', $clean, $m)) {
+            return "https://img.youtube.com/vi/{$m[1]}/hqdefault.jpg";
+        }
+
+        // Direct image URL (extension in path or query)
+        $path = (string) (parse_url($clean, PHP_URL_PATH) ?? '');
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'], true)) {
+            return $clean;
+        }
+
+        if (preg_match('/\.(jpg|jpeg|png|webp|gif|svg)($|\?)/i', $clean) ||
+            preg_match('/(images\.unsplash\.com|images\.pexels\.com|i\.imgur\.com|res\.cloudinary\.com)/i', $clean)) {
+            return $clean;
+        }
+
+        // Domain favicon fallback
+        $host = parse_url($clean, PHP_URL_HOST);
+        if ($host) {
+            $domain = preg_replace('/^www\./', '', $host);
+
+            return "https://www.google.com/s2/favicons?domain={$domain}&sz=128";
+        }
+
+        return '';
     }
 
     /**
@@ -2280,41 +2538,97 @@ class WorkspaceV3Controller extends Controller
         $validated = $request->validate(
             [
                 'name' => ['required', 'string', 'min:3', 'max:100'],
-                'email' => ['required', 'email', 'max:150'],
-                'roles' => ['required', 'array', 'min:1'],
+                'email' => ['required', 'email', 'max:150', 'unique:users,email'],
+                'role' => ['nullable', 'string', 'in:admin,manager,planner,creator,publisher,viewer'],
+                'roles' => ['nullable', 'array'],
                 'roles.*' => ['string', 'in:admin,manager,planner,creator,publisher,viewer'],
+                'password' => ['nullable', 'string', 'min:6', 'max:100'],
             ],
             [
                 'name.required' => 'Nama lengkap anggota wajib diisi.',
                 'email.required' => 'Alamat email kedinasan wajib diisi.',
                 'email.email' => 'Format email tidak valid.',
-                'roles.required' => 'Pilih minimal satu peran untuk anggota baru.',
+                'email.unique' => 'Alamat email ini sudah terdaftar sebagai personel.',
             ]
         );
 
-        /** @var array<int, array<string, mixed>> $team */
-        $team = $request->session()->get('sparc_v3.team', []);
-        $team[] = [
-            'id' => 'tm-'.Str::lower(Str::random(5)),
+        $primaryRole = $validated['role'] ?? ($validated['roles'][0] ?? 'creator');
+        $rawPassword = ! empty($validated['password']) ? $validated['password'] : Str::random(12);
+
+        User::create([
             'name' => $validated['name'],
             'email' => $validated['email'],
-            'roles' => $validated['roles'],
-            'primaryRole' => $validated['roles'][0],
-            'avatar' => 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
-            'activeTasks' => 0,
-            'dueThisWeek' => 0,
-            'overdueTasks' => 0,
-            'effortHours' => 0,
-            'capacityHours' => 24,
-            'status' => 'Undangan Terkirim',
-        ];
-        $request->session()->put('sparc_v3.team', $team);
+            'password' => Hash::make($rawPassword),
+            'role' => $primaryRole,
+            'primary_role' => $primaryRole,
+            'capacity_hours' => 30,
+            'avatar' => 'https://ui-avatars.com/api/?name='.urlencode($validated['name']).'&background=1546D8&color=fff&size=128&bold=true',
+        ]);
+        self::flashToast(
+            $request,
+            'success',
+            'Personel Berhasil Ditambahkan',
+            sprintf('Akun personel untuk %s (%s) telah resmi aktif di database SPARC.', $validated['name'], $validated['email'])
+        );
+
+        return back();
+    }
+
+    /**
+     * Update a team member's role (`PATCH /team/{id}/role` — Admin & Manager only).
+     */
+    public function updateTeamMemberRole(Request $request, string $id): RedirectResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        if (! $state['can']['inviteTeam']) {
+            abort(403, 'Hanya Kepala HUMAS atau Administrator yang dapat mengubah peran anggota.');
+        }
+
+        $validated = $request->validate([
+            'role' => ['required', 'string', 'in:admin,manager,planner,creator,publisher,viewer'],
+        ]);
+
+        $user = User::findOrFail($id);
+        $user->update([
+            'role' => $validated['role'],
+            'primary_role' => $validated['role'],
+        ]);
 
         self::flashToast(
             $request,
             'success',
-            'Undangan Anggota Terkirim',
-            sprintf('Tautan aktivasi telah dikirim ke %s.', $validated['email'])
+            'Peran Diperbarui',
+            sprintf('Peran %s berhasil diubah ke %s.', $user->name, self::rolePersonas()[$validated['role']]['roleLabel'] ?? $validated['role'])
+        );
+
+        return back();
+    }
+
+    /**
+     * Remove a member from HUMAS team (`DELETE /team/{id}` — Admin & Manager only).
+     */
+    public function destroyTeamMember(Request $request, string $id): RedirectResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        if (! $state['can']['inviteTeam']) {
+            abort(403, 'Hanya Kepala HUMAS atau Administrator yang dapat menghapus anggota tim.');
+        }
+
+        if ((string) auth()->id() === (string) $id) {
+            self::flashToast($request, 'error', 'Tindakan Ditolak', 'Anda tidak dapat menghapus akun Anda sendiri.');
+
+            return back();
+        }
+
+        $user = User::findOrFail($id);
+        $name = $user->name;
+        $user->delete();
+
+        self::flashToast(
+            $request,
+            'info',
+            'Personel Dihapus',
+            sprintf('%s telah dihapus dari direktori tim HUMAS.', $name)
         );
 
         return back();
@@ -2365,16 +2679,41 @@ class WorkspaceV3Controller extends Controller
             abort(403, 'Hanya Administrator yang dapat menjalankan sinkronisasi manual token HALO APU.');
         }
 
-        /** @var array<string, mixed> $settings */
+        $start = microtime(true);
+        try {
+            $count = app(HaloApuClientService::class)->syncTickets();
+            $latency = (int) round((microtime(true) - $start) * 1000);
+            $status = 'success';
+            $note = "Sinkronisasi manual berhasil. {$count} tiket diperbarui.";
+            self::flashToast($request, 'success', 'Sinkronisasi HALO APU Berhasil', $note);
+        } catch (\Throwable $e) {
+            $latency = (int) round((microtime(true) - $start) * 1000);
+            $status = 'error';
+            $note = 'Gagal: '.$e->getMessage();
+            self::flashToast($request, 'error', 'Sinkronisasi Gagal', $e->getMessage());
+            $count = 0;
+        }
+
+        if (Schema::hasTable('haloapu_sync_logs')) {
+            HaloApuSyncLog::create([
+                'direction' => 'manual_pull',
+                'event_type' => 'sync',
+                'status' => $status,
+                'fetched_count' => $count,
+                'latency_ms' => $latency,
+                'note' => $note,
+            ]);
+        }
+
         $settings = $request->session()->get('sparc_v3.settings', []);
         $logs = is_array($settings['haloApuLogs'] ?? null) ? $settings['haloApuLogs'] : [];
         array_unshift($logs, [
             'id' => 'sync-'.Str::lower(Str::random(5)),
-            'timestamp' => '27 Okt 2026 '.now()->format('H:i:s'),
-            'status' => 'success',
-            'fetched' => 2,
-            'latencyMs' => 184,
-            'note' => 'Sinkronisasi manual REST API HALO APU berhasil (HTTP 200 OK).',
+            'timestamp' => now()->format('d M Y H:i:s'),
+            'status' => $status === 'success' ? 'success' : 'error',
+            'fetched' => $count,
+            'latencyMs' => $latency,
+            'note' => $note,
         ]);
         $settings['haloApuLogs'] = array_slice($logs, 0, 20);
         $settings['lastSyncAt'] = 'Baru saja ('.now()->format('H:i').' WIB)';
@@ -2383,14 +2722,87 @@ class WorkspaceV3Controller extends Controller
         self::pushNotification(
             $request,
             'info',
-            'Sinkronisasi HALO APU Selesai',
-            '2 tiket layanan baru telah disinkronkan dari antrean REST API HALO APU.',
+            'Sinkronisasi HALO APU',
+            $note,
             '/incoming'
         );
 
-        self::flashToast($request, 'success', 'Sinkronisasi HALO APU Berhasil', 'Antrean tiket masuk telah diperbarui.');
+        return back();
+    }
+
+    public function testHaloApuConnection(Request $request): RedirectResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        if (! $state['can']['manageSettings']) {
+            abort(403, 'Akses ditolak.');
+        }
+
+        $res = app(HaloApuClientService::class)->testConnection();
+        if ($res['success']) {
+            self::flashToast($request, 'success', 'Koneksi HaloAPU Berhasil', $res['message']);
+        } else {
+            self::flashToast($request, 'error', 'Koneksi HaloAPU Gagal', $res['message']);
+        }
 
         return back();
+    }
+
+    public function updateHaloApuSettings(Request $request): RedirectResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        if (! $state['can']['manageSettings']) {
+            abort(403, 'Akses ditolak.');
+        }
+
+        $validated = $request->validate([
+            'base_url' => ['required', 'url', 'max:255'],
+            'api_token' => ['nullable', 'string', 'max:255'],
+            'webhook_secret' => ['nullable', 'string', 'max:255'],
+            'auto_solve_on_publish' => ['nullable', 'boolean'],
+        ]);
+
+        $conn = HaloApuConnection::current();
+        $updates = [
+            'is_enabled' => true,
+            'base_url' => rtrim($validated['base_url'], '/'),
+            'auto_solve_on_publish' => $request->boolean('auto_solve_on_publish', true),
+        ];
+
+        if (! empty($validated['api_token'])) {
+            $updates['api_token'] = $validated['api_token'];
+        }
+        if (! empty($validated['webhook_secret'])) {
+            $updates['webhook_secret'] = $validated['webhook_secret'];
+        }
+
+        $conn->update($updates);
+
+        self::flashToast($request, 'success', 'Pengaturan HaloAPU Disimpan', 'Konfigurasi integrasi berhasil diperbarui.');
+
+        return back();
+    }
+
+    public static function resolveHaloApuSettingsPayload(): array
+    {
+        if (! Schema::hasTable('haloapu_connections')) {
+            return [
+                'isEnabled' => false,
+                'baseUrl' => '',
+                'autoSolveOnPublish' => true,
+                'lastSyncAt' => 'Belum pernah',
+                'lastStatus' => 'disconnected',
+            ];
+        }
+
+        $conn = HaloApuConnection::current();
+
+        return [
+            'isEnabled' => (bool) $conn->is_enabled,
+            'baseUrl' => (string) ($conn->base_url ?? ''),
+            'autoSolveOnPublish' => (bool) ($conn->auto_solve_on_publish ?? true),
+            'lastSyncAt' => $conn->last_synced_at ? $conn->last_synced_at->format('d M Y, H:i').' WIB' : 'Belum pernah',
+            'lastStatus' => (string) ($conn->last_status ?? 'disconnected'),
+        ];
     }
 
     /**
@@ -2496,6 +2908,10 @@ class WorkspaceV3Controller extends Controller
             'bestPostingHours' => $bestPostingHours,
             'rateLimitUsage' => is_array($conn?->rate_limit_usage) ? $conn->rate_limit_usage : null,
             'syncLogs' => is_array($conn?->sync_logs) ? $conn->sync_logs : [],
+            'adsData' => is_array($conn?->ads_data) ? $conn->ads_data : null,
+            'demographicsData' => is_array($conn?->demographics_data) ? $conn->demographics_data : null,
+            'storiesData' => is_array($conn?->stories_data) ? $conn->stories_data : [],
+            'mentionsData' => is_array($conn?->mentions_data) ? $conn->mentions_data : null,
         ];
     }
 
@@ -3060,209 +3476,9 @@ class WorkspaceV3Controller extends Controller
         return [
             'active_role' => 'admin',
             'content_items' => [],
-            'activities' => [
-                [
-                    'id' => 'act-1',
-                    'title' => 'Rapat Koordinasi Keterbukaan Informasi Publik',
-                    'activityDate' => '2026-10-28',
-                    'type' => 'agenda',
-                    'description' => 'Rakor nasional PPID dan penyelarasan standar layanan informasi.',
-                    'linkedCount' => 1,
-                ],
-                [
-                    'id' => 'act-2',
-                    'title' => 'Peringatan Hari Sumpah Pemuda',
-                    'activityDate' => '2026-10-28',
-                    'type' => 'hari_besar',
-                    'description' => 'Momentum nasional publikasi serentak seluruh kanal resmi.',
-                    'linkedCount' => 1,
-                ],
-                [
-                    'id' => 'act-3',
-                    'title' => 'Peluncuran Portal Layanan Digital Terpadu',
-                    'activityDate' => '2026-10-27',
-                    'type' => 'event',
-                    'description' => 'Konferensi pers peluncuran pembaruan portal versi seluler.',
-                    'linkedCount' => 1,
-                ],
-                [
-                    'id' => 'act-4',
-                    'title' => 'Evaluasi Kinerja Kehumasan Triwulan IV',
-                    'activityDate' => '2026-10-30',
-                    'type' => 'momentum',
-                    'description' => 'Paparan capaian publikasi dan respons pengaduan masyarakat.',
-                    'linkedCount' => 1,
-                ],
-                [
-                    'id' => 'act-5',
-                    'title' => 'Kampanye Literasi Layanan Pengaduan HALO APU',
-                    'activityDate' => '2026-11-03',
-                    'type' => 'kampanye',
-                    'description' => 'Pekan edukasi pemanfaatan kanal pengaduan terintegrasi.',
-                    'linkedCount' => 1,
-                ],
-            ],
-            'publications' => [
-                [
-                    'id' => 'pub-1',
-                    'contentItemId' => 'ci-4',
-                    'contentId' => 'SPARC-2026-0004',
-                    'title' => 'Rilis Berita Peluncuran Portal Layanan Terpadu Versi Mobile',
-                    'platform' => 'website',
-                    'scheduledAt' => '2026-10-27 16:00',
-                    'publishedActualAt' => null,
-                    'publishedUrl' => null,
-                    'picName' => 'Fajar Nugroho',
-                    'checklist' => [
-                        ['key' => 'judul_artikel', 'label' => 'Judul rilis berita telah disunting redaktur', 'checked' => true],
-                        ['key' => 'meta_description', 'label' => 'Meta description SEO (150-160 karakter) terisi', 'checked' => true],
-                        ['key' => 'featured_image', 'label' => 'Foto utama beserta alt-text aksesibilitas', 'checked' => true],
-                        ['key' => 'internal_link', 'label' => 'Tautan rujukan layanan publik berfungsi', 'checked' => false],
-                    ],
-                    'metrics' => null,
-                ],
-                [
-                    'id' => 'pub-2',
-                    'contentItemId' => 'ci-3',
-                    'contentId' => 'SPARC-2026-0003',
-                    'title' => 'Peringatan Hari Sumpah Pemuda ke-98: Kolaborasi Muda',
-                    'platform' => 'instagram',
-                    'scheduledAt' => '2026-10-28 07:30',
-                    'publishedActualAt' => null,
-                    'publishedUrl' => null,
-                    'picName' => 'Fajar Nugroho',
-                    'checklist' => [
-                        ['key' => 'caption', 'label' => 'Caption final sesuai EYD & pedoman komunikasi publik', 'checked' => true],
-                        ['key' => 'hashtag', 'label' => 'Tagar kelembagaan & pilar konten lengkap', 'checked' => true],
-                        ['key' => 'cta', 'label' => 'Call to Action & informasi kanal pengaduan jelas', 'checked' => true],
-                        ['key' => 'thumbnail', 'label' => 'Cover rasio 4:5 / 9:16 selaras pada grid profil', 'checked' => true],
-                        ['key' => 'mention', 'label' => 'Tag akun unit kerja terkait & lokasi terverifikasi', 'checked' => true],
-                    ],
-                    'metrics' => null,
-                ],
-                [
-                    'id' => 'pub-3',
-                    'contentItemId' => 'ci-8',
-                    'contentId' => 'SPARC-2026-0008',
-                    'title' => '5 Tips Mengenali Tautan Resmi Instansi vs Penipuan Phishing',
-                    'platform' => 'instagram',
-                    'scheduledAt' => '2026-10-23 10:00',
-                    'publishedActualAt' => '2026-10-23 10:04',
-                    'publishedUrl' => 'https://instagram.com/p/sparc2026aman',
-                    'picName' => 'Fajar Nugroho',
-                    'checklist' => [],
-                    'metrics' => [
-                        'reach' => 28400,
-                        'impressions' => 36900,
-                        'views' => null,
-                        'likes' => 1840,
-                        'comments' => 142,
-                        'shares' => 690,
-                        'saves' => 920,
-                        'clicks' => 415,
-                        'source' => 'manual',
-                        'recordedAt' => '2026-10-26 09:30',
-                    ],
-                ],
-                [
-                    'id' => 'pub-4',
-                    'contentItemId' => 'ci-7',
-                    'contentId' => 'SPARC-2026-0007',
-                    'title' => 'Dokumenter Inovasi Pelayanan Ramah Disabilitas 2026',
-                    'platform' => 'youtube',
-                    'scheduledAt' => '2026-10-20 13:00',
-                    'publishedActualAt' => '2026-10-20 13:02',
-                    'publishedUrl' => 'https://youtube.com/watch?v=sparc2026inklusif',
-                    'picName' => 'Fajar Nugroho',
-                    'checklist' => [],
-                    'metrics' => [
-                        'reach' => 14200,
-                        'impressions' => 21500,
-                        'views' => 11850,
-                        'likes' => 940,
-                        'comments' => 88,
-                        'shares' => 210,
-                        'saves' => null,
-                        'clicks' => 310,
-                        'source' => 'manual',
-                        'recordedAt' => '2026-10-25 14:15',
-                    ],
-                ],
-            ],
-            'assets' => [
-                [
-                    'id' => 'ast-1',
-                    'title' => 'Template Master Carousel Edukasi Publik 4:5 (MD3)',
-                    'category' => 'template_desain',
-                    'tags' => ['carousel', 'instagram', 'standar-2026'],
-                    'externalUrl' => 'https://www.canva.com/design/sparc-carousel-2026',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => 'SPARC-2026-0008',
-                    'uploadedBy' => 'Dimas Pratama',
-                    'createdAt' => '22 Okt 2026',
-                    'dimensions' => '1080 × 1350 px',
-                ],
-                [
-                    'id' => 'ast-2',
-                    'title' => 'Dokumentasi Konferensi Pers Layanan Digital Terpadu',
-                    'category' => 'foto',
-                    'tags' => ['liputan', 'pimpinan', 'portal-digital'],
-                    'externalUrl' => 'https://drive.google.com/drive/folders/sparc-dokumentasi',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => 'SPARC-2026-0004',
-                    'uploadedBy' => 'Dimas Pratama',
-                    'createdAt' => '27 Okt 2026',
-                    'dimensions' => '4000 × 2667 px',
-                ],
-                [
-                    'id' => 'ast-3',
-                    'title' => 'Bumper Outro Resmi HUMAS & Lower-Third Reels 9:16',
-                    'category' => 'video',
-                    'tags' => ['bumper', 'reels', 'motion-kit'],
-                    'externalUrl' => 'https://drive.google.com/drive/folders/sparc-video-kit',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1574717024653-61fd2cf4d44d?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => 'SPARC-2026-0001',
-                    'uploadedBy' => 'Aldwin NV',
-                    'createdAt' => '15 Okt 2026',
-                    'dimensions' => '1080 × 1920 px (60fps)',
-                ],
-                [
-                    'id' => 'ast-4',
-                    'title' => 'Set Infografis Statistik Penyelesaian Tiket Triwulan III',
-                    'category' => 'infografis',
-                    'tags' => ['data', 'triwulan-3', 'akuntabilitas'],
-                    'externalUrl' => 'https://www.figma.com/file/sparc-infografis-q3',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => 'SPARC-2026-0002',
-                    'uploadedBy' => 'Dimas Pratama',
-                    'createdAt' => '26 Okt 2026',
-                    'dimensions' => '1080 × 1350 px',
-                ],
-                [
-                    'id' => 'ast-5',
-                    'title' => 'Paket Ilustrasi Vektor Layanan Inklusif & Ramah Disabilitas',
-                    'category' => 'ilustrasi',
-                    'tags' => ['vektor', 'inklusif', 'ilustrasi'],
-                    'externalUrl' => 'https://www.figma.com/file/sparc-vector-pack',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => 'SPARC-2026-0007',
-                    'uploadedBy' => 'Dimas Pratama',
-                    'createdAt' => '19 Okt 2026',
-                    'dimensions' => 'SVG / PNG Transparan',
-                ],
-                [
-                    'id' => 'ast-6',
-                    'title' => 'Pedoman Identitas Visual & Tone of Voice HUMAS 2026',
-                    'category' => 'dokumen',
-                    'tags' => ['sop', 'brand-guideline', 'redaksi'],
-                    'externalUrl' => 'https://drive.google.com/file/d/sparc-pedoman-2026',
-                    'thumbnailUrl' => 'https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=600&auto=format&fit=crop&q=80',
-                    'contentId' => null,
-                    'uploadedBy' => 'Rina Kartika',
-                    'createdAt' => '01 Okt 2026',
-                    'dimensions' => 'PDF • 4.2 MB',
-                ],
-            ],
+            'activities' => [],
+            'publications' => [],
+            'assets' => [],
             'team' => [
                 [
                     'id' => 'tm-1',
@@ -3354,7 +3570,7 @@ class WorkspaceV3Controller extends Controller
                 'workingHoursStart' => '08:00',
                 'workingHoursEnd' => '17:00',
                 'pollingIntervalSeconds' => 30,
-                'lastSyncAt' => '27 Okt 2026 15:30 WIB',
+                'lastSyncAt' => 'Belum pernah',
                 'tokenHealthy' => true,
                 'contentPilars' => [
                     ['key' => 'edukasi', 'label' => 'Edukasi Publik'],
@@ -3370,54 +3586,9 @@ class WorkspaceV3Controller extends Controller
                     ['key' => 'website', 'label' => 'Portal Berita Website'],
                     ['key' => 'whatsapp', 'label' => 'Siaran WhatsApp Publik'],
                 ],
-                'haloApuLogs' => [
-                    ['id' => 'sync-1', 'timestamp' => '27 Okt 2026 15:30:02', 'status' => 'success', 'fetched' => 1, 'latencyMs' => 192, 'note' => 'Tiket #API-215 ditarik ke antrean Incoming HALO APU.'],
-                    ['id' => 'sync-2', 'timestamp' => '27 Okt 2026 15:00:01', 'status' => 'success', 'fetched' => 0, 'latencyMs' => 145, 'note' => 'Tidak ada tiket baru (200 OK).'],
-                    ['id' => 'sync-3', 'timestamp' => '27 Okt 2026 14:30:04', 'status' => 'success', 'fetched' => 2, 'latencyMs' => 210, 'note' => 'Callback status solve terkirim untuk #API-198.'],
-                ],
+                'haloApuLogs' => [],
             ],
-            'notifications' => [
-                [
-                    'id' => 'ntf-seed-1',
-                    'type' => 'warning',
-                    'title' => 'Menunggu Persetujuan Kepala HUMAS',
-                    'message' => 'SPARC-2026-0002 "Infografis Capaian Layanan Triwulan III" berada di kolom Review & Approval.',
-                    'actionUrl' => '/planner',
-                    'createdAt' => '2026-10-27T08:15:00+07:00',
-                    'timeLabel' => '25m lalu',
-                    'readAt' => null,
-                ],
-                [
-                    'id' => 'ntf-seed-2',
-                    'type' => 'error',
-                    'title' => 'Tenggat Produksi Terlewat',
-                    'message' => 'SPARC-2026-0001 "Panduan 3 Langkah Permohonan Informasi Publik" melewati tenggat produksi 25 Okt.',
-                    'actionUrl' => '/content',
-                    'createdAt' => '2026-10-27T07:30:00+07:00',
-                    'timeLabel' => '1j lalu',
-                    'readAt' => null,
-                ],
-                [
-                    'id' => 'ntf-seed-3',
-                    'type' => 'info',
-                    'title' => 'Jadwal Tayang Hari Ini (16:00 WIB)',
-                    'message' => 'SPARC-2026-0004 "Rilis Berita Peluncuran Portal Layanan" masih memiliki 1 checklist belum dicentang.',
-                    'actionUrl' => '/publishing',
-                    'createdAt' => '2026-10-27T07:00:00+07:00',
-                    'timeLabel' => '2j lalu',
-                    'readAt' => null,
-                ],
-                [
-                    'id' => 'ntf-seed-4',
-                    'type' => 'success',
-                    'title' => 'Tiket HALO APU Tersinkronisasi',
-                    'message' => 'Tiket #API-215 dari Bagian Umum masuk ke antrean Incoming HALO APU.',
-                    'actionUrl' => '/incoming',
-                    'createdAt' => '2026-10-26T16:40:00+07:00',
-                    'timeLabel' => 'Kemarin',
-                    'readAt' => '2026-10-27T06:00:00+07:00',
-                ],
-            ],
+            'notifications' => [],
         ];
     }
 }

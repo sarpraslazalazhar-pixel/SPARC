@@ -9,7 +9,6 @@ import {
     AlertTriangle,
     ArrowLeftRight,
     Bell,
-    BookOpen,
     Calendar,
     Check,
     CheckCheck,
@@ -27,7 +26,6 @@ import {
     ChevronRight,
     Menu,
     MessageCircle,
-    Plus,
     RefreshCw,
     Send,
     Settings,
@@ -35,20 +33,18 @@ import {
     TableProperties,
     Trash2,
     TrendingUp,
+    User,
     Users,
-    X,
 } from 'lucide-react';
 import { SparcLogo } from '@/Components/SparcLogo';
 import { InertiaFlashListener } from '@/Components/InertiaFlashListener';
 import { Button } from '@/Components/UI/Button';
 import { Modal } from '@/Components/UI/Modal';
-import { Input } from '@/Components/UI/Input';
-import { Select } from '@/Components/UI/Select';
-import { Textarea } from '@/Components/UI/Textarea';
 import { Sheet } from '@/Components/UI/Sheet';
 import { RoleBadge } from '@/Components/UI/Semantics';
 import { ThemeSegmentedControl, ThemeSwitcher } from '@/Components/UI/ThemeSwitcher';
 import { useToast } from '@/Components/UI/Toast';
+import { ProfileModal } from '@/Components/ProfileModal';
 import {
     backdropVariants,
     MD3_EASING,
@@ -112,6 +108,8 @@ export interface SharedWorkspaceProps {
         connected: boolean;
         username: string;
         name?: string;
+        biography?: string | null;
+        website?: string | null;
         profilePictureUrl?: string | null;
         followersCount?: number | null;
         mediaCount?: number | null;
@@ -249,7 +247,6 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
         manageSettings: true,
     };
 
-    const personas: WorkspaceUser[] = props.auth?.personas ?? [currentUser];
 
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -263,10 +260,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
             return false;
         }
     });
-    const [createModalOpen, setCreateModalOpen] = useState(false);
     const [notifSheetOpen, setNotifSheetOpen] = useState(false);
-    const [workspacePrefsOpen, setWorkspacePrefsOpen] = useState(false);
 
+    const [profileModalOpen, setProfileModalOpen] = useState(false);
     const [titleSlot, setTitleSlot] = useState<HTMLDivElement | null>(null);
     const [centerSlot, setCenterSlot] = useState<HTMLDivElement | null>(null);
     const [actionsSlot, setActionsSlot] = useState<HTMLDivElement | null>(null);
@@ -457,17 +453,33 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const pathname = url.split('?')[0] || '/';
 
-    const createForm = useForm({
-        title: '',
-        platform: 'instagram' as 'instagram' | 'youtube' | 'tiktok' | 'facebook' | 'x',
-        format: 'reels_shorts' as 'reels_shorts' | 'carousel' | 'single_image',
-        pillar: 'edukasi' as 'edukasi' | 'promosi' | 'event' | 'pengumuman' | 'hiburan',
-        publish_date: '',
-        caption: '',
-        status: 'todo',
-        redirect_to: 'planner',
+    // Track seen incoming tickets count so badge clears once /incoming is viewed
+    const [seenIncomingCount, setSeenIncomingCount] = useState<number>(() => {
+        if (typeof window === 'undefined') return 0;
+        const saved = window.sessionStorage.getItem('sparc_seen_incoming_count');
+        return saved !== null ? parseInt(saved, 10) || 0 : 0;
     });
 
+    useEffect(() => {
+        if (pathname.startsWith('/incoming')) {
+            const currentCount = props.workspaceBadges?.incoming ?? 0;
+            setSeenIncomingCount(currentCount);
+            try {
+                window.sessionStorage.setItem('sparc_seen_incoming_count', String(currentCount));
+            } catch {
+                // ignore storage quota errors
+            }
+        }
+    }, [pathname, props.workspaceBadges?.incoming]);
+
+    const incomingBadgeCount = useMemo(() => {
+        if (pathname.startsWith('/incoming')) {
+            return undefined;
+        }
+        const total = props.workspaceBadges?.incoming ?? 0;
+        const unread = Math.max(0, total - seenIncomingCount);
+        return unread > 0 ? unread : undefined;
+    }, [pathname, props.workspaceBadges?.incoming, seenIncomingCount]);
     const navGroups: NavGroupConfig[] = useMemo(
         () => [
             {
@@ -483,9 +495,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                     {
                         href: '/incoming',
                         matchHref: ['/incoming'],
-                        label: 'Incoming HALO APU',
+                        label: 'Tiket HALO APU',
                         icon: ArrowLeftRight,
-                        badge: props.workspaceBadges?.incoming ?? 5,
+                        badge: incomingBadgeCount,
                         badgeTone: 'amber',
                     },
                 ],
@@ -555,12 +567,6 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         icon: Grid3x3,
                     },
                     {
-                        href: '/resources',
-                        matchHref: ['/resources'],
-                        label: 'Resource Library',
-                        icon: BookOpen,
-                    },
-                    {
                         href: '/assets',
                         matchHref: ['/assets'],
                         label: 'Visual Assets',
@@ -600,7 +606,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                 ],
             },
         ],
-        [can.manageSettings, props.workspaceBadges]
+        [can.manageSettings, props.workspaceBadges, incomingBadgeCount]
     );
 
     const isCurrentActive = (matches: string[]) => {
@@ -610,32 +616,6 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
         return matches.some((path) => path !== '/' && pathname.startsWith(path));
     };
 
-    const handleCreateSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        createForm.post('/planner/items', {
-            preserveScroll: false,
-            onSuccess: () => {
-                setCreateModalOpen(false);
-                createForm.reset();
-            },
-            onError: () => {
-                toastError('Validasi Form Gagal', 'Mohon periksa kembali kolom yang ditandai merah.');
-            },
-        });
-    };
-
-    const handleSwitchRole = (role: WorkspaceUser['role']) => {
-        if (role === currentUser.role) {
-            return;
-        }
-        router.post(
-            '/workspace/role',
-            { role },
-            {
-                preserveScroll: true,
-            }
-        );
-    };
 
     const filteredNotifications = useMemo(() => {
         if (notifFilter === 'unread') {
@@ -979,17 +959,6 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                     </Link>
                     <div className="flex items-center gap-1.5">
                         <ThemeSwitcher compact />
-                        {can.editContent && (
-                            <button
-                                type="button"
-                                onClick={() => setCreateModalOpen(true)}
-                                aria-label="Buat Item Konten Baru"
-                                title="Create Item"
-                                className="md-btn-tactile p-2 rounded-xl bg-[var(--md-sys-color-primary-filled)] text-white shadow-[var(--md-elevation-1)] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
-                            >
-                                <Plus className="w-4 h-4" />
-                            </button>
-                        )}
                         <button
                             type="button"
                             onClick={() => setNotifSheetOpen(true)}
@@ -1063,23 +1032,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         {/* Center Capsule Slot (Used by Dashboard Period Pills like Panze Topbar) */}
                         <div ref={setCenterSlot} className="flex items-center justify-center shrink-0 empty:hidden" />
 
-                        <div className="flex items-center justify-end gap-2 shrink-0">
+                        <div className="flex items-center justify-end gap-2.5 shrink-0">
                             {/* Page-Specific Contextual Actions */}
                             <div ref={setActionsSlot} className="flex items-center gap-2 shrink-0 empty:hidden" />
-
-                            {/* Global + Create Item Button (Role-Aware) */}
-                            {can.editContent && (
-                                <button
-                                    type="button"
-                                    onClick={() => setCreateModalOpen(true)}
-                                    aria-label="Buat Item Konten Baru"
-                                    title="Buat Konten Baru"
-                                    className="panze-icon-btn cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
-                                >
-                                    <Plus className="w-4 h-4" />
-                                </button>
-                            )}
-
 
                             {/* Persistent Notification Bell with Live Unread Count */}
                             <button
@@ -1087,9 +1042,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                 onClick={() => setNotifSheetOpen(true)}
                                 aria-label="Pusat Notifikasi"
                                 title={`Pusat Notifikasi (${unreadCount} belum dibaca)`}
-                                className="panze-icon-btn relative cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
+                                className="w-10 h-10 rounded-full flex items-center justify-center border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] relative cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] transition-all active:scale-95 shadow-2xs"
                             >
-                                <Bell className="w-4 h-4" />
+                                <Bell className="w-4.5 h-4.5" />
                                 {unreadCount > 0 && (
                                     <span
                                         data-testid="unread-notification-badge"
@@ -1103,29 +1058,18 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                             {/* Theme Selector */}
                             <ThemeSwitcher compact />
 
-                            {/* Workspace Appearance / Preferences Button */}
-                            <button
-                                type="button"
-                                onClick={() => setWorkspacePrefsOpen(true)}
-                                aria-label="Pengaturan Workspace"
-                                title="Preferensi Tampilan & Tema"
-                                className="panze-icon-btn cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
-                            >
-                                <Settings className="w-4 h-4" />
-                            </button>
-
-                            {/* User & Role Switcher Dropdown Menu (Panze Profile Trigger) */}
+                            {/* User Profile Pill Trigger */}
                             <DropdownMenu.Root>
                                 <DropdownMenu.Trigger asChild>
                                     <button
                                         type="button"
                                         aria-label={`Menu Pengguna ${currentUser.name} (${currentUser.roleLabel})`}
-                                        className="md-btn-tactile flex items-center gap-2.5 pl-1 pr-2.5 py-1 rounded-full hover:bg-[var(--md-sys-color-surface-container)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] cursor-pointer transition-colors"
+                                        className="md-btn-tactile flex items-center gap-2.5 pl-1.5 pr-3 py-1.5 rounded-full hover:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] cursor-pointer transition-colors shadow-2xs"
                                     >
                                         <img
                                             src={currentUser.avatar}
                                             alt={currentUser.name}
-                                            className="w-9 h-9 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shadow-2xs"
+                                            className="w-8 h-8 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shadow-2xs"
                                         />
                                         <div className="hidden xl:block text-left leading-tight">
                                             <div className="text-xs font-bold text-[var(--md-sys-color-on-surface)] max-w-[120px] truncate">
@@ -1145,11 +1089,11 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                             initial={{ opacity: 0, scale: 0.97, y: -4 }}
                                             animate={{ opacity: 1, scale: 1, y: 0 }}
                                             transition={{ duration: 0.15, ease: MD3_EASING.decelerate }}
-                                            className="z-[70] w-72 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)] p-2 shadow-[var(--md-elevation-3)] outline-none"
+                                            className="z-[70] w-64 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)] p-2 shadow-[var(--md-elevation-3)] outline-none"
                                         >
-                                            <div className="px-2.5 py-2 border-b border-[var(--md-sys-color-outline-variant)] mb-1.5">
+                                            <div className="px-2.5 py-2 border-b border-[var(--md-sys-color-outline-variant)] mb-1">
                                                 <div className="flex items-center justify-between gap-2">
-                                                    <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                                                    <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate">
                                                         {currentUser.name}
                                                     </span>
                                                     <RoleBadge role={currentUser.role} />
@@ -1159,40 +1103,40 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                                 </p>
                                             </div>
 
-                                            <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-muted)] flex items-center gap-1.5">
-                                                <Shield className="w-3 h-3" /> Simulasi Peran RBAC (6 Role)
+                                            <div className="space-y-0.5">
+                                                <DropdownMenu.Item asChild>
+                                                    <Link
+                                                        href="/profile"
+                                                        className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                    >
+                                                        <User className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                        <span>Profil & Pengaturan Akun</span>
+                                                    </Link>
+                                                </DropdownMenu.Item>
+                                                <DropdownMenu.Item asChild>
+                                                    <Link
+                                                        href="/team"
+                                                        className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                    >
+                                                        <Users className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                        <span>Direktori Tim HUMAS</span>
+                                                    </Link>
+                                                </DropdownMenu.Item>
+
+                                                {can?.manageSettings && (
+                                                    <DropdownMenu.Item asChild>
+                                                        <Link
+                                                            href="/settings"
+                                                            className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                        >
+                                                            <Settings className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                            <span>Pengaturan Sistem</span>
+                                                        </Link>
+                                                    </DropdownMenu.Item>
+                                                )}
                                             </div>
 
-                                            <div className="space-y-0.5">
-                                                {personas.map((persona) => {
-                                                    const isSelected = persona.role === currentUser.role;
-                                                    return (
-                                                        <DropdownMenu.Item
-                                                            key={persona.role}
-                                                            onSelect={() => handleSwitchRole(persona.role)}
-                                                            className={cn(
-                                                                'flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-xs cursor-pointer select-none outline-none transition-colors',
-                                                                isSelected
-                                                                    ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] font-semibold'
-                                                                    : 'text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)]'
-                                                            )}
-                                                        >
-                                                            <div className="min-w-0">
-                                                                <div className="truncate font-semibold leading-tight">
-                                                                    {persona.roleLabel}
-                                                                </div>
-                                                                <div className="text-[10px] opacity-75 truncate">
-                                                                    {persona.name}
-                                                                </div>
-                                                            </div>
-                                                            {isSelected && (
-                                                                <Check className="w-3.5 h-3.5 shrink-0 text-[var(--md-sys-color-primary)]" />
-                                                            )}
-                                                        </DropdownMenu.Item>
-                                                    );
-                                                })}
-
-                                            <div className="pt-1.5 mt-1.5 border-t border-[var(--md-sys-color-outline-variant)]">
+                                            <div className="pt-1 mt-1 border-t border-[var(--md-sys-color-outline-variant)]">
                                                 <DropdownMenu.Item asChild>
                                                     <Link
                                                         method="post"
@@ -1201,10 +1145,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                                         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-error)] hover:bg-[var(--md-sys-color-error-container)]/40 focus:bg-[var(--md-sys-color-error-container)]/40 cursor-pointer select-none outline-none font-semibold transition-colors"
                                                     >
                                                         <LogOut className="w-3.5 h-3.5 shrink-0" />
-                                                        <span>Keluar dari Workspace</span>
+                                                        <span>Keluar dari Akun</span>
                                                     </Link>
                                                 </DropdownMenu.Item>
-                                            </div>
                                             </div>
                                         </motion.div>
                                     </DropdownMenu.Content>
@@ -1233,121 +1176,6 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         </AnimatePresence>
                     </main>
                 </div>
-
-                {/* Global Quick Create Content Item Modal */}
-                <Modal
-                    isOpen={createModalOpen}
-                    onClose={() => setCreateModalOpen(false)}
-                    title="Create New Content Item"
-                    description="Tambahkan rencana konten baru ke alur produksi SPARC"
-                    maxWidth="lg"
-                >
-                    <form onSubmit={handleCreateSubmit} noValidate className="space-y-4">
-                        <Input
-                            label="Judul Konten"
-                            placeholder="Contoh: Panduan 3 Langkah Permohonan Informasi Publik"
-                            value={createForm.data.title}
-                            onChange={(e) => createForm.setData('title', e.target.value)}
-                            error={createForm.errors.title}
-                            helperText="Minimal 3 karakter agar mudah ditelusuri pada Content Plan."
-                            required
-                        />
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <Select
-                                label="Kanal Utama"
-                                value={createForm.data.platform}
-                                onChange={(e) =>
-                                    createForm.setData(
-                                        'platform',
-                                        e.target.value as typeof createForm.data.platform
-                                    )
-                                }
-                                error={createForm.errors.platform}
-                            >
-                                <option value="instagram">Instagram</option>
-                                <option value="youtube">YouTube</option>
-                                <option value="tiktok">TikTok</option>
-                                <option value="facebook">Facebook</option>
-                                <option value="x">X (Twitter)</option>
-                            </Select>
-
-                            <Select
-                                label="Format Konten"
-                                value={createForm.data.format}
-                                onChange={(e) =>
-                                    createForm.setData(
-                                        'format',
-                                        e.target.value as typeof createForm.data.format
-                                    )
-                                }
-                                error={createForm.errors.format}
-                            >
-                                <option value="reels_shorts">Reels / Shorts (Video)</option>
-                                <option value="carousel">Carousel Feed</option>
-                                <option value="single_image">Single Image Feed</option>
-                            </Select>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <Select
-                                label="Pilar Konten"
-                                value={createForm.data.pillar}
-                                onChange={(e) =>
-                                    createForm.setData(
-                                        'pillar',
-                                        e.target.value as typeof createForm.data.pillar
-                                    )
-                                }
-                                error={createForm.errors.pillar}
-                            >
-                                <option value="edukasi">Edukasi</option>
-                                <option value="promosi">Program / Promosi</option>
-                                <option value="event">Event & Liputan</option>
-                                <option value="pengumuman">Kelembagaan / Pengumuman</option>
-                                <option value="hiburan">Inspirasi / Humanis</option>
-                            </Select>
-
-                            <Input
-                                label="Target Tanggal Tayang"
-                                type="date"
-                                value={createForm.data.publish_date}
-                                onChange={(e) => createForm.setData('publish_date', e.target.value)}
-                                error={createForm.errors.publish_date}
-                            />
-                        </div>
-
-                        <Textarea
-                            label="Ringkasan Brief / Copywriting Awal"
-                            rows={3}
-                            placeholder="Tulis objektif komunikasi atau draf caption..."
-                            value={createForm.data.caption}
-                            onChange={(e) => createForm.setData('caption', e.target.value)}
-                            error={createForm.errors.caption}
-                        />
-
-                        <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2.5">
-                            <Button
-                                variant="secondary"
-                                size="md"
-                                type="button"
-                                disabled={createForm.processing}
-                                onClick={() => setCreateModalOpen(false)}
-                            >
-                                Batal
-                            </Button>
-                            <Button
-                                variant="primary"
-                                size="md"
-                                type="submit"
-                                isLoading={createForm.processing}
-                                className="font-semibold"
-                            >
-                                Tambah ke Planner
-                            </Button>
-                        </div>
-                    </form>
-                </Modal>
 
                 {/* Persistent Database-Style Notification Drawer (Separated from Transient Toast) */}
                 <Sheet
@@ -1525,62 +1353,11 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         )}
                     </div>
                 </Sheet>
-
-                {/* Workspace Display & Theme Preferences Modal */}
-                <Modal
-                    isOpen={workspacePrefsOpen}
-                    onClose={() => setWorkspacePrefsOpen(false)}
-                    title="Preferensi Tampilan & Ruang Kerja"
-                    description="Sesuaikan mode warna Material Design 3 dan peran simulasi Anda"
-                    maxWidth="md"
-                >
-                    <div className="space-y-5">
-                        <div className="space-y-2">
-                            <label className="block text-xs font-bold text-[var(--md-sys-color-on-surface)]">
-                                Tema Antarmuka (Light / Dark / System)
-                            </label>
-                            <ThemeSegmentedControl />
-                            <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
-                                Pilihan tersimpan otomatis dan dipulihkan sebelum halaman dirender (tanpa kedipan putih).
-                            </p>
-                        </div>
-
-                        <div className="p-3.5 rounded-2xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-3">
-                            <div>
-                                <div className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
-                                    Sesi Aktif: {currentUser.name}
-                                </div>
-                                <div className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] mt-0.5">
-                                    Gunakan menu profil di kanan atas untuk menguji keenam peran RBAC.
-                                </div>
-                            </div>
-                            <RoleBadge role={currentUser.role} />
-                        </div>
-
-                        <div className="pt-2 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2">
-                            {can.manageSettings ? (
-                                <Link
-                                    href="/settings"
-                                    onClick={() => setWorkspacePrefsOpen(false)}
-                                    className="text-xs font-semibold text-[var(--md-sys-color-primary)] hover:underline"
-                                >
-                                    Buka Pengaturan Sistem Lengkap →
-                                </Link>
-                            ) : (
-                                <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
-                                    Polling singkat aktif setiap 30 detik
-                                </span>
-                            )}
-                            <Button
-                                variant="primary"
-                                size="sm"
-                                onClick={() => setWorkspacePrefsOpen(false)}
-                            >
-                                Selesai
-                            </Button>
-                        </div>
-                    </div>
-                </Modal>
+                <ProfileModal
+                    isOpen={profileModalOpen}
+                    onClose={() => setProfileModalOpen(false)}
+                    user={currentUser}
+                />
             </div>
         </LayoutSlotContext.Provider>
     );

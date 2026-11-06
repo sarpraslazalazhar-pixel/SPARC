@@ -9,14 +9,22 @@ import { ThemeProvider } from '@/Components/ThemeProvider';
 import { ToastProvider } from '@/Components/UI/Toast';
 import { PersistentAppShell } from '@/Layouts/AppLayout';
 
-const appName = import.meta.env.VITE_APP_NAME || 'SPARC';
+const rawAppName = import.meta.env.VITE_APP_NAME;
+const appName =
+    rawAppName && !rawAppName.includes('${') && rawAppName.trim() !== ''
+        ? rawAppName.trim()
+        : 'SPARC';
 
 const persistentShellLayout = (page: React.ReactNode) => (
     <PersistentAppShell>{page}</PersistentAppShell>
 );
 
 createInertiaApp({
-    title: (title) => (title ? `${title} - ${appName}` : appName),
+    title: (title) => {
+        if (!title) return appName;
+        if (title.includes(appName)) return title;
+        return `${title} — ${appName}`;
+    },
     resolve: async (name) => {
         const page = await resolvePageComponent(
             `./Pages/${name}.tsx`,

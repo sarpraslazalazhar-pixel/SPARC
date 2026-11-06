@@ -135,8 +135,7 @@ export default function GridIndex({
     const profileName =
         igProfile?.name || props.instagramStatus?.name || 'Humas & Informasi Publik';
     const profileBio =
-        igProfile?.biography ||
-        'Kanal resmi informasi publik, edukasi layanan, dan transparansi kinerja instansi.';
+        igProfile?.biography || props.instagramStatus?.biography || '';
     const profileAvatar =
         igProfile?.profilePictureUrl || props.instagramStatus?.profilePictureUrl || '';
     const followersCount =
@@ -274,7 +273,7 @@ export default function GridIndex({
     const handleSyncLiveIg = () => {
         setIsSyncingIg(true);
         router.post(
-            '/content/instagram/sync-all',
+            '/grid/sync-live-feed',
             {},
             {
                 preserveScroll: true,
@@ -521,9 +520,11 @@ export default function GridIndex({
                                         <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
                                             {profileName}
                                         </p>
-                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)] whitespace-pre-line line-clamp-2">
-                                            {profileBio}
-                                        </p>
+                                        {profileBio ? (
+                                            <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)] whitespace-pre-line line-clamp-2">
+                                                {profileBio}
+                                            </p>
+                                        ) : null}
                                         {igProfile?.website && (
                                             <a
                                                 href={igProfile.website}

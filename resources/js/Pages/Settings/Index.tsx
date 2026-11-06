@@ -62,6 +62,35 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
         access_token: '',
         requested_scopes: defaultScopes,
     });
+    const [isTestingHaloApu, setIsTestingHaloApu] = useState(false);
+    const haloApuForm = useForm({
+        base_url: settings.haloApu?.baseUrl ?? '',
+        api_token: '',
+        webhook_secret: '',
+        auto_solve_on_publish: settings.haloApu?.autoSolveOnPublish ?? true,
+    });
+
+    const handleSaveHaloApu = (e: React.FormEvent) => {
+        e.preventDefault();
+        haloApuForm.patch('/settings/haloapu', {
+            preserveScroll: true,
+            onError: () => {
+                toastError('Penyimpanan Gagal', 'Periksa URL Base HaloAPU.');
+            },
+        });
+    };
+
+    const handleTestHaloApu = () => {
+        setIsTestingHaloApu(true);
+        router.post(
+            '/settings/haloapu/test',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsTestingHaloApu(false),
+            }
+        );
+    };
 
     const toggleOptionalScope = (scopeKey: string) => {
         const current = igForm.data.requested_scopes;
@@ -91,6 +120,19 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
             {
                 preserveScroll: true,
                 onFinish: () => setIsSyncingProfile(false),
+            }
+        );
+    };
+
+    const [isSyncingAds, setIsSyncingAds] = useState(false);
+    const handleSyncAds = () => {
+        setIsSyncingAds(true);
+        router.post(
+            '/settings/instagram/sync-ads',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsSyncingAds(false),
             }
         );
     };
@@ -330,58 +372,134 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                         Integrasi REST API HALO APU
                                     </h3>
                                     <p className="text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                        Sinkronisasi tiket permohonan publikasi unit kerja
+                                        Sinkronisasi tiket permohonan publikasi unit kerja Humas
                                     </p>
                                 </div>
                             </div>
 
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]">
-                                <CheckCircle2 className="w-3 h-3" /> Token Aktif
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${settings.haloApu?.isEnabled ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]' : 'bg-muted text-muted-foreground'}`}>
+                                <CheckCircle2 className="w-3 h-3" /> {settings.haloApu?.isEnabled ? 'Terhubung' : 'Belum Aktif'}
                             </span>
                         </div>
 
-                        <div className="p-3.5 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2 text-xs">
-                            <span className="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-1.5">
-                                <Clock className="w-3.5 h-3.5" /> Sinkronisasi Terakhir:
-                            </span>
-                            <span className="sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
-                                {settings.lastSyncAt}
-                            </span>
-                        </div>
+                        {/* Configuration Form */}
+                        <form onSubmit={handleSaveHaloApu} className="space-y-3.5">
+                            <Input
+                                label="Base URL HaloAPU"
+                                placeholder="http://localhost:8001 atau https://haloapu.id"
+                                value={haloApuForm.data.base_url}
+                                onChange={(e) => haloApuForm.setData('base_url', e.target.value)}
+                                error={haloApuForm.errors.base_url}
+                            />
 
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="w-full justify-center"
-                            isLoading={isSyncing}
-                            icon={<RefreshCw className="w-3.5 h-3.5" />}
-                            onClick={handleSyncHaloApu}
-                        >
-                            Sinkronisasi Tiket HALO APU Sekarang
-                        </Button>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <Input
+                                    type="password"
+                                    label="API Bearer Token"
+                                    placeholder={settings.haloApu?.isEnabled ? '•••••••• (tersimpan)' : 'Salin dari HaloAPU'}
+                                    value={haloApuForm.data.api_token}
+                                    onChange={(e) => haloApuForm.setData('api_token', e.target.value)}
+                                    error={haloApuForm.errors.api_token}
+                                />
+                                <Input
+                                    type="password"
+                                    label="Webhook HMAC Secret"
+                                    placeholder={settings.haloApu?.isEnabled ? '•••••••• (tersimpan)' : 'Salin dari HaloAPU'}
+                                    value={haloApuForm.data.webhook_secret}
+                                    onChange={(e) => haloApuForm.setData('webhook_secret', e.target.value)}
+                                    error={haloApuForm.errors.webhook_secret}
+                                />
+                            </div>
 
-                        <div className="space-y-2 pt-2">
-                            <span className="sparc-eyebrow block">Riwayat Log Sinkronisasi</span>
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                                {(settings.haloApuLogs ?? []).map((log) => (
-                                    <div
-                                        key={log.id}
-                                        className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] space-y-1 text-xs"
-                                    >
-                                        <div className="flex items-center justify-between gap-2">
-                                            <span className="sparc-code-id font-semibold text-[var(--md-sys-color-on-surface)]">
-                                                {log.timestamp}
-                                            </span>
-                                            <span className="sparc-code-id text-[10px] font-bold text-[var(--md-sys-color-secondary)]">
-                                                {log.latencyMs} ms • +{log.fetched} tiket
-                                            </span>
+                            <div className="flex items-center justify-between p-2.5 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)]">
+                                <div className="space-y-0.5">
+                                    <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] block">
+                                        Auto-Solve Saat Konten Published
+                                    </span>
+                                    <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] block">
+                                        Tiket HaloAPU otomatis berstatus Selesai (solve) saat tayang di medsos.
+                                    </span>
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded accent-[var(--md-sys-color-primary)] cursor-pointer"
+                                    checked={haloApuForm.data.auto_solve_on_publish}
+                                    onChange={(e) => haloApuForm.setData('auto_solve_on_publish', e.target.checked)}
+                                />
+                            </div>
+
+                            <div className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-1.5 text-xs">
+                                <span className="sparc-eyebrow block">Endpoint Webhook SPARC (Didaftarkan di HaloAPU):</span>
+                                <code className="block p-1.5 rounded bg-[var(--md-sys-color-surface)] border border-[var(--md-sys-color-outline-variant)] font-mono text-[10px] select-all">
+                                    {typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/haloapu` : '/api/webhooks/haloapu'}
+                                </code>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2 pt-1">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    isLoading={isTestingHaloApu}
+                                    onClick={handleTestHaloApu}
+                                >
+                                    Tes Koneksi
+                                </Button>
+                                <Button
+                                    type="submit"
+                                    variant="primary"
+                                    size="sm"
+                                    isLoading={haloApuForm.processing}
+                                >
+                                    Simpan Konfigurasi
+                                </Button>
+                            </div>
+                        </form>
+
+                        <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] space-y-3">
+                            <div className="p-3.5 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2 text-xs">
+                                <span className="text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-1.5">
+                                    <Clock className="w-3.5 h-3.5" /> Sinkronisasi Terakhir:
+                                </span>
+                                <span className="sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                    {settings.haloApu?.lastSyncAt || settings.lastSyncAt}
+                                </span>
+                            </div>
+
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="w-full justify-center"
+                                isLoading={isSyncing}
+                                icon={<RefreshCw className="w-3.5 h-3.5" />}
+                                onClick={handleSyncHaloApu}
+                            >
+                                Sinkronisasi Tiket HALO APU Sekarang
+                            </Button>
+
+                            <div className="space-y-2 pt-2">
+                                <span className="sparc-eyebrow block">Riwayat Log Sinkronisasi</span>
+                                <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                                    {(settings.haloApuLogs ?? []).map((log) => (
+                                        <div
+                                            key={log.id}
+                                            className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] space-y-1 text-xs"
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="sparc-code-id font-semibold text-[var(--md-sys-color-on-surface)]">
+                                                    {log.timestamp}
+                                                </span>
+                                                <span className="sparc-code-id text-[10px] font-bold text-[var(--md-sys-color-secondary)]">
+                                                    {log.latencyMs} ms • +{log.fetched} tiket
+                                                </span>
+                                            </div>
+                                            <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                {log.note}
+                                            </p>
                                         </div>
-                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
-                                            {log.note}
-                                        </p>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -489,6 +607,15 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                             <Button
                                                 type="button"
                                                 size="sm"
+                                                variant="outline"
+                                                isLoading={isSyncingAds}
+                                                onClick={handleSyncAds}
+                                            >
+                                                Sync Ads API
+                                            </Button>
+                                            <Button
+                                                type="button"
+                                                size="sm"
                                                 variant="ghost"
                                                 isLoading={isRefreshingToken}
                                                 onClick={handleRefreshIgToken}
@@ -497,12 +624,13 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                             </Button>
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+                                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-[11px]">
                                         {[
                                             { key: 'basic', label: 'Profil & Media', ok: settings.instagram.capabilities?.basic ?? true },
                                             { key: 'insights', label: 'Insights 28h', ok: settings.instagram.capabilities?.insights ?? false },
                                             { key: 'publish', label: 'Direct Publish', ok: settings.instagram.capabilities?.publish ?? false },
                                             { key: 'comments', label: 'Moderasi Komentar', ok: settings.instagram.capabilities?.comments ?? false },
+                                            { key: 'ads', label: 'Meta Ads', ok: settings.instagram.capabilities?.ads ?? false },
                                         ].map((cap) => (
                                             <div
                                                 key={cap.key}
@@ -720,6 +848,10 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                         {
                                             key: 'instagram_manage_comments',
                                             label: 'Kotak Masuk & Moderasi Komentar Publik (Balas, Sembunyikan, Hapus)',
+                                        },
+                                        {
+                                            key: 'ads_read',
+                                            label: 'Meta Marketing API (Monitoring Iklan, Kampanye, Spend & Clicks)',
                                         },
                                     ].map((sc) => (
                                         <label

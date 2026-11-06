@@ -32,32 +32,7 @@ interface TrashPageProps {
     sessionTrash?: TrashItem[];
 }
 
-const DEFAULT_TRASH_ITEMS: TrashItem[] = [
-    {
-        id: 'trash-1',
-        type: 'creative_project',
-        title: 'Draft Naskah: Sosialisasi Jadwal Libur Idul Fitri (Format Lama)',
-        deletedAt: '25 Okt 2026, 14:20 WIB',
-        deletedBy: 'Aldwin (Writer)',
-        details: 'Reels Shorts • Digantikan dengan naskah revisi baru',
-    },
-    {
-        id: 'trash-2',
-        type: 'incoming_ticket',
-        title: 'Tiket #035-771-002: Desain Spanduk Fisik Rapat Kerja',
-        deletedAt: '24 Okt 2026, 09:10 WIB',
-        deletedBy: 'Admin Humas',
-        details: 'Desain Cetak • Bukan scope media sosial SPARC',
-    },
-    {
-        id: 'trash-3',
-        type: 'grid_slot',
-        title: 'Slot Feed #12: Eksperimen Pola Catur Warna Abu',
-        deletedAt: '22 Okt 2026, 17:30 WIB',
-        deletedBy: 'Designer 1',
-        details: 'Slot Mockup Instagram Feed',
-    },
-];
+const DEFAULT_TRASH_ITEMS: TrashItem[] = [];
 
 export default function TrashIndex({ sessionTrash = [] }: TrashPageProps) {
     const { success, warning } = useToast();

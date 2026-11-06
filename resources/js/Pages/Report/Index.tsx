@@ -1,21 +1,31 @@
 import React, { useMemo, useState } from 'react';
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import {
+    AlertCircle,
     BarChart3,
     CheckCircle2,
     Clock,
     Copy,
+    DollarSign,
     Download,
+    ExternalLink,
     Eye,
     FileSpreadsheet,
+    Globe,
+    History,
     Layers,
+    MapPin,
+    Megaphone,
+    MousePointerClick,
+    PieChart,
     Plus,
-    Printer,
     RefreshCw,
     Sparkles,
+    Tag,
     TrendingUp,
     Upload,
     Users,
+    Video,
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
@@ -84,7 +94,11 @@ export default function ReportIndex({
     const can = props.auth?.can;
     const { success: toastSuccess, error: toastError } = useToast();
 
-    const [activeLayer, setActiveLayer] = useState<'content' | 'operational' | 'team'>('content');
+    const [activeLayer, setActiveLayer] = useState<'content' | 'ads' | 'creator' | 'operational' | 'team'>('content');
+    const [isSyncingAds, setIsSyncingAds] = useState(false);
+    const [isSyncingDemographics, setIsSyncingDemographics] = useState(false);
+    const [isSyncingStories, setIsSyncingStories] = useState(false);
+    const [isSyncingMentions, setIsSyncingMentions] = useState(false);
     const [platformFilter, setPlatformFilter] = useState('all');
 
     const [manualModalOpen, setManualModalOpen] = useState(false);
@@ -115,6 +129,53 @@ export default function ReportIndex({
             {
                 preserveScroll: true,
                 onFinish: () => setIsSyncingIg(false),
+            }
+        );
+    };
+    const handleSyncAds = () => {
+        setIsSyncingAds(true);
+        router.post(
+            '/settings/instagram/sync-ads',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsSyncingAds(false),
+            }
+        );
+    };
+
+    const handleSyncDemographics = () => {
+        setIsSyncingDemographics(true);
+        router.post(
+            '/settings/instagram/sync-demographics',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsSyncingDemographics(false),
+            }
+        );
+    };
+
+    const handleSyncStories = () => {
+        setIsSyncingStories(true);
+        router.post(
+            '/settings/instagram/sync-stories',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsSyncingStories(false),
+            }
+        );
+    };
+
+    const handleSyncMentions = () => {
+        setIsSyncingMentions(true);
+        router.post(
+            '/settings/instagram/sync-mentions',
+            {},
+            {
+                preserveScroll: true,
+                onFinish: () => setIsSyncingMentions(false),
             }
         );
     };
@@ -263,80 +324,80 @@ export default function ReportIndex({
         });
     };
 
-    // CSV Import Form (`POST /report/metrics/import-csv`)
-    const csvForm = useForm({
-        csv_text: CSV_TEMPLATE,
+    // Excel / Tabular Import Form (`POST /report/metrics/import-excel`)
+    const [showPasteFallback, setShowPasteFallback] = useState(false);
+    const excelForm = useForm<{
+        excel_file: File | null;
+        csv_text: string;
+    }>({
+        excel_file: null,
+        csv_text: '',
     });
 
-    const handleCsvSubmit = (e: React.FormEvent) => {
+    const handleExcelSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        csvForm.post('/report/metrics/import-csv', {
+        excelForm.post('/report/metrics/import-excel', {
             preserveScroll: true,
+            forceFormData: true,
             onSuccess: () => {
                 setCsvModalOpen(false);
+                excelForm.reset();
             },
             onError: (errors) => {
                 toastError(
-                    'Impor CSV Belum Cocok',
-                    errors.csv_text || 'Periksa kecocokan content_id dan nama platform.'
+                    'Impor Excel Belum Cocok',
+                    errors.excel_file ||
+                        errors.csv_text ||
+                        'Periksa kecocokan Kode Konten dan nama Platform pada berkas Excel Anda.'
                 );
             },
         });
     };
 
-    const handleDownloadCsv = () => {
-        const header = 'content_id,title,platform,scheduled_at,published_at,reach,impressions,views,likes,comments,shares,saves,clicks,er_pct';
-        const rows = filteredPubs.map((p) => {
-            const m = p.metrics;
-            const safeTitle = `"${p.title.replace(/"/g, '""')}"`;
-            return [
-                p.contentId,
-                safeTitle,
-                p.platform,
-                p.scheduledAt,
-                p.publishedActualAt ?? '',
-                m?.reach ?? '',
-                m?.impressions ?? '',
-                m?.views ?? '',
-                m?.likes ?? '',
-                m?.comments ?? '',
-                m?.shares ?? '',
-                m?.saves ?? '',
-                m?.clicks ?? '',
-                computeEngagementRate(p),
-            ].join(',');
+    const handleDownloadExcelReport = () => {
+        const params = new URLSearchParams({
+            platform: platformFilter,
+            layer: activeLayer,
         });
-        const csvContent = [header, ...rows].join('\n');
+        const downloadUrl = `/report/export-excel?${params.toString()}`;
         try {
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = `sparc-performance-report-${today}.csv`;
+            a.href = downloadUrl;
+            a.download = `Laporan-Performa-SPARC-${today}.xlsx`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         } catch {
-            // Fallback in restricted environments
+            window.location.href = downloadUrl;
         }
         toastSuccess(
-            'Berkas CSV Berhasil Diunduh',
-            `Rekap performa (${filteredPubs.length} slot publikasi) telah diekspor.`
+            'Laporan Excel (.xlsx) Diunduh',
+            'Berkas Excel rapi berisi 5 lembar kerja (Performa, Wawasan, Iklan, Operasional & Tim) sedang diunduh.'
         );
     };
 
-    const handlePrintReport = () => {
+    const handleDownloadExcelTemplate = () => {
+        const templateUrl = '/report/template-excel';
+        try {
+            const a = document.createElement('a');
+            a.href = templateUrl;
+            a.download = `Template-Impor-Metrik-SPARC-${today}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } catch {
+            window.location.href = templateUrl;
+        }
         toastSuccess(
-            'Tampilan Cetak Laporan Siap',
-            'Gunakan dialog cetak browser untuk menyimpan laporan sebagai PDF resmi.'
+            'Template Excel (.xlsx) Diunduh',
+            'Silakan isi angka capaian pada kolom hijau di Excel lalu unggah kembali.'
         );
     };
 
     const handleCopyTemplate = async () => {
         const ok = await copyToClipboard(CSV_TEMPLATE);
         if (ok) {
-            toastSuccess('Template CSV Disalin', 'Format kolom CSV siap ditempelkan ke spreadsheet Anda.');
+            toastSuccess('Contoh Baris Disalin', 'Format baris siap ditempelkan ke spreadsheet Anda.');
         }
     };
 
@@ -349,18 +410,11 @@ export default function ReportIndex({
                     <Button
                         variant="outline"
                         size="sm"
-                        icon={<FileSpreadsheet className="w-3.5 h-3.5 text-[var(--md-sys-color-secondary)]" />}
-                        onClick={handleDownloadCsv}
+                        icon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
+                        onClick={handleDownloadExcelReport}
+                        title="Unduh laporan lengkap dalam format Microsoft Excel (.xlsx) multi-sheet yang rapi"
                     >
-                        Ekspor CSV
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        icon={<Printer className="w-3.5 h-3.5" />}
-                        onClick={handlePrintReport}
-                    >
-                        Cetak PDF
+                        Ekspor Excel
                     </Button>
                     {can?.managePublishing && (
                         <>
@@ -383,13 +437,13 @@ export default function ReportIndex({
                             <Button
                                 variant="secondary"
                                 size="sm"
-                                icon={<Upload className="w-3.5 h-3.5" />}
+                                icon={<Upload className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
                                 onClick={() => {
-                                    csvForm.clearErrors();
+                                    excelForm.clearErrors();
                                     setCsvModalOpen(true);
                                 }}
                             >
-                                Impor CSV
+                                Impor Excel
                             </Button>
                             <Button
                                 variant="primary"
@@ -412,6 +466,8 @@ export default function ReportIndex({
                     <Tabs
                         tabs={[
                             { id: 'content', label: 'Performa Konten' },
+                            { id: 'ads', label: 'Monitoring Iklan (Meta Ads)' },
+                            { id: 'creator', label: 'Wawasan Kreator & Demografi' },
                             { id: 'operational', label: 'Operasional Produksi' },
                             { id: 'team', label: 'Kinerja & Beban Tim' },
                         ]}
@@ -886,6 +942,461 @@ export default function ReportIndex({
                         </div>
                     </div>
                 )}
+
+                {/* =========================================================
+                    LAYER 4: META MARKETING API & ADS MONITORING
+                   ========================================================= */}
+                {activeLayer === 'ads' && (
+                    <div className="space-y-5">
+                        {/* Ads Header Card */}
+                        <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                    <Megaphone className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                                    <h3 className="font-bold text-sm sm:text-base text-[var(--md-sys-color-on-surface)]">
+                                        Meta Marketing API — Monitoring Kampanye & Iklan Berbayar
+                                    </h3>
+                                </div>
+                                <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                    Akun Iklan Terhubung:{' '}
+                                    <strong className="text-[var(--md-sys-color-on-surface)]">
+                                        {igAccount?.adsData?.active_account?.name || 'Semua Akun Iklan'} (ID: {igAccount?.adsData?.active_account?.account_id || 'act_default'})
+                                    </strong>
+                                    {igAccount?.adsData?.synced_at && (
+                                        <span className="ml-2 text-[var(--md-sys-color-on-surface-muted)]">
+                                            • Terakhir disinkronkan: {igAccount.adsData.synced_at}
+                                        </span>
+                                    )}
+                                </p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="primary"
+                                size="sm"
+                                isLoading={isSyncingAds}
+                                icon={<RefreshCw className="w-3.5 h-3.5" />}
+                                onClick={handleSyncAds}
+                            >
+                                Tarik Data Iklan Meta
+                            </Button>
+                        </div>
+
+                        {/* Ads KPI Summary Cards */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                            <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
+                                <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    <span>Total Biaya (Spend)</span>
+                                    <DollarSign className="w-4 h-4 text-emerald-500" />
+                                </div>
+                                <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                    {igAccount?.adsData?.active_account?.currency || 'IDR'}{' '}
+                                    {(igAccount?.adsData?.summary?.total_spend ?? 0).toLocaleString('id-ID', { minimumFractionDigits: 2 })}
+                                </div>
+                                <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
+                                    Periode: {igAccount?.adsData?.summary?.date_preset || '30 Hari Terakhir'}
+                                </div>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
+                                <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    <span>Total Impresi & Reach</span>
+                                    <Eye className="w-4 h-4 text-purple-500" />
+                                </div>
+                                <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                    {(igAccount?.adsData?.summary?.total_impressions ?? 0).toLocaleString('id-ID')}
+                                </div>
+                                <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
+                                    Jangkauan: {(igAccount?.adsData?.summary?.total_reach ?? 0).toLocaleString('id-ID')} audiens
+                                </div>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
+                                <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    <span>Total Klik & CTR</span>
+                                    <MousePointerClick className="w-4 h-4 text-blue-500" />
+                                </div>
+                                <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                    {(igAccount?.adsData?.summary?.total_clicks ?? 0).toLocaleString('id-ID')}
+                                </div>
+                                <div className="text-[11px] font-semibold text-blue-600 dark:text-blue-400">
+                                    Rata-rata CTR: {igAccount?.adsData?.summary?.avg_ctr ?? 0}%
+                                </div>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
+                                <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    <span>Efisiensi CPC & CPM</span>
+                                    <TrendingUp className="w-4 h-4 text-amber-500" />
+                                </div>
+                                <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                    CPC {(igAccount?.adsData?.summary?.avg_cpc ?? 0).toLocaleString('id-ID')}
+                                </div>
+                                <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
+                                    CPM: {(igAccount?.adsData?.summary?.avg_cpm ?? 0).toLocaleString('id-ID')}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Organic vs Paid Comparison */}
+                        <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
+                            <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2">
+                                <PieChart className="w-4 h-4 text-[var(--md-sys-color-primary)]" />
+                                Perbandingan Jangkauan Publikasi (Organik vs Iklan Berbayar)
+                            </h4>
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between text-xs font-semibold">
+                                    <span className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
+                                        Organik (Instagram Graph API): {((igAccount?.accountInsights?.reach_28d ?? 0)).toLocaleString('id-ID')} Reach
+                                    </span>
+                                    <span className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                                        Iklan (Meta Marketing API): {(igAccount?.adsData?.summary?.total_reach ?? 0).toLocaleString('id-ID')} Reach
+                                    </span>
+                                </div>
+                                <div className="w-full h-3 rounded-full bg-[var(--md-sys-color-surface-container-highest)] overflow-hidden flex">
+                                    <div
+                                        className="h-full bg-purple-500 transition-all"
+                                        style={{
+                                            width: `${Math.round(
+                                                ((igAccount?.accountInsights?.reach_28d ?? 0) /
+                                                    Math.max(1, (igAccount?.accountInsights?.reach_28d ?? 0) + (igAccount?.adsData?.summary?.total_reach ?? 0))) *
+                                                    100
+                                            )}%`,
+                                        }}
+                                        title="Porsi Organik"
+                                    />
+                                    <div
+                                        className="h-full bg-blue-500 transition-all"
+                                        style={{
+                                            width: `${Math.round(
+                                                ((igAccount?.adsData?.summary?.total_reach ?? 0) /
+                                                    Math.max(1, (igAccount?.accountInsights?.reach_28d ?? 0) + (igAccount?.adsData?.summary?.total_reach ?? 0))) *
+                                                    100
+                                            )}%`,
+                                        }}
+                                        title="Porsi Iklan Berbayar"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Campaigns Table */}
+                        <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
+                            <div className="p-4 border-b border-[var(--md-sys-color-outline-variant)] flex items-center justify-between">
+                                <div>
+                                    <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)]">
+                                        Daftar Kampanye Iklan Meta
+                                    </h4>
+                                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                        Data kampanye yang berjalan di Meta Ads Manager
+                                    </p>
+                                </div>
+                                <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                    {igAccount?.adsData?.campaigns?.length ?? 0} Kampanye Terdata
+                                </span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs border-collapse">
+                                    <thead>
+                                        <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
+                                            <th className="py-3 px-4">Nama Kampanye</th>
+                                            <th className="py-3 px-3">Status</th>
+                                            <th className="py-3 px-3">Tujuan (Objective)</th>
+                                            <th className="py-3 px-3 text-right">Anggaran</th>
+                                            <th className="py-3 px-3 text-right">Sisa Anggaran</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
+                                        {(igAccount?.adsData?.campaigns?.length ?? 0) === 0 ? (
+                                            <tr>
+                                                <td colSpan={5} className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Belum ada data kampanye. Klik tombol "Tarik Data Iklan Meta" di atas untuk menyinkronkan kampanye aktif dari Ads Manager.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            igAccount?.adsData?.campaigns?.map((c) => (
+                                                <tr key={c.id} className="notion-row">
+                                                    <td className="py-3 px-4 font-bold text-[var(--md-sys-color-on-surface)]">
+                                                        <div className="line-clamp-1">{c.name}</div>
+                                                        <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] sparc-code-id">ID: {c.id}</div>
+                                                    </td>
+                                                    <td className="py-3 px-3">
+                                                        <span
+                                                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                                                c.status === 'ACTIVE'
+                                                                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                                                                    : 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30'
+                                                            }`}
+                                                        >
+                                                            {c.status}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 px-3 text-[var(--md-sys-color-on-surface-variant)] font-medium">
+                                                        {c.objective || 'OUTCOME_ENGAGEMENT'}
+                                                    </td>
+                                                    <td className="py-3 px-3 text-right sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                                        {c.daily_budget ? `Harian: ${Number(c.daily_budget).toLocaleString('id-ID')}` : c.lifetime_budget ? `Total: ${Number(c.lifetime_budget).toLocaleString('id-ID')}` : '—'}
+                                                    </td>
+                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                        {c.budget_remaining ? Number(c.budget_remaining).toLocaleString('id-ID') : '—'}
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* =========================================================
+                    LAYER 5: CREATOR & BUSINESS AUDIENCE DEMOGRAPHICS
+                   ========================================================= */}
+                {activeLayer === 'creator' && (
+                    <div className="space-y-5">
+                        {/* Creator Header Card */}
+                        <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                    <Users className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                                    <h3 className="font-bold text-sm sm:text-base text-[var(--md-sys-color-on-surface)]">
+                                        Wawasan Kreator & Demografi Audiens
+                                    </h3>
+                                </div>
+                                <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                    Profil Resmi: @{igAccount?.username || 'humas_instansi'} • {igAccount?.followersCount?.toLocaleString('id-ID') ?? 0} Pengikut • {igAccount?.mediaCount?.toLocaleString('id-ID') ?? 0} Postingan
+                                </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    isLoading={isSyncingStories}
+                                    icon={<History className="w-3.5 h-3.5" />}
+                                    onClick={handleSyncStories}
+                                >
+                                    Tarik Story 24 Jam
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="sm"
+                                    isLoading={isSyncingDemographics}
+                                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                                    onClick={handleSyncDemographics}
+                                >
+                                    Tarik Demografi
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Demographics Overview Cards */}
+                        {!igAccount?.demographicsData?.has_data ? (
+                            <div className="p-8 text-center rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-2">
+                                <Users className="w-8 h-8 text-[var(--md-sys-color-on-surface-muted)] mx-auto" />
+                                <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)]">
+                                    Demografi Audiens Belum Terbuka dari Meta
+                                </h4>
+                                <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] max-w-lg mx-auto leading-relaxed">
+                                    Sesuai kebijakan privasi Meta Graph API, rincian sebaran gender, usia, kota, dan negara baru dapat diakses setelah akun mencapai minimal <strong>100 pengikut</strong> (saat ini akun memiliki {igAccount?.followersCount ?? 0} pengikut).
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                {/* Gender Distribution */}
+                                <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
+                                            Komposisi Gender
+                                        </h4>
+                                        <Users className="w-4 h-4 text-purple-500" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between text-xs">
+                                            <span className="text-blue-600 dark:text-blue-400 font-semibold">Laki-laki</span>
+                                            <span className="font-extrabold sparc-code-id">{igAccount?.demographicsData?.gender_distribution?.male ?? 0}%</span>
+                                        </div>
+                                        <div className="w-full h-2 rounded-full bg-[var(--md-sys-color-surface-container-highest)] overflow-hidden">
+                                            <div
+                                                className="h-full bg-blue-500 rounded-full"
+                                                style={{ width: `${igAccount?.demographicsData?.gender_distribution?.male ?? 0}%` }}
+                                            />
+                                        </div>
+                                        <div className="flex items-center justify-between text-xs">
+                                            <span className="text-pink-600 dark:text-pink-400 font-semibold">Perempuan</span>
+                                            <span className="font-extrabold sparc-code-id">{igAccount?.demographicsData?.gender_distribution?.female ?? 0}%</span>
+                                        </div>
+                                        <div className="w-full h-2 rounded-full bg-[var(--md-sys-color-surface-container-highest)] overflow-hidden">
+                                            <div
+                                                className="h-full bg-pink-500 rounded-full"
+                                                style={{ width: `${igAccount?.demographicsData?.gender_distribution?.female ?? 0}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Top Cities */}
+                                <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
+                                            Top Kota Audiens
+                                        </h4>
+                                        <MapPin className="w-4 h-4 text-emerald-500" />
+                                    </div>
+                                    <div className="space-y-1.5 text-xs">
+                                        {Object.entries(igAccount?.demographicsData?.top_cities ?? {}).length === 0 ? (
+                                            <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] italic">Belum ada data kota</p>
+                                        ) : (
+                                            Object.entries(igAccount?.demographicsData?.top_cities ?? {}).map(([city, count]) => (
+                                                <div key={city} className="flex items-center justify-between">
+                                                    <span className="text-[var(--md-sys-color-on-surface)] font-medium">{city}</span>
+                                                    <span className="sparc-code-id text-[var(--md-sys-color-on-surface-muted)]">{count.toLocaleString('id-ID')}</span>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Top Countries */}
+                                <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
+                                            Top Negara Audiens
+                                        </h4>
+                                        <Globe className="w-4 h-4 text-amber-500" />
+                                    </div>
+                                    <div className="space-y-1.5 text-xs">
+                                        {Object.entries(igAccount?.demographicsData?.top_countries ?? {}).length === 0 ? (
+                                            <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] italic">Belum ada data negara</p>
+                                        ) : (
+                                            Object.entries(igAccount?.demographicsData?.top_countries ?? {}).map(([country, count]) => (
+                                                <div key={country} className="flex items-center justify-between">
+                                                    <span className="text-[var(--md-sys-color-on-surface)] font-medium">{country}</span>
+                                                    <span className="sparc-code-id text-[var(--md-sys-color-on-surface-muted)]">{count.toLocaleString('id-ID')}</span>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        {/* Reels Performance & Retention */}
+                        <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
+                            <div className="p-4 border-b border-[var(--md-sys-color-outline-variant)] flex items-center justify-between">
+                                <div>
+                                    <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)] flex items-center gap-2">
+                                        <Video className="w-4 h-4 text-purple-500" />
+                                        Retensi Video Reels (Drop-Off & Total Waktu Tonton)
+                                    </h4>
+                                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                        Metrik video khusus: ig_reels_video_view_total_time & ig_reels_avg_watch_time
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs border-collapse">
+                                    <thead>
+                                        <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
+                                            <th className="py-3 px-4">Konten Reels</th>
+                                            <th className="py-3 px-3 text-right">Tayangan (Views)</th>
+                                            <th className="py-3 px-3 text-right">Waktu Tonton Total</th>
+                                            <th className="py-3 px-3 text-right">Rata-rata Retensi</th>
+                                            <th className="py-3 px-3 text-right">Shares</th>
+                                            <th className="py-3 px-3 text-right">Saves</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
+                                        {contentItems.filter((i) => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'].includes((i.format || '').toLowerCase())).length === 0 ? (
+                                            <tr>
+                                                <td colSpan={6} className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Belum ada konten Reels yang dipublikasikan.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            contentItems
+                                                .filter((i) => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'].includes((i.format || '').toLowerCase()))
+                                                .map((item) => (
+                                                    <tr key={item.id} className="notion-row">
+                                                        <td className="py-3 px-4 font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            <div className="line-clamp-1">{item.title}</div>
+                                                            <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] sparc-code-id">{item.contentId}</div>
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface)] font-bold">
+                                                            {(item.views ?? 0).toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {item.reelsWatchTime ? `${Math.round(item.reelsWatchTime / 60)} menit` : '—'}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-emerald-600 dark:text-emerald-400 font-semibold">
+                                                            {item.reelsAvgWatchTime ? `${item.reelsAvgWatchTime.toFixed(1)} detik` : '—'}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {(item.shares ?? 0).toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {(item.saves ?? 0).toLocaleString('id-ID')}
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Active 24-Hour Stories */}
+                        <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)] flex items-center gap-2">
+                                        <History className="w-4 h-4 text-pink-500" />
+                                        Story Aktif (24 Jam Terakhir)
+                                    </h4>
+                                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                        Metrik penonton, balasan, dan interaksi navigasi story Instagram
+                                    </p>
+                                </div>
+                                <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                    {igAccount?.storiesData?.length ?? 0} Story Aktif
+                                </span>
+                            </div>
+
+                            {(igAccount?.storiesData?.length ?? 0) === 0 ? (
+                                <div className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    Tidak ada story aktif yang terdeteksi dalam 24 jam terakhir.
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                    {igAccount?.storiesData?.map((st) => (
+                                        <div key={st.id} className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-2">
+                                            <div className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] line-clamp-1">
+                                                {st.caption || 'Instagram Story'}
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Reach: <strong className="text-[var(--md-sys-color-on-surface)]">{st.metrics?.reach ?? 0}</strong>
+                                                </div>
+                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Impressions: <strong className="text-[var(--md-sys-color-on-surface)]">{st.metrics?.impressions ?? 0}</strong>
+                                                </div>
+                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Replies: <strong className="text-blue-600">{st.metrics?.replies ?? 0}</strong>
+                                                </div>
+                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Exits: <strong className="text-zinc-500">{st.metrics?.exits ?? 0}</strong>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Manual Metric Input Modal (`POST /report/metrics`) */}
@@ -1001,44 +1512,137 @@ export default function ReportIndex({
                 </form>
             </Modal>
 
-            {/* CSV Batch Import Modal (`POST /report/metrics/import-csv`) */}
+            {/* Excel Batch Import Modal (`POST /report/metrics/import-excel`) */}
             <Modal
                 isOpen={csvModalOpen}
                 onClose={() => setCsvModalOpen(false)}
-                title="Impor CSV Performa Publikasi"
-                description="Cocokkan data ekspor Instagram/TikTok/YouTube menggunakan kombinasi content_id + platform"
+                title="Impor Excel Performa Publikasi"
+                description="Perbarui metrik capaian secara massal menggunakan berkas Microsoft Excel (.xlsx) yang rapi dan mudah diisi"
                 maxWidth="lg"
             >
-                <form onSubmit={handleCsvSubmit} className="space-y-4" noValidate>
-                    <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2 text-xs">
-                        <code className="sparc-code-id text-[11px] text-[var(--md-sys-color-on-surface-variant)] overflow-x-auto">
-                            content_id,platform,reach,impressions,views,likes,comments,shares,saves,clicks
-                        </code>
+                <form onSubmit={handleExcelSubmit} className="space-y-4" noValidate>
+                    {/* Step 1: Download Pre-filled Excel Template */}
+                    <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                                <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                1. Unduh Template Excel (.xlsx) Siap Isi
+                            </div>
+                            <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)] leading-relaxed">
+                                Template sudah terisi daftar <strong>Kode Konten</strong> &amp; <strong>Platform</strong> aktif Anda. Cukup isi angka capaian di Excel lalu simpan.
+                            </p>
+                        </div>
                         <Button
                             type="button"
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
-                            icon={<Copy className="w-3.5 h-3.5" />}
-                            onClick={handleCopyTemplate}
+                            icon={<Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
+                            onClick={handleDownloadExcelTemplate}
+                            className="shrink-0"
                         >
-                            Salin Format
+                            Unduh Template (.xlsx)
                         </Button>
                     </div>
 
-                    <Textarea
-                        label="Baris Data CSV"
-                        rows={5}
-                        value={csvForm.data.csv_text}
-                        onChange={(e) => csvForm.setData('csv_text', e.target.value)}
-                        error={csvForm.errors.csv_text}
-                    />
+                    {/* Step 2: Upload Filled Excel File */}
+                    <div className="space-y-2">
+                        <label className="block text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                            2. Unggah Berkas Excel (.xlsx) yang Telah Diisi
+                        </label>
+                        <label
+                            htmlFor="sparc-excel-upload"
+                            className={`flex flex-col items-center justify-center p-5 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
+                                excelForm.data.excel_file
+                                    ? 'border-emerald-500/60 bg-emerald-500/5'
+                                    : 'border-[var(--md-sys-color-outline-variant)] hover:border-[var(--md-sys-color-primary)] bg-[var(--md-sys-color-surface-container-low)]'
+                            }`}
+                        >
+                            <input
+                                id="sparc-excel-upload"
+                                type="file"
+                                accept=".xlsx,.csv,.txt"
+                                className="sr-only"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0] ?? null;
+                                    excelForm.setData('excel_file', file);
+                                    excelForm.clearErrors();
+                                }}
+                            />
+                            {excelForm.data.excel_file ? (
+                                <div className="text-center space-y-1">
+                                    <CheckCircle2 className="w-7 h-7 text-emerald-600 dark:text-emerald-400 mx-auto" />
+                                    <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                                        {excelForm.data.excel_file.name}
+                                    </p>
+                                    <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                        {(excelForm.data.excel_file.size / 1024).toFixed(1)} KB • Klik untuk mengganti berkas
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="text-center space-y-1">
+                                    <Upload className="w-7 h-7 text-[var(--md-sys-color-primary)] mx-auto" />
+                                    <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                                        Klik untuk memilih berkas Excel (.xlsx)
+                                    </p>
+                                    <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                        Mendukung berkas Template Excel (.xlsx), Laporan Ekspor SPARC (.xlsx), maupun CSV
+                                    </p>
+                                </div>
+                            )}
+                        </label>
+                        {excelForm.errors.excel_file && (
+                            <p className="text-xs text-[var(--md-sys-color-error)] font-medium">
+                                {excelForm.errors.excel_file}
+                            </p>
+                        )}
+                    </div>
+
+                    {/* Optional Paste from Excel Table */}
+                    <div className="pt-1">
+                        <button
+                            type="button"
+                            onClick={() => setShowPasteFallback((prev) => !prev)}
+                            className="text-[11px] font-semibold text-[var(--md-sys-color-primary)] hover:underline cursor-pointer"
+                        >
+                            {showPasteFallback
+                                ? 'Sembunyikan opsi tempel teks manual'
+                                : 'Atau tempel (Copy-Paste) baris langsung dari tabel Excel tanpa unggah file'}
+                        </button>
+
+                        {showPasteFallback && (
+                            <div className="mt-2.5 space-y-2">
+                                <div className="p-2.5 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2 text-xs">
+                                    <code className="sparc-code-id text-[11px] text-[var(--md-sys-color-on-surface-variant)] overflow-x-auto">
+                                        content_id,platform,reach,impressions,views,likes,comments,shares,saves,clicks
+                                    </code>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        icon={<Copy className="w-3.5 h-3.5" />}
+                                        onClick={handleCopyTemplate}
+                                    >
+                                        Salin Contoh
+                                    </Button>
+                                </div>
+                                <Textarea
+                                    label="Tempel Baris Excel (Copy-Paste Sel) atau CSV"
+                                    rows={4}
+                                    placeholder="Salin baris dari Excel lalu tempel (Ctrl+V) di sini..."
+                                    value={excelForm.data.csv_text}
+                                    onChange={(e) => excelForm.setData('csv_text', e.target.value)}
+                                    error={excelForm.errors.csv_text}
+                                />
+                            </div>
+                        )}
+                    </div>
 
                     <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
                         <Button
                             type="button"
                             variant="secondary"
                             size="md"
-                            disabled={csvForm.processing}
+                            disabled={excelForm.processing}
                             onClick={() => setCsvModalOpen(false)}
                         >
                             Batal
@@ -1047,10 +1651,10 @@ export default function ReportIndex({
                             type="submit"
                             variant="primary"
                             size="md"
-                            isLoading={csvForm.processing}
+                            isLoading={excelForm.processing}
                             icon={<Upload className="w-3.5 h-3.5" />}
                         >
-                            Proses Impor CSV
+                            Proses Impor Excel
                         </Button>
                     </div>
                 </form>

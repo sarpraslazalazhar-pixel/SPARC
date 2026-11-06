@@ -154,7 +154,7 @@ export default function Login({ status }: LoginProps) {
                                         value={data.email}
                                         autoComplete="username"
                                         autoFocus
-                                        placeholder="Email atau Username (Contoh: test@example.com)"
+                                        placeholder="Email atau Username (Contoh: test atau admin@sparc.go.id)"
                                         onChange={(e) => setData('email', e.target.value)}
                                         className="w-full pl-11 pr-4 py-3 sm:py-3.5 rounded-2xl text-xs sm:text-sm bg-slate-100/70 dark:bg-[#182335] border border-transparent focus:border-slate-300 dark:focus:border-slate-600 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#1546D8] transition-all"
                                         required

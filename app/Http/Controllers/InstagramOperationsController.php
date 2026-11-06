@@ -11,6 +11,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -374,11 +375,18 @@ class InstagramOperationsController extends Controller
     public function commentsIndex(Request $request): Response
     {
         $state = WorkspaceV3Controller::hydrateWorkspace($request);
-        $statusFilter = (string) $request->query('status', 'all');
+        $statusFilter = trim((string) $request->query('status', 'all')) ?: 'all';
         $searchQuery = trim((string) $request->query('q', ''));
         $contentFilter = trim((string) $request->query('content_item_id', ''));
-
+        $mediaFilter = trim((string) $request->query('media_id', ''));
+        if ($contentFilter === 'all') {
+            $contentFilter = '';
+        }
+        if ($mediaFilter === 'all') {
+            $mediaFilter = '';
+        }
         $comments = [];
+        $postsWithComments = [];
         $summary = [
             'total' => 0,
             'unreplied' => 0,
@@ -389,6 +397,12 @@ class InstagramOperationsController extends Controller
 
         if (Schema::hasTable('instagram_comments')) {
             $baseQuery = InstagramComment::query()->whereNull('parent_ig_comment_id');
+            if ($contentFilter !== '') {
+                $baseQuery->where('content_item_id', (int) $contentFilter);
+            }
+            if ($mediaFilter !== '') {
+                $baseQuery->where('ig_media_id', $mediaFilter);
+            }
             $summary = [
                 'total' => (clone $baseQuery)->count(),
                 'unreplied' => (clone $baseQuery)->where('is_replied', false)->where('is_hidden', false)->count(),
@@ -409,9 +423,12 @@ class InstagramOperationsController extends Controller
             } elseif ($statusFilter === 'converted') {
                 $query->whereNotNull('converted_content_item_id');
             }
-
             if ($contentFilter !== '') {
                 $query->where('content_item_id', (int) $contentFilter);
+            }
+
+            if ($mediaFilter !== '') {
+                $query->where('ig_media_id', $mediaFilter);
             }
 
             if ($searchQuery !== '') {
@@ -425,7 +442,7 @@ class InstagramOperationsController extends Controller
             $comments = $query
                 ->orderByDesc('commented_at')
                 ->orderByDesc('id')
-                ->limit(150)
+                ->limit(500)
                 ->get()
                 ->map(fn (InstagramComment $c): array => [
                     'id' => (string) $c->id,
@@ -451,15 +468,50 @@ class InstagramOperationsController extends Controller
                 ])
                 ->values()
                 ->all();
+
+            $postsWithComments = InstagramComment::query()
+                ->whereNull('parent_ig_comment_id')
+                ->whereNotNull('ig_media_id')
+                ->select(
+                    'ig_media_id',
+                    DB::raw('MAX(content_item_id) as content_item_id'),
+                    DB::raw('MAX(media_permalink) as media_permalink'),
+                    DB::raw('MAX(media_caption_excerpt) as media_caption_excerpt'),
+                    DB::raw('MAX(media_thumbnail_url) as media_thumbnail_url'),
+                    DB::raw('COUNT(*) as comments_count'),
+                    DB::raw('SUM(CASE WHEN is_replied = 0 AND is_hidden = 0 THEN 1 ELSE 0 END) as unreplied_count')
+                )
+                ->groupBy('ig_media_id')
+                ->get()
+                ->map(function ($p): array {
+                    $item = $p->content_item_id ? ContentItem::find($p->content_item_id) : null;
+
+                    return [
+                        'igMediaId' => (string) $p->ig_media_id,
+                        'contentItemId' => $p->content_item_id ? (string) $p->content_item_id : null,
+                        'contentCode' => $item?->content_id,
+                        'contentTitle' => $item?->title,
+                        'mediaCaptionExcerpt' => (string) ($p->media_caption_excerpt ?? ''),
+                        'mediaPermalink' => (string) ($p->media_permalink ?? ''),
+                        'mediaThumbnailUrl' => (string) ($p->media_thumbnail_url ?? ''),
+                        'commentsCount' => (int) $p->comments_count,
+                        'unrepliedCount' => (int) $p->unreplied_count,
+                    ];
+                })
+                ->sortByDesc('unrepliedCount')
+                ->values()
+                ->all();
         }
 
         return Inertia::render('Comments/Index', [
             'comments' => $comments,
             'summary' => $summary,
+            'postsWithComments' => $postsWithComments,
             'filters' => [
                 'status' => $statusFilter,
                 'q' => $searchQuery,
                 'content_item_id' => $contentFilter,
+                'media_id' => $mediaFilter,
             ],
             'team' => $state['team'],
             'instagramSettings' => $state['settings']['instagram'] ?? [],
@@ -721,6 +773,23 @@ class InstagramOperationsController extends Controller
         $livePosts = [];
 
         if (Schema::hasTable('content_items')) {
+            $service = new InstagramGraphService;
+            if ($service->isConfigured()) {
+                $hasRealIgPosts = ContentItem::query()
+                    ->where('platform', 'instagram')
+                    ->where('status', 'published')
+                    ->whereNotNull('ig_media_id')
+                    ->exists();
+
+                if (! $hasRealIgPosts || $request->has('sync')) {
+                    try {
+                        $service->syncAndAutoImportRecentMedia(30, true);
+                    } catch (\Throwable) {
+                        // ignore network failure
+                    }
+                }
+            }
+
             $upcomingItems = ContentItem::query()
                 ->where('platform', 'instagram')
                 ->where('status', '!=', 'published')
@@ -762,8 +831,9 @@ class InstagramOperationsController extends Controller
                 ->where('platform', 'instagram')
                 ->where('status', 'published')
                 ->orderByDesc('publish_date')
+                ->orderByDesc('publish_time')
                 ->orderByDesc('id')
-                ->limit(18)
+                ->limit(30)
                 ->get();
 
             foreach ($publishedItems as $item) {
@@ -936,6 +1006,56 @@ class InstagramOperationsController extends Controller
     }
 
     /**
+     * Synchronize and auto-import latest Instagram Business posts directly into the Visual Grid (`POST /grid/sync-live-feed`).
+     */
+    public function syncLiveGridFeed(Request $request): RedirectResponse
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        if (! ($state['can']['managePublishing'] || $state['can']['editContent'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan feed Instagram.');
+        }
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            WorkspaceV3Controller::flashToast(
+                $request,
+                'error',
+                'Instagram Belum Terhubung',
+                'Hubungkan akun Instagram terlebih dahulu di menu Pengaturan.'
+            );
+
+            return back();
+        }
+
+        $res = $service->syncAndAutoImportRecentMedia(30, true);
+        $service->syncAccountProfileAndInsights();
+
+        if (! ($res['success'] ?? false)) {
+            WorkspaceV3Controller::flashToast(
+                $request,
+                'error',
+                'Gagal Menarik Feed IG',
+                $res['error'] ?? 'Terjadi kesalahan saat berkomunikasi dengan server Meta Graph API.'
+            );
+
+            return back();
+        }
+
+        WorkspaceV3Controller::flashToast(
+            $request,
+            'success',
+            'Feed Instagram Berhasil Disinkronkan!',
+            sprintf(
+                '%d postingan diperbarui (%d postingan baru asli diimpor ke Visual Grid).',
+                $res['synced_count'] ?? 0,
+                $res['imported_count'] ?? 0
+            )
+        );
+
+        return back();
+    }
+
+    /**
      * Manually refresh Long-Lived Instagram Access Token (`POST /settings/instagram/refresh-token`).
      */
     public function refreshToken(Request $request): RedirectResponse
@@ -1012,6 +1132,146 @@ class InstagramOperationsController extends Controller
             'Profil & Wawasan Akun Disinkronkan',
             'Data pengikut, jangkauan 28 hari, dan rekomendasi jam tayang terbaik (WIB) telah diperbarui.'
         );
+
+        return back();
+    }
+
+    /**
+     * Synchronize Meta Marketing API Ad Accounts, Campaigns, and Insights (`POST /settings/instagram/sync-ads`).
+     */
+    public function syncAds(Request $request): RedirectResponse
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan data iklan Meta.');
+        }
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            WorkspaceV3Controller::flashToast(
+                $request,
+                'error',
+                'Koneksi Belum Terhubung',
+                'Hubungkan akun Meta terlebih dahulu di menu Pengaturan.'
+            );
+
+            return back();
+        }
+
+        $targetAdAccountId = $request->input('ad_account_id');
+        $datePreset = (string) $request->input('date_preset', 'last_30d');
+        $res = $service->syncAdsPerformance($targetAdAccountId ? (string) $targetAdAccountId : null, $datePreset);
+
+        if (! ($res['success'] ?? false)) {
+            WorkspaceV3Controller::flashToast(
+                $request,
+                'error',
+                'Sinkronisasi Iklan Gagal',
+                $res['error'] ?? 'Gagal menarik data kampanye dan performa iklan dari Meta Marketing API.'
+            );
+
+            return back();
+        }
+
+        $summary = $res['ads_data']['summary'] ?? [];
+        WorkspaceV3Controller::flashToast(
+            $request,
+            'success',
+            'Data Iklan Berhasil Disinkronkan!',
+            sprintf(
+                'Performa iklan Meta Marketing API diperbarui (%s tayangan, spend %s).',
+                number_format((float) ($summary['total_impressions'] ?? 0)),
+                number_format((float) ($summary['total_spend'] ?? 0), 2)
+            )
+        );
+
+        return back();
+    }
+
+    /**
+     * Synchronize Instagram Audience Demographics (`POST /settings/instagram/sync-demographics`).
+     */
+    public function syncDemographics(Request $request): RedirectResponse
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan demografi audiens.');
+        }
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Instagram Belum Terhubung', 'Hubungkan akun Instagram terlebih dahulu.');
+
+            return back();
+        }
+
+        $res = $service->syncAudienceDemographics();
+        if (! ($res['success'] ?? false)) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Sinkronisasi Demografi Gagal', $res['error'] ?? 'Gagal menarik data demografi dari Meta.');
+
+            return back();
+        }
+
+        WorkspaceV3Controller::flashToast($request, 'success', 'Demografi Audiens Disinkronkan', 'Data sebaran usia, gender, dan kota audiens telah diperbarui.');
+
+        return back();
+    }
+
+    /**
+     * Synchronize Instagram Recent Stories (`POST /settings/instagram/sync-stories`).
+     */
+    public function syncStories(Request $request): RedirectResponse
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan data stories.');
+        }
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Instagram Belum Terhubung', 'Hubungkan akun Instagram terlebih dahulu.');
+
+            return back();
+        }
+
+        $res = $service->syncRecentStories();
+        if (! ($res['success'] ?? false)) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Sinkronisasi Story Gagal', $res['error'] ?? 'Gagal menarik stories dari Meta.');
+
+            return back();
+        }
+
+        $count = count($res['stories'] ?? []);
+        WorkspaceV3Controller::flashToast($request, 'success', 'Story Instagram Disinkronkan', sprintf('%d story aktif berhasil diperbarui bersama metriknya.', $count));
+
+        return back();
+    }
+
+    /**
+     * Synchronize Instagram Tags and Mentions (`POST /settings/instagram/sync-mentions`).
+     */
+    public function syncMentions(Request $request): RedirectResponse
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan mentions.');
+        }
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Instagram Belum Terhubung', 'Hubungkan akun Instagram terlebih dahulu.');
+
+            return back();
+        }
+
+        $res = $service->syncTagsAndMentions();
+        if (! ($res['success'] ?? false)) {
+            WorkspaceV3Controller::flashToast($request, 'error', 'Sinkronisasi Mentions Gagal', $res['error'] ?? 'Gagal menarik tags & mentions.');
+
+            return back();
+        }
+
+        WorkspaceV3Controller::flashToast($request, 'success', 'Tags & Mentions Disinkronkan', 'Postingan publik yang menandai akun instansi telah diperbarui.');
 
         return back();
     }

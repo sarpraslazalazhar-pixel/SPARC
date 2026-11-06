@@ -91,10 +91,127 @@ export interface InstagramSyncLog {
     note: string;
 }
 
+export interface MetaAdsSummary {
+    total_spend: number;
+    total_impressions: number;
+    total_reach: number;
+    total_clicks: number;
+    avg_ctr: number;
+    avg_cpc: number;
+    avg_cpm: number;
+    date_preset?: string;
+}
+
+export interface MetaAdCampaign {
+    id: string;
+    name: string;
+    status: string;
+    objective?: string;
+    start_time?: string;
+    stop_time?: string;
+    daily_budget?: string;
+    lifetime_budget?: string;
+    budget_remaining?: string;
+}
+
+export interface MetaAdsData {
+    accounts?: Array<{
+        id: string;
+        name: string;
+        account_id: string;
+        account_status?: number;
+        currency?: string;
+        amount_spent?: string;
+    }>;
+    active_account?: {
+        id: string;
+        name: string;
+        account_id: string;
+        currency?: string;
+    } | null;
+    campaigns?: MetaAdCampaign[];
+    summary: MetaAdsSummary;
+    insights?: Array<{
+        campaign_name?: string;
+        campaign_id?: string;
+        spend?: string;
+        impressions?: string;
+        reach?: string;
+        clicks?: string;
+        cpc?: string;
+        cpm?: string;
+        ctr?: string;
+    }>;
+    synced_at?: string;
+}
+
+export interface AudienceDemographicsData {
+    gender_age: Record<string, number>;
+    gender_distribution: {
+        male: number;
+        female: number;
+        unspecified: number;
+    };
+    top_countries: Record<string, number>;
+    top_cities: Record<string, number>;
+    top_locales: Record<string, number>;
+    has_data: boolean;
+    synced_at?: string;
+}
+
+export interface InstagramStoryItem {
+    id: string;
+    caption?: string;
+    media_type: string;
+    media_url: string;
+    thumbnail_url?: string;
+    permalink?: string;
+    timestamp?: string;
+    metrics: {
+        reach: number;
+        impressions: number;
+        replies: number;
+        exits: number;
+        taps_forward: number;
+        taps_back: number;
+    };
+}
+
+export interface InstagramMentionsData {
+    tagged_posts: Array<{
+        id: string;
+        caption?: string;
+        media_type?: string;
+        media_url?: string;
+        permalink?: string;
+        timestamp?: string;
+        username?: string;
+        like_count?: number;
+        comments_count?: number;
+    }>;
+    mentioned_posts: Array<{
+        id: string;
+        caption?: string;
+        media_type?: string;
+        media_url?: string;
+        permalink?: string;
+        timestamp?: string;
+    }>;
+    total_tagged: number;
+    total_mentioned: number;
+    synced_at?: string;
+}
+
 export interface SparcContentItem {
     id: string;
     contentId: string;
     ticketId?: string | null;
+    haloapuTicketId?: string | null;
+    haloapuStatus?: string | null;
+    isResultAccepted?: boolean | null;
+    revisionCount?: number;
+    deliverableUrl?: string | null;
+    haloApuDbId?: string | null;
     title: string;
     status: CanonicalWorkflowStatus;
     priority: PriorityLevel;
@@ -125,6 +242,10 @@ export interface SparcContentItem {
     commentsCount?: number;
     shares?: number;
     saves?: number | null;
+    reelsWatchTime?: number | null;
+    reelsAvgWatchTime?: number | null;
+    isAdBoosted?: boolean;
+    adSpend?: number | null;
     metricsSyncedAt?: string | null;
     gridPosition?: number | null;
     igComments?: InstagramPublicComment[];
@@ -157,7 +278,7 @@ export interface PublicationMetrics {
     shares: number | null;
     saves: number | null;
     clicks: number | null;
-    source: 'manual' | 'csv' | 'api';
+    source: 'manual' | 'excel' | 'csv' | 'api';
     recordedAt: string;
 }
 
@@ -223,6 +344,13 @@ export interface SparcSystemSettings {
         latencyMs: number;
         note: string;
     }>;
+    haloApu?: {
+        isEnabled: boolean;
+        baseUrl: string;
+        autoSolveOnPublish: boolean;
+        lastSyncAt: string;
+        lastStatus: string;
+    };
     instagram?: {
         appId?: string;
         hasAppSecret?: boolean;
@@ -254,6 +382,7 @@ export interface SparcSystemSettings {
             insights: boolean;
             publish: boolean;
             comments: boolean;
+            ads?: boolean;
         };
         accountInsights?: InstagramAccountInsights;
         bestPostingHours?: string[];
@@ -265,6 +394,10 @@ export interface SparcSystemSettings {
             updated_at?: string;
         } | null;
         syncLogs?: InstagramSyncLog[];
+        adsData?: MetaAdsData | null;
+        demographicsData?: AudienceDemographicsData | null;
+        storiesData?: InstagramStoryItem[];
+        mentionsData?: InstagramMentionsData | null;
         candidateAccounts?: Array<{
             accountId: string;
             username: string;
@@ -289,11 +422,23 @@ export interface DashboardIncomingTicket {
     syncStatus: 'pending' | 'converted' | 'ignored';
     createdAt: string;
     formSnapshot: Record<string, string>;
+    revisionCount?: number;
+    isResultAccepted?: boolean;
+    isSlaBreached?: boolean;
+    slaResponseDeadline?: string;
+    slaResolutionDeadline?: string;
     attachments: Array<{
         id?: string;
         fileName: string;
         url: string;
         fileSize?: string;
+    }>;
+    logs?: Array<{
+        id: string;
+        aksi: string;
+        actor: string;
+        catatan: string;
+        timestamp: string;
     }>;
 }
 

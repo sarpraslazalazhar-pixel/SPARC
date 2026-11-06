@@ -47,6 +47,120 @@ function categoryLabel(cat: SparcVisualAsset['category']): string {
     return ASSET_CATEGORIES.find((c) => c.key === cat)?.label ?? cat;
 }
 
+function renderCategoryIcon(cat: SparcVisualAsset['category'], iconClass = 'w-3.5 h-3.5') {
+    if (cat === 'video') {
+        return <Film className={iconClass} />;
+    }
+    if (cat === 'template_desain') {
+        return <LayoutTemplate className={iconClass} />;
+    }
+    if (cat === 'dokumen') {
+        return <FileText className={iconClass} />;
+    }
+    return <FileImage className={iconClass} />;
+}
+
+function getDomainFromUrl(url?: string): string {
+    if (!url) return '';
+    try {
+        const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+        return parsed.hostname.replace(/^www\./, '');
+    } catch {
+        return '';
+    }
+}
+
+function getFaviconUrl(url?: string): string {
+    const domain = getDomainFromUrl(url);
+    if (!domain) return '';
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128`;
+}
+
+function isDirectImage(url?: string): boolean {
+    if (!url) return false;
+    if (url.includes('google.com/s2/favicons')) return false;
+    return (
+        /\.(jpg|jpeg|png|webp|gif|svg)($|\?)/i.test(url) ||
+        url.startsWith('/storage/') ||
+        url.startsWith('/images/') ||
+        /images\.unsplash\.com/i.test(url) ||
+        /picsum\.photos/i.test(url) ||
+        /img\.youtube\.com\/vi\//i.test(url) ||
+        /images\.pexels\.com/i.test(url) ||
+        /cloudinary\.com/i.test(url)
+    );
+}
+
+function AssetThumbnailCard({
+    title,
+    externalUrl,
+    thumbnailUrl,
+    category,
+    className = '',
+}: {
+    title: string;
+    externalUrl: string;
+    thumbnailUrl?: string;
+    category: SparcVisualAsset['category'];
+    className?: string;
+}) {
+    const [imgFailed, setImgFailed] = useState(false);
+    const [faviconFailed, setFaviconFailed] = useState(false);
+
+    const domain = getDomainFromUrl(externalUrl || thumbnailUrl);
+    const resolvedFavicon = getFaviconUrl(externalUrl || thumbnailUrl);
+
+    const directUrl = isDirectImage(externalUrl)
+        ? externalUrl
+        : isDirectImage(thumbnailUrl)
+          ? thumbnailUrl
+          : null;
+
+    if (directUrl && !imgFailed) {
+        return (
+            <img
+                src={directUrl}
+                alt={title}
+                loading="lazy"
+                onError={() => setImgFailed(true)}
+                className={`w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300 ${className}`}
+            />
+        );
+    }
+
+    if (domain && resolvedFavicon && !faviconFailed) {
+        return (
+            <div
+                className={`w-full h-full flex flex-col items-center justify-center p-3 bg-gradient-to-br from-[var(--md-sys-color-surface-container)] to-[var(--md-sys-color-surface-container-high)] text-center select-none group-hover:from-[var(--md-sys-color-surface-container-high)] group-hover:to-[var(--md-sys-color-surface-container-highest)] transition-colors ${className}`}
+            >
+                <div className="w-12 h-12 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container-lowest)] p-2 shadow-sm border border-[var(--md-sys-color-outline-variant)]/60 flex items-center justify-center group-hover:scale-105 transition-transform duration-200">
+                    <img
+                        src={resolvedFavicon}
+                        alt={domain}
+                        onError={() => setFaviconFailed(true)}
+                        className="w-7 h-7 object-contain"
+                    />
+                </div>
+                <span className="mt-2 text-[11px] font-semibold text-[var(--md-sys-color-on-surface-variant)] truncate max-w-[140px] px-2 py-0.5 rounded-full bg-[var(--md-sys-color-surface)]/80 dark:bg-[var(--md-sys-color-surface-container-lowest)]/80 border border-[var(--md-sys-color-outline-variant)]/50">
+                    {domain}
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <div
+            className={`w-full h-full flex flex-col items-center justify-center gap-1.5 p-4 bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-muted)] select-none ${className}`}
+        >
+            <div className="w-10 h-10 rounded-xl bg-[var(--md-sys-color-surface-container-high)] flex items-center justify-center text-[var(--md-sys-color-on-surface-variant)]">
+                {renderCategoryIcon(category, 'w-5 h-5')}
+            </div>
+            <span className="text-[10px] font-medium text-[var(--md-sys-color-on-surface-muted)]">
+                {domain || categoryLabel(category)}
+            </span>
+        </div>
+    );
+}
 export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
@@ -130,18 +244,6 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
         });
     };
 
-    const renderCategoryIcon = (cat: SparcVisualAsset['category']) => {
-        if (cat === 'video') {
-            return <Film className="w-3.5 h-3.5" />;
-        }
-        if (cat === 'template_desain') {
-            return <LayoutTemplate className="w-3.5 h-3.5" />;
-        }
-        if (cat === 'dokumen') {
-            return <FileText className="w-3.5 h-3.5" />;
-        }
-        return <FileImage className="w-3.5 h-3.5" />;
-    };
 
     return (
         <AppLayout
@@ -247,11 +349,11 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                                 className="group bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] hover:shadow-[var(--md-elevation-2)] hover:border-[var(--md-sys-color-primary)]/50 overflow-hidden flex flex-col cursor-pointer transition-all"
                             >
                                 <div className="relative aspect-[16/10] bg-[var(--md-sys-color-surface-container-low)] overflow-hidden">
-                                    <img
-                                        src={asset.thumbnailUrl}
-                                        alt={asset.title}
-                                        loading="lazy"
-                                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                                    <AssetThumbnailCard
+                                        title={asset.title}
+                                        externalUrl={asset.externalUrl}
+                                        thumbnailUrl={asset.thumbnailUrl}
+                                        category={asset.category}
                                     />
                                     <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--md-sys-color-surface)]/90 dark:bg-[var(--md-sys-color-surface-container-highest)]/90 text-[var(--md-sys-color-on-surface)] border border-[var(--md-sys-color-outline-variant)] backdrop-blur-xs">
                                         {renderCategoryIcon(asset.category)}
@@ -304,10 +406,11 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                 {selectedAsset && (
                     <div className="space-y-4">
                         <div className="rounded-2xl overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] aspect-[16/10]">
-                            <img
-                                src={selectedAsset.thumbnailUrl}
-                                alt={selectedAsset.title}
-                                className="w-full h-full object-cover"
+                            <AssetThumbnailCard
+                                title={selectedAsset.title}
+                                externalUrl={selectedAsset.externalUrl}
+                                thumbnailUrl={selectedAsset.thumbnailUrl}
+                                category={selectedAsset.category}
                             />
                         </div>
 
@@ -474,6 +577,25 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                         onChange={(e) => createForm.setData('external_url', e.target.value)}
                         error={createForm.errors.external_url}
                     />
+                    {createForm.data.external_url && (
+                        <div className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] flex items-center gap-3">
+                            <div className="w-16 h-12 rounded-lg overflow-hidden shrink-0 border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)]">
+                                <AssetThumbnailCard
+                                    title="Pratinjau Aset"
+                                    externalUrl={createForm.data.external_url}
+                                    category={createForm.data.category}
+                                />
+                            </div>
+                            <div className="min-w-0 text-xs">
+                                <span className="font-bold text-[var(--md-sys-color-on-surface)] block truncate">
+                                    {isDirectImage(createForm.data.external_url) ? 'Gambar Langsung Terdeteksi' : 'Favicon Layanan Terdeteksi'}
+                                </span>
+                                <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] block truncate">
+                                    {getDomainFromUrl(createForm.data.external_url) || createForm.data.external_url}
+                                </span>
+                            </div>
+                        </div>
+                    )}
 
                     <Input
                         label="Kata Kunci Tag (Pisahkan dengan koma)"

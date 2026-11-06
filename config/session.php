@@ -143,7 +143,9 @@ return [
     |
     */
 
-    'path' => env('SESSION_PATH', '/'),
+    'path' => (! empty(env('SESSION_PATH')) && ! str_contains(env('SESSION_PATH'), ':') && ! str_contains(env('SESSION_PATH'), ' '))
+        ? env('SESSION_PATH')
+        : '/',
 
     /*
     |--------------------------------------------------------------------------

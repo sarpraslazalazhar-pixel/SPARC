@@ -3,6 +3,7 @@ import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+    AlertTriangle,
     ArrowUpRight,
     Building2,
     Calendar as CalendarIcon,
@@ -28,6 +29,7 @@ import {
 import { InstagramIcon, TikTokIcon, YoutubeIcon } from '@/Components/Icons';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { ContentDetailSheet } from '@/Components/ContentDetailSheet';
+import { Badge } from '@/Components/UI/Badge';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
 import { Modal } from '@/Components/UI/Modal';
@@ -251,7 +253,6 @@ export default function DashboardIndex({
     );
     const [approvingId, setApprovingId] = useState<string | null>(null);
     const [selectedTicket, setSelectedTicket] = useState<DashboardIncomingTicket | null>(null);
-    const [convertModalOpen, setConvertModalOpen] = useState(false);
     const [isSyncingIgDash, setIsSyncingIgDash] = useState(false);
 
     const igDash = settings?.instagram ?? props.instagramStatus;
@@ -298,20 +299,6 @@ export default function DashboardIndex({
         redirect_to: 'stay',
     });
 
-    // Convert HALO APU Ticket Form (`POST /incoming/{id}/convert`)
-    const convertForm = useForm({
-        title: '',
-        ticket_code: '',
-        format: 'reels_shorts' as 'reels_shorts' | 'carousel_feed' | 'single_feed',
-        pillar: 'edukasi' as
-            | 'edukasi'
-            | 'event_liputan'
-            | 'sosialisasi_prestasi'
-            | 'pengumuman'
-            | 'human_touch',
-        pic_name: currentUser?.name ?? 'Aldwin NV',
-        target_date: addDaysIso(today, 4),
-    });
 
     const weekEndIso = useMemo(() => addDaysIso(today, 7), [today]);
 
@@ -415,17 +402,7 @@ export default function DashboardIndex({
 
     // Dual Spline Area Chart ("Reach vs Interaksi") Series
     const chartSeries = useMemo(() => {
-        const base =
-            performanceTrend.length > 0
-                ? performanceTrend
-                : [
-                      { key: '05', label: 'Mei', fullLabel: 'Mei 2026', reach: 39900, interactions: 4100, byPlatform: {} },
-                      { key: '06', label: 'Jun', fullLabel: 'Juni 2026', reach: 51300, interactions: 5350, byPlatform: {} },
-                      { key: '07', label: 'Jul', fullLabel: 'Juli 2026', reach: 44800, interactions: 4570, byPlatform: {} },
-                      { key: '08', label: 'Agu', fullLabel: 'Agustus 2026', reach: 69100, interactions: 7580, byPlatform: {} },
-                      { key: '09', label: 'Sep', fullLabel: 'September 2026', reach: 57300, interactions: 6100, byPlatform: {} },
-                      { key: '10', label: 'Okt', fullLabel: 'Oktober 2026', reach: 61900, interactions: 7805, byPlatform: {} },
-                  ];
+        const base = performanceTrend;
 
         const factor = period === 'today' ? 0.14 : period === 'week' ? 0.42 : 1;
 
@@ -755,31 +732,6 @@ export default function DashboardIndex({
         });
     };
 
-    const openConvertTicketModal = (ticket: DashboardIncomingTicket) => {
-        convertForm.setData({
-            title: ticket.title,
-            ticket_code: ticket.haloapuTicketId,
-            format: ticket.sourceType === 'video_reels' ? 'reels_shorts' : 'carousel_feed',
-            pillar: 'edukasi',
-            pic_name: currentUser?.name ?? 'Aldwin NV',
-            target_date: ticket.targetDate || addDaysIso(today, 4),
-        });
-        setConvertModalOpen(true);
-    };
-
-    const handleConvertTicketSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!selectedTicket) {
-            return;
-        }
-        convertForm.post(`/incoming/${selectedTicket.id}/convert`, {
-            preserveScroll: true,
-            onSuccess: () => {
-                setConvertModalOpen(false);
-                setSelectedTicket(null);
-            },
-        });
-    };
 
     // SVG Donut Ring Geometry
     const ringRadius = 60;
@@ -834,13 +786,13 @@ export default function DashboardIndex({
     const plotW = svgW - padLeft - padRight;
     const plotH = svgH - padTop - padBottom;
 
-    const maxReachVal = Math.max(1000, ...chartSeries.map((c) => c.reach));
-    const maxInterVal = Math.max(200, ...chartSeries.map((c) => c.interactions));
+    const maxReachVal = Math.max(1, ...chartSeries.map((c) => c.reach));
+    const maxInterVal = Math.max(1, ...chartSeries.map((c) => c.interactions));
 
     const reachCoords = chartSeries.map((pt, i) => {
         const x = padLeft + (i / Math.max(1, chartSeries.length - 1)) * plotW;
         // Reach sits in upper-middle band (panze upper blue curve)
-        const norm = pt.reach / (maxReachVal * 1.12);
+        const norm = maxReachVal > 0 ? pt.reach / (maxReachVal * 1.15) : 0;
         const y = padTop + plotH * (0.62 - norm * 0.54);
         return { x, y };
     });
@@ -848,7 +800,7 @@ export default function DashboardIndex({
     const interCoords = chartSeries.map((pt, i) => {
         const x = padLeft + (i / Math.max(1, chartSeries.length - 1)) * plotW;
         // Interactions sits in lower harmonious band (panze lower orange curve)
-        const norm = pt.interactions / (maxInterVal * 1.15);
+        const norm = maxInterVal > 0 ? pt.interactions / (maxInterVal * 1.15) : 0;
         const y = padTop + plotH * (0.96 - norm * 0.32);
         return { x, y };
     });
@@ -1783,7 +1735,9 @@ export default function DashboardIndex({
                                             />
                                         )}
 
-                                        {/* Smooth Spline Strokes with Draw Animation */}
+                                        {/* Smooth Spline Strokes (opacity-only fade: `pathLength` is dropped
+                                            under the app-level MotionConfig reducedMotion="user", which leaves
+                                            strokes permanently invisible at pathLength 0) */}
                                         <motion.path
                                             key={`reach-line-${trendPlatform}`}
                                             d={reachLinePath}
@@ -1791,9 +1745,9 @@ export default function DashboardIndex({
                                             stroke="#2563EB"
                                             strokeWidth="2.2"
                                             strokeLinecap="round"
-                                            initial={{ pathLength: 0, opacity: 0 }}
-                                            animate={{ pathLength: 1, opacity: 1 }}
-                                            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1] }}
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
                                         />
                                         <motion.path
                                             key={`inter-line-${trendPlatform}`}
@@ -1802,9 +1756,9 @@ export default function DashboardIndex({
                                             stroke="#EA580C"
                                             strokeWidth="2.2"
                                             strokeLinecap="round"
-                                            initial={{ pathLength: 0, opacity: 0 }}
-                                            animate={{ pathLength: 1, opacity: 1 }}
-                                            transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1], delay: 0.12 }}
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
                                         />
 
                                         {/* Active Vertical Dashed Scrubber Line with Spring */}
@@ -2194,8 +2148,11 @@ export default function DashboardIndex({
                                                     className="rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-lowest)] dark:bg-[var(--md-sys-color-surface-container-low)] p-3.5 flex items-start gap-3"
                                                 >
                                                     <img
-                                                        src={ticket.requesterAvatar}
+                                                        src={ticket.requesterAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(ticket.requesterName || 'HaloAPU')}&background=1546D8&color=fff&size=128&bold=true`}
                                                         alt={ticket.requesterName}
+                                                        onError={(e) => {
+                                                            (e.currentTarget as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(ticket.requesterName || 'HaloAPU')}&background=1546D8&color=fff&size=128&bold=true`;
+                                                        }}
                                                         className="w-9 h-9 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0 mt-0.5"
                                                     />
                                                     <div className="min-w-0 flex-1">
@@ -2206,13 +2163,30 @@ export default function DashboardIndex({
                                                             {ticket.brief}
                                                         </p>
                                                         <div className="mt-2 flex items-center justify-between gap-2">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setSelectedTicket(ticket)}
-                                                                className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--md-sys-color-surface-container)] hover:bg-[var(--md-sys-color-surface-container-high)] text-[11px] font-bold text-[var(--md-sys-color-on-surface)] transition-colors cursor-pointer"
-                                                            >
-                                                                Tinjau <ChevronRight className="w-3 h-3" />
-                                                            </button>
+                                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setSelectedTicket(ticket)}
+                                                                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[var(--md-sys-color-surface-container)] hover:bg-[var(--md-sys-color-surface-container-high)] text-[11px] font-bold text-[var(--md-sys-color-on-surface)] transition-colors cursor-pointer"
+                                                                >
+                                                                    Tinjau <ChevronRight className="w-3 h-3" />
+                                                                </button>
+                                                                {ticket.isSlaBreached && (
+                                                                    <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 text-[10px] font-bold">
+                                                                        <AlertTriangle className="w-2.5 h-2.5" /> SLA
+                                                                    </span>
+                                                                )}
+                                                                {Boolean(ticket.revisionCount && ticket.revisionCount > 0) && (
+                                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-bold">
+                                                                        Rev-{ticket.revisionCount}
+                                                                    </span>
+                                                                )}
+                                                                {ticket.isResultAccepted && (
+                                                                    <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                                                                        <CheckCircle2 className="w-2.5 h-2.5" /> OK
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                             <span className="sparc-code-id text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
                                                                 #{ticket.haloapuTicketId}
                                                             </span>
@@ -2510,9 +2484,12 @@ export default function DashboardIndex({
                     <div className="space-y-4">
                         <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
                             <img
-                                src={selectedTicket.requesterAvatar}
+                                src={selectedTicket.requesterAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedTicket.requesterName || 'HaloAPU')}&background=1546D8&color=fff&size=128&bold=true`}
                                 alt={selectedTicket.requesterName}
-                                className="w-10 h-10 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
+                                onError={(e) => {
+                                    (e.currentTarget as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedTicket.requesterName || 'HaloAPU')}&background=1546D8&color=fff&size=128&bold=true`;
+                                }}
+                                className="w-10 h-10 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
                             />
                             <div className="min-w-0">
                                 <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
@@ -2523,6 +2500,41 @@ export default function DashboardIndex({
                                     {formatShortIndoDate(selectedTicket.targetDate)}
                                 </p>
                             </div>
+                        </div>
+                        {/* HaloAPU Lifecycle Badges */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                            {selectedTicket.haloapuStatus && (
+                                <Badge
+                                    variant={
+                                        selectedTicket.haloapuStatus === 'solve'
+                                            ? 'success'
+                                            : selectedTicket.haloapuStatus === 'need_revision'
+                                              ? 'danger'
+                                              : selectedTicket.haloapuStatus === 'reject' || selectedTicket.haloapuStatus === 'dibatalkan'
+                                                ? 'default'
+                                                : selectedTicket.haloapuStatus === 'on_proses'
+                                                  ? 'primary'
+                                                  : 'warning'
+                                    }
+                                >
+                                    {selectedTicket.haloapuStatus}
+                                </Badge>
+                            )}
+                            {selectedTicket.isSlaBreached && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-bold">
+                                    <AlertTriangle className="w-3 h-3" /> SLA Lewat
+                                </span>
+                            )}
+                            {Boolean(selectedTicket.revisionCount && selectedTicket.revisionCount > 0) && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-bold">
+                                    Revisi ke-{selectedTicket.revisionCount}
+                                </span>
+                            )}
+                            {selectedTicket.isResultAccepted && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
+                                    <CheckCircle2 className="w-3 h-3" /> Disetujui Pemohon
+                                </span>
+                            )}
                         </div>
 
                         <div className="space-y-1.5">
@@ -2556,16 +2568,15 @@ export default function DashboardIndex({
 
                         <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
-                                {selectedTicket.syncStatus === 'pending' && can?.editContent && (
+                                <Link href="/content">
                                     <Button
                                         variant="primary"
                                         size="sm"
                                         icon={<FileText className="w-3.5 h-3.5" />}
-                                        onClick={() => openConvertTicketModal(selectedTicket)}
                                     >
-                                        Konversi ke Planner
+                                        Buka di Planner
                                     </Button>
-                                )}
+                                </Link>
                                 <Link href="/incoming">
                                     <Button variant="secondary" size="sm">
                                         Modul Incoming
@@ -2579,95 +2590,6 @@ export default function DashboardIndex({
                     </div>
                 )}
             </Sheet>
-
-            <Modal
-                isOpen={convertModalOpen}
-                onClose={() => setConvertModalOpen(false)}
-                title="Konversi Tiket HALO APU ke Production Board"
-                description="Buat satu identitas konten terpadu dari tiket permohonan unit kerja"
-                maxWidth="md"
-            >
-                <form onSubmit={handleConvertTicketSubmit} noValidate className="space-y-3.5">
-                    <Input
-                        label="Judul Konten Produksi"
-                        value={convertForm.data.title}
-                        onChange={(e) => convertForm.setData('title', e.target.value)}
-                        error={convertForm.errors.title}
-                        required
-                    />
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                        <Select
-                            label="Format Produksi"
-                            value={convertForm.data.format}
-                            onChange={(e) =>
-                                convertForm.setData(
-                                    'format',
-                                    e.target.value as typeof convertForm.data.format
-                                )
-                            }
-                        >
-                            <option value="reels_shorts">Video Reels / Shorts</option>
-                            <option value="carousel_feed">Carousel Feed</option>
-                            <option value="single_feed">Single Image Feed</option>
-                        </Select>
-
-                        <Select
-                            label="Pilar Konten"
-                            value={convertForm.data.pillar}
-                            onChange={(e) =>
-                                convertForm.setData(
-                                    'pillar',
-                                    e.target.value as typeof convertForm.data.pillar
-                                )
-                            }
-                        >
-                            <option value="edukasi">Edukasi Publik</option>
-                            <option value="event_liputan">Event & Liputan</option>
-                            <option value="sosialisasi_prestasi">Program & Capaian</option>
-                            <option value="pengumuman">Pengumuman Layanan</option>
-                            <option value="human_touch">Inspirasi & Humanis</option>
-                        </Select>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                        <Input
-                            label="PIC Utama"
-                            value={convertForm.data.pic_name}
-                            onChange={(e) => convertForm.setData('pic_name', e.target.value)}
-                            error={convertForm.errors.pic_name}
-                            required
-                        />
-                        <Input
-                            label="Target Tanggal Tayang"
-                            type="date"
-                            value={convertForm.data.target_date}
-                            onChange={(e) => convertForm.setData('target_date', e.target.value)}
-                            error={convertForm.errors.target_date}
-                            required
-                        />
-                    </div>
-
-                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            type="button"
-                            onClick={() => setConvertModalOpen(false)}
-                        >
-                            Batal
-                        </Button>
-                        <Button
-                            variant="primary"
-                            size="sm"
-                            type="submit"
-                            isLoading={convertForm.processing}
-                        >
-                            Konversi Sekarang
-                        </Button>
-                    </div>
-                </form>
-            </Modal>
         </AppLayout>
     );
 }

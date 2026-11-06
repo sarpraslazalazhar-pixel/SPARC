@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
+import { Badge } from '@/Components/UI/Badge';
 import { Input } from '@/Components/UI/Input';
 import { Modal } from '@/Components/UI/Modal';
 import { Select } from '@/Components/UI/Select';
@@ -133,6 +134,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
         comments_count: String(item?.commentsCount ?? 0),
         shares: String(item?.shares ?? 0),
     });
+
 
     useEffect(() => {
         if (item) {
@@ -551,6 +553,47 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                             </div>
                         </div>
                     </div>
+
+                    {/* LINKED HALOAPU TICKET BANNER */}
+                    {(item.haloapuTicketId || item.ticketId) && (
+                        <div className="p-3.5 rounded-2xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                            <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="sparc-eyebrow">Tiket HaloAPU</span>
+                                    <span className="sparc-code-id font-bold text-[var(--md-sys-color-primary)]">
+                                        #{item.haloapuTicketId || item.ticketId}
+                                    </span>
+                                    {item.haloapuStatus && (
+                                        <Badge
+                                            variant={
+                                                item.haloapuStatus === 'solve'
+                                                    ? 'success'
+                                                    : item.haloapuStatus === 'need_revision'
+                                                      ? 'danger'
+                                                      : 'primary'
+                                            }
+                                        >
+                                            {item.haloapuStatus}
+                                        </Badge>
+                                    )}
+                                    {item.isResultAccepted && (
+                                        <span className="text-[10px] font-bold text-green-600 dark:text-green-400">
+                                            ✓ Diterima Pemohon
+                                        </span>
+                                    )}
+                                    {Boolean(item.revisionCount && item.revisionCount > 0) && (
+                                        <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                                            Revisi ke-{item.revisionCount}
+                                        </span>
+                                    )}
+                                </div>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                    Status tiket pada portal HaloAPU sinkron secara langsung dengan progres SPARC.
+                                </p>
+                            </div>
+
+                        </div>
+                    )}
 
                     {/* ACTIVE REVISION NOTE ALERT (IF ANY) */}
                     {item.revisionNote && (
@@ -1768,6 +1811,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                     </Button>
                 </div>
             </Modal>
+
         </>
     );
 };

@@ -816,7 +816,7 @@ export default function ContentPlanIndex({
                                 <option value="inbox">Inbox Request</option>
                                 <option value="briefing">Briefing & Ideasi</option>
                                 <option value="in_progress">Produksi</option>
-                                <option value="review_approval">Review & Approval</option>
+                                <option value="review_approval">Review</option>
                                 <option value="ready_to_publish">Siap Tayang</option>
                             </select>
 

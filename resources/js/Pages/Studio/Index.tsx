@@ -39,64 +39,7 @@ interface StudioIndexProps {
     sessionProjects?: CreativeProject[];
 }
 
-const DEFAULT_PROJECTS: CreativeProject[] = [
-    {
-        id: 'proj-1',
-        title: 'Tutorial Pendaftaran Online Layanan Informasi Publik',
-        format: 'reels_shorts',
-        pillar: 'edukasi',
-        status: 'in_scripting',
-        picName: 'Aldwin (Writer)',
-        targetDate: '2026-11-02',
-        haloapuTicketId: '045-812-901',
-        updatedAt: '10 menit lalu',
-    },
-    {
-        id: 'proj-2',
-        title: 'Infografis Capaian Kinerja Triwulan III 2026',
-        format: 'carousel_feed',
-        pillar: 'sosialisasi_prestasi',
-        status: 'in_design',
-        picName: 'Designer 1',
-        targetDate: '2026-10-31',
-        haloapuTicketId: '042-119-002',
-        slideCount: 5,
-        updatedAt: '1 jam lalu',
-    },
-    {
-        id: 'proj-3',
-        title: 'Peringatan Hari Sumpah Pemuda 2026',
-        format: 'single_feed',
-        pillar: 'pengumuman',
-        status: 'ready_to_publish',
-        picName: 'Designer 2',
-        targetDate: '2026-10-28',
-        haloapuTicketId: '041-908-112',
-        updatedAt: '3 jam lalu',
-    },
-    {
-        id: 'proj-4',
-        title: 'Behind the Scenes: Suasana Kerja Tim Humas Melayani Publik',
-        format: 'reels_shorts',
-        pillar: 'human_touch',
-        status: 'drafting',
-        picName: 'Aldwin (Writer)',
-        targetDate: '2026-11-05',
-        updatedAt: 'Kemarin',
-    },
-    {
-        id: 'proj-5',
-        title: 'Liputan Serah Terima Jabatan Pejabat Baru',
-        format: 'reels_shorts',
-        pillar: 'event_liputan',
-        status: 'published',
-        picName: 'Editor Video',
-        targetDate: '2026-10-25',
-        haloapuTicketId: '039-551-789',
-        publishedUrl: 'https://instagram.com/reel/CiH5q4lAx6x/',
-        updatedAt: '2 hari lalu',
-    },
-];
+const DEFAULT_PROJECTS: CreativeProject[] = [];
 
 const STATUS_PILLS = [
     { id: 'all', label: 'Semua Status' },

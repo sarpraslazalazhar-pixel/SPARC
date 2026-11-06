@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class ContentItem extends Model
@@ -45,6 +46,10 @@ class ContentItem extends Model
         'comments_count',
         'shares',
         'saves',
+        'reels_watch_time',
+        'reels_avg_watch_time',
+        'is_ad_boosted',
+        'ad_spend',
         'metrics_synced_at',
         'grid_position',
         'created_by',
@@ -56,6 +61,10 @@ class ContentItem extends Model
         'metrics_synced_at' => 'datetime',
         'reach' => 'integer',
         'saves' => 'integer',
+        'reels_watch_time' => 'integer',
+        'reels_avg_watch_time' => 'float',
+        'is_ad_boosted' => 'boolean',
+        'ad_spend' => 'float',
         'grid_position' => 'integer',
     ];
 
@@ -90,6 +99,11 @@ class ContentItem extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function haloApuTicket(): HasOne
+    {
+        return $this->hasOne(HaloApuTicket::class);
     }
 
     protected static function booted(): void

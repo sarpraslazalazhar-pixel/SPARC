@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\InstagramSchedule;
+use App\Services\HaloApuClientService;
 use App\Services\InstagramGraphService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -110,6 +111,21 @@ Artisan::command('instagram:refresh-token', function (InstagramGraphService $ser
     return 0;
 })->purpose('Perpanjangan otomatis Long-Lived Token Instagram sebelum kedaluwarsa');
 
+Artisan::command('haloapu:sync-tickets', function (HaloApuClientService $service): int {
+    $this->info('Memulai sinkronisasi tiket HaloAPU...');
+    try {
+        $count = $service->syncTickets();
+        $this->info("Sinkronisasi berhasil: {$count} tiket diperbarui.");
+
+        return 0;
+    } catch (Throwable $e) {
+        $this->error("Gagal sinkronisasi HaloAPU: {$e->getMessage()}");
+
+        return 1;
+    }
+})->purpose('Sinkronisasi berkala tiket Humas dari antrean REST API HaloAPU');
+
 Schedule::command('instagram:process-scheduled')->everyMinute()->withoutOverlapping();
 Schedule::command('instagram:sync-metrics')->everyThirtyMinutes()->withoutOverlapping();
 Schedule::command('instagram:refresh-token')->dailyAt('02:00')->withoutOverlapping();
+Schedule::command('haloapu:sync-tickets')->everyFifteenMinutes()->withoutOverlapping();

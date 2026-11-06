@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\HaloApuTicket;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class WorkspaceActionController extends Controller
@@ -289,6 +291,16 @@ class WorkspaceActionController extends Controller
         $overrides = $request->session()->get('sparc.ticket_overrides', []);
         $overrides[$id] = 'converted';
         $request->session()->put('sparc.ticket_overrides', $overrides);
+
+        if (Schema::hasTable('haloapu_tickets')) {
+            HaloApuTicket::where('id', $id)
+                ->orWhere('haloapu_ticket_id', $id)
+                ->orWhere('haloapu_ticket_id', $validated['ticket_code'] ?? '')
+                ->update([
+                    'sync_status' => 'converted',
+                    'haloapu_status' => 'on_proses',
+                ]);
+        }
 
         $mappedFormat = match ($validated['format']) {
             'carousel_feed' => 'carousel',

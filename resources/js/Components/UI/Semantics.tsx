@@ -135,7 +135,7 @@ export const WORKFLOW_STATUS_META: Record<
         icon: PenTool,
     },
     review_approval: {
-        label: 'Review & Approval',
+        label: 'Review',
         shortLabel: 'Review',
         styleVars: {
             backgroundColor: 'var(--sparc-status-review-bg)',

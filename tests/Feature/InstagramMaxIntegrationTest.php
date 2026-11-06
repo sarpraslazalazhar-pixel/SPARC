@@ -402,12 +402,31 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertSame($publishedPost->id, $comment->content_item_id);
         $this->assertFalse($comment->is_replied);
 
-        // 2. Render centralized IG Comments inbox
+        // 2. Render centralized IG Comments inbox (and test media_id filter & reset)
         $this->get('/instagram/comments')
             ->assertOk()
             ->assertInertia(fn (AssertableInertia $page) => $page
                 ->component('Comments/Index')
                 ->where('summary.unreplied', 1)
+                ->has('comments', 1)
+                ->has('postsWithComments', 1)
+            );
+
+        $this->get('/instagram/comments?media_id=180555999')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Comments/Index')
+                ->where('filters.media_id', '180555999')
+                ->where('summary.total', 1)
+                ->has('comments', 1)
+            );
+
+        $this->get('/instagram/comments?media_id=all')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Comments/Index')
+                ->where('filters.media_id', '')
+                ->where('summary.total', 1)
                 ->has('comments', 1)
             );
 
@@ -558,5 +577,138 @@ class InstagramMaxIntegrationTest extends TestCase
         // Cache hit test: subsequent call does not re-download
         $secondUrl = $service->cacheThumbnailUrl('https://scontent.cdninstagram.com/v/t51.2885-15/dummy.jpg?token=abc', 'test_thumb');
         $this->assertSame($localUrl, $secondUrl);
+    }
+
+    public function test_sync_ads_performance_stores_marketing_api_data(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/me/adaccounts*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'act_1234567890',
+                        'name' => 'SPARC Humas Ads Account',
+                        'account_id' => '1234567890',
+                        'currency' => 'IDR',
+                        'account_status' => 1,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_1234567890/campaigns*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'cmp_1001',
+                        'name' => 'Sosialisasi Kebijakan Publik Q4',
+                        'status' => 'ACTIVE',
+                        'objective' => 'OUTCOME_ENGAGEMENT',
+                        'daily_budget' => '150000',
+                        'budget_remaining' => '450000',
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_1234567890/insights*' => Http::response([
+                'data' => [
+                    [
+                        'campaign_name' => 'Sosialisasi Kebijakan Publik Q4',
+                        'campaign_id' => 'cmp_1001',
+                        'spend' => '1250000.50',
+                        'impressions' => '85000',
+                        'reach' => '62000',
+                        'clicks' => '4200',
+                        'cpc' => '297.62',
+                        'cpm' => '14705.88',
+                        'ctr' => '4.94',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->post(route('settings.instagram.syncAds'));
+        $response->assertRedirect();
+
+        $conn = InstagramConnection::current()->fresh();
+        $this->assertNotNull($conn->ads_data);
+        $this->assertSame('SPARC Humas Ads Account', $conn->ads_data['active_account']['name']);
+        $this->assertEquals(1250000.50, $conn->ads_data['summary']['total_spend']);
+        $this->assertSame(85000, $conn->ads_data['summary']['total_impressions']);
+        $this->assertSame(4200, $conn->ads_data['summary']['total_clicks']);
+    }
+
+    public function test_sync_creator_demographics_and_stories(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222/insights*audience*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'audience_gender_age',
+                        'values' => [
+                            [
+                                'value' => [
+                                    'M.18-24' => 150,
+                                    'F.18-24' => 200,
+                                    'M.25-34' => 300,
+                                    'F.25-34' => 350,
+                                ],
+                            ],
+                        ],
+                    ],
+                    [
+                        'name' => 'audience_country',
+                        'values' => [
+                            [
+                                'value' => [
+                                    'Indonesia' => 950,
+                                    'Malaysia' => 50,
+                                ],
+                            ],
+                        ],
+                    ],
+                    [
+                        'name' => 'audience_city',
+                        'values' => [
+                            [
+                                'value' => [
+                                    'Jakarta' => 500,
+                                    'Surabaya' => 300,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/stories*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'story_9901',
+                        'caption' => 'Update Pelayanan Hari Ini',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://instagram.com/story1.jpg',
+                        'timestamp' => '2026-11-05T08:00:00+0000',
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/story_9901/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 840]]],
+                    ['name' => 'impressions', 'values' => [['value' => 1100]]],
+                    ['name' => 'replies', 'values' => [['value' => 12]]],
+                    ['name' => 'exits', 'values' => [['value' => 45]]],
+                ],
+            ], 200),
+        ]);
+
+        $demoResp = $this->post(route('settings.instagram.syncDemographics'));
+        $demoResp->assertRedirect();
+
+        $storyResp = $this->post(route('settings.instagram.syncStories'));
+        $storyResp->assertRedirect();
+
+        $conn = InstagramConnection::current()->fresh();
+        $this->assertNotNull($conn->demographics_data);
+        $this->assertTrue($conn->demographics_data['has_data']);
+        $this->assertArrayHasKey('Jakarta', $conn->demographics_data['top_cities']);
+
+        $this->assertIsArray($conn->stories_data);
+        $this->assertCount(1, $conn->stories_data);
+        $this->assertSame(840, $conn->stories_data[0]['metrics']['reach']);
     }
 }

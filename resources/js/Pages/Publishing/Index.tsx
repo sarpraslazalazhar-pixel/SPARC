@@ -3,19 +3,28 @@ import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import {
     AlertTriangle,
     CalendarClock,
+    CheckCheck,
     CheckCircle2,
+    ChevronDown,
+    ChevronUp,
     Circle,
     Clock,
     ExternalLink,
+    FileText,
+    HelpCircle,
     Image as ImageIcon,
+    Info,
     Layers,
     Link2,
     Plus,
+    Search,
     Send,
+    ShieldCheck,
     Sparkles,
-    TrendingUp,
+    Trash2,
     Upload,
     Video,
+    X,
     XCircle,
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
@@ -53,15 +62,19 @@ export default function PublishingIndex({
 }: PublishingPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
-    const { error: toastError } = useToast();
+    const { error: toastError, success: toastSuccess } = useToast();
 
     const [pubs, setPubs] = useState<SparcPublication[]>(publications);
     useEffect(() => {
         setPubs(publications);
     }, [publications]);
 
-    const [activeTab, setActiveTab] = useState<'queue' | 'published'>('queue');
+    const [activeTab, setActiveTab] = useState<'queue' | 'schedules' | 'published'>('queue');
     const [platformFilter, setPlatformFilter] = useState('all');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [showGuide, setShowGuide] = useState(true);
+    const [expandedCaptions, setExpandedCaptions] = useState<Record<string, boolean>>({});
+
     const [urlInputs, setUrlInputs] = useState<Record<string, string>>({});
     const [publishingId, setPublishingId] = useState<string | null>(null);
     const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -123,11 +136,11 @@ export default function PublishingIndex({
         igPublishForm.clearErrors();
         igPublishForm.setData({
             publication_id: pub.id,
-            content_item_id: pub.contentItemId || linkedItem?.id || '',
+            content_item_id: pub.contentItemId ?? '',
             media_type: inferredMediaType,
             publish_mode: 'immediate',
             scheduled_at: defaultSched,
-            caption: pub.caption || linkedItem?.caption || pub.title,
+            caption: pub.captionDraft || linkedItem?.caption || '',
             cover_url: '',
             share_to_feed: true,
             media_urls: prefillMediaUrl,
@@ -161,25 +174,44 @@ export default function PublishingIndex({
         });
     };
 
-    const pendingPubs = useMemo(
-        () =>
-            pubs.filter(
-                (p) =>
-                    !p.publishedActualAt &&
-                    (platformFilter === 'all' || p.platform === platformFilter)
-            ),
-        [pubs, platformFilter]
-    );
+    const toggleCaptionExpand = (id: string) => {
+        setExpandedCaptions((prev) => ({ ...prev, [id]: !prev[id] }));
+    };
 
-    const completedPubs = useMemo(
-        () =>
-            pubs.filter(
-                (p) =>
-                    Boolean(p.publishedActualAt) &&
-                    (platformFilter === 'all' || p.platform === platformFilter)
-            ),
-        [pubs, platformFilter]
-    );
+    // Filtered lists
+    const pendingPubs = useMemo(() => {
+        return pubs.filter((p) => {
+            if (Boolean(p.publishedActualAt)) return false;
+            if (platformFilter !== 'all' && p.platform !== platformFilter) return false;
+            if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase();
+                const matchTitle = p.title.toLowerCase().includes(q);
+                const matchCode = p.contentId.toLowerCase().includes(q);
+                const matchPic = p.picName.toLowerCase().includes(q);
+                if (!matchTitle && !matchCode && !matchPic) return false;
+            }
+            return true;
+        });
+    }, [pubs, platformFilter, searchQuery]);
+
+    const completedPubs = useMemo(() => {
+        return pubs.filter((p) => {
+            if (!p.publishedActualAt) return false;
+            if (platformFilter !== 'all' && p.platform !== platformFilter) return false;
+            if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase();
+                const matchTitle = p.title.toLowerCase().includes(q);
+                const matchCode = p.contentId.toLowerCase().includes(q);
+                const matchPic = p.picName.toLowerCase().includes(q);
+                if (!matchTitle && !matchCode && !matchPic) return false;
+            }
+            return true;
+        });
+    }, [pubs, platformFilter, searchQuery]);
+
+    const activeSchedules = useMemo(() => {
+        return igSchedules.filter((s) => ['queued', 'processing', 'failed'].includes(s.status));
+    }, [igSchedules]);
 
     const dueTodayCount = useMemo(
         () =>
@@ -204,9 +236,7 @@ export default function PublishingIndex({
 
         setPubs((curr) =>
             curr.map((p) => {
-                if (p.id !== pubId) {
-                    return p;
-                }
+                if (p.id !== pubId) return p;
                 return {
                     ...p,
                     checklist: p.checklist.map((c) =>
@@ -224,10 +254,40 @@ export default function PublishingIndex({
                 preserveState: true,
                 onError: () => {
                     setPubs(previousSnapshot);
-                    toastError(
-                        'Gagal Memperbarui Checklist',
-                        'Perubahan status pra-publikasi belum tersimpan.'
-                    );
+                    toastError('Gagal Memperbarui Checklist', 'Perubahan status pra-publikasi belum tersimpan.');
+                },
+            }
+        );
+    };
+
+    const handleBulkChecklist = (pubId: string, checkAll: boolean) => {
+        if (!can?.managePublishing) return;
+        const previousSnapshot = pubs;
+
+        setPubs((curr) =>
+            curr.map((p) => {
+                if (p.id !== pubId) return p;
+                return {
+                    ...p,
+                    checklist: p.checklist.map((c) => ({ ...c, checked: checkAll })),
+                };
+            })
+        );
+
+        router.patch(
+            `/publications/${pubId}/checklist`,
+            { key: '__all__', checked: checkAll },
+            {
+                preserveScroll: true,
+                preserveState: true,
+                onSuccess: () => {
+                    if (checkAll) {
+                        toastSuccess('Semua Checklist Lolos QC', 'Siap untuk dipublikasikan.');
+                    }
+                },
+                onError: () => {
+                    setPubs(previousSnapshot);
+                    toastError('Gagal Memperbarui Checklist', 'Gagal memproses centang massal.');
                 },
             }
         );
@@ -275,31 +335,97 @@ export default function PublishingIndex({
 
     return (
         <AppLayout
-            title="Publishing & Optimization"
-            subtitle="Kontrol kualitas pra-publikasi per kanal, verifikasi tautan tayang resmi, dan serah-terima ke pelaporan performa"
+            title="Publishing &amp; Optimization"
+            subtitle="Pusat kendali mutu (QC) pra-publikasi kanal, penayangan otomatis Meta Graph API, dan konfirmasi bukti tayang"
             actions={
-                can?.managePublishing ? (
+                <div className="flex items-center gap-2">
                     <Button
-                        variant="primary"
+                        type="button"
+                        variant="outline"
                         size="sm"
-                        icon={<Plus className="w-3.5 h-3.5" />}
-                        onClick={() => {
-                            createSlotForm.clearErrors();
-                            setCreateModalOpen(true);
-                        }}
+                        icon={<HelpCircle className="w-3.5 h-3.5" />}
+                        onClick={() => setShowGuide((v) => !v)}
                     >
-                        Slot Publikasi Baru
+                        {showGuide ? 'Tutup Panduan' : 'Panduan Alur'}
                     </Button>
-                ) : undefined
+                    {can?.managePublishing && (
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            icon={<Plus className="w-3.5 h-3.5" />}
+                            onClick={() => {
+                                createSlotForm.clearErrors();
+                                setCreateModalOpen(true);
+                            }}
+                        >
+                            Slot Publikasi Baru
+                        </Button>
+                    )}
+                </div>
             }
         >
-            <Head title="Publishing & Optimization - SPARC" />
+            <Head title="Publishing &amp; Optimization - SPARC" />
 
             <div className="space-y-5">
+                {/* Visual Pipeline Guide Banner */}
+                {showGuide && (
+                    <div className="p-4 rounded-3xl border border-[var(--md-sys-color-primary)]/25 bg-[var(--md-sys-color-primary-container)]/30 text-[var(--md-sys-color-on-surface)] space-y-3 relative">
+                        <button
+                            type="button"
+                            onClick={() => setShowGuide(false)}
+                            className="absolute right-3.5 top-3.5 text-[var(--md-sys-color-on-surface-muted)] hover:text-[var(--md-sys-color-on-surface)] p-1 rounded-lg"
+                            title="Tutup panduan"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+
+                        <div className="flex items-center gap-2">
+                            <ShieldCheck className="w-5 h-5 text-[var(--md-sys-color-primary)] shrink-0" />
+                            <h3 className="text-sm font-bold">
+                                Cara Kerja Meja Publikasi SPARC v3
+                            </h3>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs pt-1">
+                            <div className="p-3 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)]/80 space-y-1">
+                                <span className="font-extrabold text-[var(--md-sys-color-primary)] flex items-center gap-1.5">
+                                    <span className="w-4 h-4 rounded-full bg-[var(--md-sys-color-primary)] text-white text-[10px] inline-flex items-center justify-center font-bold">1</span>
+                                    Quality Control (QC)
+                                </span>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] leading-relaxed">
+                                    Centang kelayakan naskah, kesesuaian rasio desain/cover, mention akun pimpinan/mitra, dan tagar resmi per kanal.
+                                </p>
+                            </div>
+
+                            <div className="p-3 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)]/80 space-y-1">
+                                <span className="font-extrabold text-[var(--md-sys-color-primary)] flex items-center gap-1.5">
+                                    <span className="w-4 h-4 rounded-full bg-[var(--md-sys-color-primary)] text-white text-[10px] inline-flex items-center justify-center font-bold">2</span>
+                                    Eksekusi Penayangan
+                                </span>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] leading-relaxed">
+                                    <strong>Instagram:</strong> Publish instan / jadwalkan otomatis via Meta Graph API.
+                                    <br />
+                                    <strong>Kanal Lain:</strong> Tayangkan di medsos terkait, lalu tempelkan URL bukti postingan.
+                                </p>
+                            </div>
+
+                            <div className="p-3 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)]/80 space-y-1">
+                                <span className="font-extrabold text-[var(--md-sys-color-primary)] flex items-center gap-1.5">
+                                    <span className="w-4 h-4 rounded-full bg-[var(--md-sys-color-primary)] text-white text-[10px] inline-flex items-center justify-center font-bold">3</span>
+                                    Otomatisasi Lanjutan
+                                </span>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] leading-relaxed">
+                                    Status konten terkunci sebagai <strong>Published</strong>, analitik performa aktif, dan tiket HaloAPU yang terhubung <strong>otomatis diselesaikan (Solve)</strong>.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Summary KPI Strip */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">
-                        <span className="sparc-eyebrow block">Antrean Menunggu Tayang</span>
+                        <span className="sparc-eyebrow block">Antrean QC Pra-Publikasi</span>
                         <span className="sparc-code-id text-2xl font-black text-[var(--md-sys-color-on-surface)] mt-1 block">
                             {pubs.filter((p) => !p.publishedActualAt).length}
                         </span>
@@ -317,6 +443,12 @@ export default function PublishingIndex({
                         </span>
                     </div>
                     <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">
+                        <span className="sparc-eyebrow block">Jadwal Auto-Publish IG</span>
+                        <span className="sparc-code-id text-2xl font-black text-purple-600 dark:text-purple-400 mt-1 block">
+                            {activeSchedules.length}
+                        </span>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">
                         <span className="sparc-eyebrow block">Telah Resmi Tayang</span>
                         <span className="sparc-code-id text-2xl font-black text-[var(--md-sys-color-secondary)] mt-1 block">
                             {pubs.filter((p) => Boolean(p.publishedActualAt)).length}
@@ -324,13 +456,17 @@ export default function PublishingIndex({
                     </div>
                 </div>
 
-                {/* Tabs & Platform Filter */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                {/* Filter Bar: Tabs, Platform, and Quick Search */}
+                <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] p-3.5 rounded-3xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <Tabs
                         tabs={[
                             {
                                 id: 'queue',
-                                label: `Antrean Pra-Publikasi (${pendingPubs.length})`,
+                                label: `Antrean QC (${pendingPubs.length})`,
+                            },
+                            {
+                                id: 'schedules',
+                                label: `Jadwal Auto-Publish IG (${activeSchedules.length})`,
                             },
                             {
                                 id: 'published',
@@ -338,35 +474,48 @@ export default function PublishingIndex({
                             },
                         ]}
                         activeTab={activeTab}
-                        onChange={(id) => setActiveTab(id as 'queue' | 'published')}
+                        onChange={(id) => setActiveTab(id as 'queue' | 'schedules' | 'published')}
                     />
 
-                    <select
-                        aria-label="Filter kanal publikasi"
-                        value={platformFilter}
-                        onChange={(e) => setPlatformFilter(e.target.value)}
-                        className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
-                    >
-                        <option value="all">Semua Kanal Distribusi</option>
-                        <option value="instagram">Instagram</option>
-                        <option value="tiktok">TikTok</option>
-                        <option value="youtube">YouTube</option>
-                        <option value="website">Website Resmi</option>
-                        <option value="whatsapp">WhatsApp Broadcast</option>
-                    </select>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <select
+                            aria-label="Filter kanal publikasi"
+                            value={platformFilter}
+                            onChange={(e) => setPlatformFilter(e.target.value)}
+                            className="h-9 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
+                        >
+                            <option value="all">Semua Kanal Distribusi</option>
+                            <option value="instagram">Instagram</option>
+                            <option value="tiktok">TikTok</option>
+                            <option value="youtube">YouTube</option>
+                            <option value="website">Website Resmi</option>
+                            <option value="whatsapp">WhatsApp Broadcast</option>
+                        </select>
+
+                        <div className="relative w-full sm:w-56">
+                            <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[var(--md-sys-color-on-surface-muted)] pointer-events-none" />
+                            <input
+                                type="search"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Cari judul / kode..."
+                                className="w-full h-9 pl-8 pr-3 text-xs rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface)] focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25"
+                            />
+                        </div>
+                    </div>
                 </div>
 
-                {/* TAB 1: PENDING PRE-PUBLISH CHECKLIST QUEUE */}
+                {/* TAB 1: QC PRE-PUBLISH QUEUE */}
                 {activeTab === 'queue' && (
                     <div className="space-y-4">
                         {pendingPubs.length === 0 ? (
                             <div className="p-12 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] text-center space-y-2">
                                 <CheckCircle2 className="w-9 h-9 text-[var(--md-sys-color-secondary)] mx-auto" />
                                 <p className="text-sm font-bold text-[var(--md-sys-color-on-surface)]">
-                                    Seluruh antrean publikasi kanal terpilih telah tuntas
+                                    Seluruh antrean pra-publikasi telah tuntas
                                 </p>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
-                                    Konten yang disetujui ke tahap Siap Tayang akan otomatis muncul di sini beserta checklist kanalnya.
+                                    Konten yang telah disetujui pimpinan ke tahap <strong>Siap Tayang</strong> di Content Planner akan otomatis muncul di sini.
                                 </p>
                             </div>
                         ) : (
@@ -378,16 +527,33 @@ export default function PublishingIndex({
                                 const isOverdue = schedDate < today;
                                 const isToday = schedDate === today;
 
+                                const linkedItem = contentItems.find(
+                                    (ci) => ci.id === pub.contentItemId || ci.contentId === pub.contentId
+                                );
+                                const designUrl = pub.mediaPreviewUrl || linkedItem?.resultDesignUrl;
+                                const isCaptionExpanded = Boolean(expandedCaptions[pub.id]);
+                                const captionText = pub.captionDraft || linkedItem?.caption || '';
+
                                 return (
                                     <div
                                         key={pub.id}
-                                        className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] p-5 space-y-4"
+                                        className={`bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border shadow-[var(--md-elevation-1)] p-5 space-y-4 transition-all ${
+                                            allReady
+                                                ? 'border-emerald-500/50'
+                                                : 'border-[var(--md-sys-color-outline-variant)]'
+                                        }`}
                                     >
-                                        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 pb-3.5 border-b border-[var(--md-sys-color-outline-variant)]/70">
+                                        {/* Card Header */}
+                                        <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 pb-3 border-b border-[var(--md-sys-color-outline-variant)]/70">
                                             <div className="space-y-1.5 min-w-0">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <ContentIdBadge contentId={pub.contentId} />
                                                     <PlatformChip platform={pub.platform} />
+                                                    {linkedItem?.haloapuTicketId && (
+                                                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-700 dark:text-blue-300">
+                                                            Tiket #{linkedItem.haloapuTicketId} (Auto-solve aktif)
+                                                        </span>
+                                                    )}
                                                     {isOverdue && (
                                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[var(--md-sys-color-error-container)] text-[var(--md-sys-color-on-error-container)]">
                                                             <AlertTriangle className="w-3 h-3" /> Melewati Jadwal ({pub.scheduledAt})
@@ -400,7 +566,7 @@ export default function PublishingIndex({
                                                     )}
                                                     {!isOverdue && !isToday && (
                                                         <span className="sparc-code-id text-xs text-[var(--md-sys-color-on-surface-variant)]">
-                                                            Jadwal: {pub.scheduledAt} WIB
+                                                            Rencana Tayang: {pub.scheduledAt} WIB
                                                         </span>
                                                     )}
                                                 </div>
@@ -409,53 +575,112 @@ export default function PublishingIndex({
                                                     {pub.title}
                                                 </h3>
                                                 <p className="text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Publisher PIC: {pub.picName}
+                                                    Penanggung Jawab Distribusi: <strong>{pub.picName}</strong>
                                                 </p>
                                             </div>
 
-                                            <div className="flex items-center gap-2 shrink-0">
+                                            <div className="flex items-center gap-2 shrink-0 self-start">
+                                                {/* Checklist Status Pill */}
                                                 <span
-                                                    className={`sparc-code-id px-2.5 py-1 rounded-full text-xs font-bold border ${
+                                                    className={`sparc-code-id px-2.5 py-1 rounded-full text-xs font-bold border flex items-center gap-1 ${
                                                         allReady
-                                                            ? 'bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)] border-[var(--md-sys-color-secondary)]/30'
+                                                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
                                                             : 'bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface-variant)] border-[var(--md-sys-color-outline-variant)]'
                                                     }`}
                                                 >
-                                                    Checklist {checkedCount}/{totalCount}
+                                                    {allReady ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <Circle className="w-3 h-3" />}
+                                                    QC {checkedCount}/{totalCount}
                                                 </span>
+
+                                                {/* Bulk Check All QC Shortcut */}
+                                                {can?.managePublishing && (
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        icon={<CheckCheck className="w-3.5 h-3.5" />}
+                                                        onClick={() => handleBulkChecklist(pub.id, !allReady)}
+                                                        title={allReady ? 'Batalkan seluruh centang' : 'Centang semua butir QC'}
+                                                    >
+                                                        {allReady ? 'Reset QC' : 'Centang Semua'}
+                                                    </Button>
+                                                )}
                                             </div>
                                         </div>
 
-                                        {/* Channel Pre-Publish Optimization Checklist */}
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                            {pub.checklist.map((item) => (
-                                                <button
-                                                    key={item.key}
-                                                    type="button"
-                                                    disabled={!can?.managePublishing}
-                                                    onClick={() =>
-                                                        handleToggleChecklist(
-                                                            pub.id,
-                                                            item.key,
-                                                            item.checked
-                                                        )
-                                                    }
-                                                    className={`p-2.5 rounded-xl border text-left flex items-start gap-2.5 text-xs transition-colors cursor-pointer disabled:cursor-default ${
-                                                        item.checked
-                                                            ? 'bg-[var(--md-sys-color-secondary-container)]/35 border-[var(--md-sys-color-secondary)]/35 text-[var(--md-sys-color-on-surface)]'
-                                                            : 'bg-[var(--md-sys-color-surface-container-low)] border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface-variant)] hover:border-[var(--md-sys-color-primary)]/40'
-                                                    }`}
-                                                >
-                                                    {item.checked ? (
-                                                        <CheckCircle2 className="w-4 h-4 text-[var(--md-sys-color-secondary)] shrink-0 mt-0.5" />
-                                                    ) : (
-                                                        <Circle className="w-4 h-4 text-[var(--md-sys-color-on-surface-muted)] shrink-0 mt-0.5" />
-                                                    )}
-                                                    <span className="font-medium leading-snug">
-                                                        {item.label}
+                                        {/* Material & Caption Inspection Strip */}
+                                        {(designUrl || captionText) && (
+                                            <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] space-y-2 text-xs">
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                    <span className="sparc-eyebrow flex items-center gap-1">
+                                                        <FileText className="w-3 h-3" /> Materi &amp; Naskah Tayang
                                                     </span>
-                                                </button>
-                                            ))}
+                                                    {designUrl && (
+                                                        <a
+                                                            href={designUrl}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center gap-1 text-[11px] font-bold text-[var(--md-sys-color-primary)] hover:underline"
+                                                        >
+                                                            Buka Desain / Video Final <ExternalLink className="w-3 h-3" />
+                                                        </a>
+                                                    )}
+                                                </div>
+
+                                                {captionText && (
+                                                    <div className="text-[11px] text-[var(--md-sys-color-on-surface)] space-y-1">
+                                                        <p className={isCaptionExpanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}>
+                                                            {captionText}
+                                                        </p>
+                                                        {captionText.length > 120 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleCaptionExpand(pub.id)}
+                                                                className="text-[10px] font-bold text-[var(--md-sys-color-primary)] hover:underline block"
+                                                            >
+                                                                {isCaptionExpanded ? 'Sembunyikan' : 'Baca Caption Lengkap...'}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Channel Pre-Publish Optimization Checklist */}
+                                        <div className="space-y-1.5">
+                                            <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-muted)] block">
+                                                Quality Control Pra-Publikasi ({pub.platform.toUpperCase()}):
+                                            </span>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                {pub.checklist.map((item) => (
+                                                    <button
+                                                        key={item.key}
+                                                        type="button"
+                                                        disabled={!can?.managePublishing}
+                                                        onClick={() =>
+                                                            handleToggleChecklist(
+                                                                pub.id,
+                                                                item.key,
+                                                                item.checked
+                                                            )
+                                                        }
+                                                        className={`p-2.5 rounded-xl border text-left flex items-start gap-2.5 text-xs transition-colors cursor-pointer disabled:cursor-default ${
+                                                            item.checked
+                                                                ? 'bg-emerald-500/10 border-emerald-500/35 text-[var(--md-sys-color-on-surface)]'
+                                                                : 'bg-[var(--md-sys-color-surface-container-low)] border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface-variant)] hover:border-[var(--md-sys-color-primary)]/40'
+                                                        }`}
+                                                    >
+                                                        {item.checked ? (
+                                                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                                                        ) : (
+                                                            <Circle className="w-4 h-4 text-[var(--md-sys-color-on-surface-muted)] shrink-0 mt-0.5" />
+                                                        )}
+                                                        <span className="font-medium leading-snug">
+                                                            {item.label}
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </div>
                                         </div>
 
                                         {/* Active Instagram Schedule Status Banner */}
@@ -512,69 +737,84 @@ export default function PublishingIndex({
                                             );
                                         })()}
 
-                                        {/* Mark as Live Form & Direct IG Publish Trigger */}
+                                        {/* Execution Gate Area */}
                                         {can?.managePublishing && (
-                                            <form
-                                                onSubmit={(e) => handleMarkPublished(e, pub)}
-                                                className="pt-3 border-t border-[var(--md-sys-color-outline-variant)]/60 flex flex-col lg:flex-row lg:items-center gap-2.5"
-                                                noValidate
-                                            >
-                                                <div className="relative flex-1">
-                                                    <Link2 className="w-4 h-4 absolute left-3 top-2.5 text-[var(--md-sys-color-on-surface-muted)] pointer-events-none" />
-                                                    <input
-                                                        type="url"
-                                                        aria-label={`URL bukti tayang ${pub.contentId}`}
-                                                        placeholder={
-                                                            allReady
-                                                                ? 'Tempel URL postingan tayang resmi (https://...) atau gunakan Direct Publish IG...'
-                                                                : 'Lengkapi seluruh checklist kanal di atas sebelum menandai tayang'
-                                                        }
-                                                        disabled={!allReady}
-                                                        value={urlInputs[pub.id] ?? ''}
-                                                        onChange={(e) =>
-                                                            setUrlInputs((prev) => ({
-                                                                ...prev,
-                                                                [pub.id]: e.target.value,
-                                                            }))
-                                                        }
-                                                        className="w-full h-9 pl-9 pr-3 text-xs rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface)] disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25"
-                                                    />
-                                                </div>
-                                                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                                                    {pub.platform === 'instagram' && (
+                                            <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)]/60 space-y-2">
+                                                {!allReady ? (
+                                                    <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-xs text-[var(--md-sys-color-on-surface-muted)] flex items-center gap-2">
+                                                        <Info className="w-4 h-4 text-amber-500 shrink-0" />
+                                                        <span>
+                                                            Lengkapi <strong>{totalCount - checkedCount}</strong> checklist QC di atas untuk mengaktifkan tombol eksekusi publikasi.
+                                                        </span>
+                                                    </div>
+                                                ) : (
+                                                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-2">
+                                                        <span className="font-bold flex items-center gap-1.5">
+                                                            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                                            Lolos Quality Control — Pilih metode penayangan:
+                                                        </span>
+                                                    </div>
+                                                )}
+
+                                                <form
+                                                    onSubmit={(e) => handleMarkPublished(e, pub)}
+                                                    className="flex flex-col lg:flex-row lg:items-center gap-2.5"
+                                                    noValidate
+                                                >
+                                                    <div className="relative flex-1">
+                                                        <Link2 className="w-4 h-4 absolute left-3 top-2.5 text-[var(--md-sys-color-on-surface-muted)] pointer-events-none" />
+                                                        <input
+                                                            type="url"
+                                                            aria-label={`URL bukti tayang ${pub.contentId}`}
+                                                            placeholder={
+                                                                allReady
+                                                                    ? 'Opsi B: Tempel URL postingan tayang resmi (https://instagram.com/p/... atau tiktok.com/...)'
+                                                                    : 'Selesaikan QC untuk mengaktifkan input URL bukti tayang'
+                                                            }
+                                                            disabled={!allReady}
+                                                            value={urlInputs[pub.id] ?? ''}
+                                                            onChange={(e) =>
+                                                                setUrlInputs((prev) => ({
+                                                                    ...prev,
+                                                                    [pub.id]: e.target.value,
+                                                                }))
+                                                            }
+                                                            className="w-full h-9 pl-9 pr-3 text-xs rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-[var(--md-sys-color-on-surface)] disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25"
+                                                        />
+                                                    </div>
+
+                                                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                                        {pub.platform === 'instagram' && (
+                                                            <Button
+                                                                type="button"
+                                                                variant="primary"
+                                                                size="sm"
+                                                                disabled={!allReady}
+                                                                title="Publikasikan langsung atau jadwalkan otomatis via Meta Graph API"
+                                                                className={
+                                                                    allReady
+                                                                        ? 'bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 text-white border-0 hover:opacity-95 shadow-xs'
+                                                                        : ''
+                                                                }
+                                                                icon={<Sparkles className="w-3.5 h-3.5" />}
+                                                                onClick={() => openIgPublishModal(pub)}
+                                                            >
+                                                                Direct Publish / Jadwal IG
+                                                            </Button>
+                                                        )}
                                                         <Button
-                                                            type="button"
-                                                            variant="secondary"
+                                                            type="submit"
+                                                            variant={pub.platform === 'instagram' ? 'secondary' : 'primary'}
                                                             size="sm"
                                                             disabled={!allReady}
-                                                            title={
-                                                                allReady
-                                                                    ? 'Publikasikan langsung atau jadwalkan otomatis via Meta Graph API'
-                                                                    : 'Centang 100% checklist pra-publikasi terlebih dahulu'
-                                                            }
-                                                            className={
-                                                                allReady
-                                                                    ? 'bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 text-white border-0 hover:opacity-95'
-                                                                    : ''
-                                                            }
-                                                            icon={<Sparkles className="w-3.5 h-3.5" />}
-                                                            onClick={() => openIgPublishModal(pub)}
+                                                            isLoading={publishingId === pub.id}
+                                                            icon={<Send className="w-3.5 h-3.5" />}
                                                         >
-                                                            Publish / Jadwalkan ke IG
+                                                            Tandai Resmi Tayang
                                                         </Button>
-                                                    )}
-                                                    <Button
-                                                        type="submit"
-                                                        variant="primary"
-                                                        size="sm"
-                                                        disabled={!allReady}
-                                                        isLoading={publishingId === pub.id}
-                                                        icon={<Send className="w-3.5 h-3.5" />}
-                                                    >
-                                                        Tandai Resmi Tayang
-                                                    </Button>
-                                                </div>
-                                            </form>
+                                                    </div>
+                                                </form>
+                                            </div>
                                         )}
                                     </div>
                                 );
@@ -583,74 +823,171 @@ export default function PublishingIndex({
                     </div>
                 )}
 
-                {/* TAB 2: PUBLISHED HISTORY */}
+                {/* TAB 2: SCHEDULED INSTAGRAM QUEUE */}
+                {activeTab === 'schedules' && (
+                    <div className="space-y-4">
+                        <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center gap-2">
+                                <CalendarClock className="w-4 h-4 text-purple-600 shrink-0" />
+                                <span>
+                                    Scheduler otomatis berjalan setiap <strong>1 menit</strong> via command <code>instagram:process-scheduled</code>.
+                                </span>
+                            </div>
+                            <span className="font-bold text-purple-700 dark:text-purple-300">
+                                {activeSchedules.length} Antrean Aktif
+                            </span>
+                        </div>
+
+                        {activeSchedules.length === 0 ? (
+                            <div className="p-12 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] text-center space-y-2">
+                                <CalendarClock className="w-9 h-9 text-[var(--md-sys-color-on-surface-muted)] mx-auto" />
+                                <p className="text-sm font-bold text-[var(--md-sys-color-on-surface)]">
+                                    Tidak ada jadwal Auto-Publish Instagram aktif
+                                </p>
+                                <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                    Buka antrean pra-publikasi di atas dan gunakan tombol <strong>Direct Publish / Jadwal IG</strong> untuk menjadwalkan penayangan otomatis.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {activeSchedules.map((sched) => (
+                                    <div
+                                        key={sched.id}
+                                        className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                                    >
+                                        <div className="space-y-1 min-w-0">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                {sched.contentCode && <ContentIdBadge contentId={sched.contentCode} />}
+                                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-500/15 text-purple-700 dark:text-purple-300">
+                                                    {sched.mediaType}
+                                                </span>
+                                                <span
+                                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                        sched.status === 'queued'
+                                                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                                            : sched.status === 'processing'
+                                                              ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                                                              : 'bg-red-500/15 text-red-700 dark:text-red-300'
+                                                    }`}
+                                                >
+                                                    {sched.status === 'queued'
+                                                        ? 'Menunggu Jam Tayang'
+                                                        : sched.status === 'processing'
+                                                          ? 'Sedang Diproses Meta'
+                                                          : 'Gagal Dieksekusi'}
+                                                </span>
+                                            </div>
+                                            <h4 className="text-sm font-bold text-[var(--md-sys-color-on-surface)] truncate">
+                                                {sched.contentTitle || `Publikasi #${sched.publicationSlotId}`}
+                                            </h4>
+                                            <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] flex items-center gap-1.5">
+                                                <Clock className="w-3.5 h-3.5" />
+                                                Waktu Tayang: <strong>{sched.scheduledAt} WIB</strong>
+                                            </p>
+                                            {sched.errorMessage && (
+                                                <p className="text-xs text-red-600 dark:text-red-400 font-medium pt-1">
+                                                    Penyebab: {sched.errorMessage}
+                                                </p>
+                                            )}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            {sched.permalink && (
+                                                <a
+                                                    href={sched.permalink}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-1 text-xs font-bold text-[var(--md-sys-color-primary)] hover:underline"
+                                                >
+                                                    Buka di IG <ExternalLink className="w-3.5 h-3.5" />
+                                                </a>
+                                            )}
+                                            {can?.managePublishing && sched.status === 'queued' && (
+                                                <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    isLoading={cancellingScheduleId === sched.id}
+                                                    icon={<XCircle className="w-3.5 h-3.5" />}
+                                                    onClick={() => handleCancelIgSchedule(sched.id)}
+                                                >
+                                                    Batalkan Jadwal
+                                                </Button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* TAB 3: PUBLISHED HISTORY */}
                 {activeTab === 'published' && (
                     <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-xs border-collapse">
-                                <thead>
-                                    <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
-                                        <th className="py-3 px-4">Kode & Judul</th>
-                                        <th className="py-3 px-3">Kanal</th>
-                                        <th className="py-3 px-3">Waktu Tayang Aktual</th>
-                                        <th className="py-3 px-3">Publisher</th>
-                                        <th className="py-3 px-3">Status Metrik</th>
-                                        <th className="py-3 px-4 text-right">Tautan</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                    {completedPubs.map((pub) => (
-                                        <tr key={pub.id} className="notion-row">
-                                            <td className="py-3.5 px-4">
-                                                <div className="flex items-center gap-2 mb-0.5">
-                                                    <ContentIdBadge contentId={pub.contentId} />
-                                                </div>
-                                                <span className="font-bold text-[var(--md-sys-color-on-surface)]">
-                                                    {pub.title}
-                                                </span>
-                                            </td>
-                                            <td className="py-3.5 px-3 whitespace-nowrap">
-                                                <PlatformChip platform={pub.platform} />
-                                            </td>
-                                            <td className="py-3.5 px-3 sparc-code-id text-[var(--md-sys-color-on-surface-variant)] whitespace-nowrap">
-                                                {pub.publishedActualAt} WIB
-                                            </td>
-                                            <td className="py-3.5 px-3 text-[var(--md-sys-color-on-surface-variant)] whitespace-nowrap">
-                                                {pub.picName}
-                                            </td>
-                                            <td className="py-3.5 px-3 whitespace-nowrap">
-                                                {pub.metrics && pub.metrics.reach !== null ? (
-                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)]">
-                                                        <CheckCircle2 className="w-3 h-3" /> Tercatat ({pub.metrics.source})
-                                                    </span>
-                                                ) : (
-                                                    <Link
-                                                        href="/report"
-                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--md-sys-color-tertiary-container)] text-[var(--md-sys-color-on-tertiary-container)] hover:underline"
-                                                    >
-                                                        <TrendingUp className="w-3 h-3" /> Input Metrik H+3
-                                                    </Link>
-                                                )}
-                                            </td>
-                                            <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                                                {pub.publishedUrl ? (
-                                                    <a
-                                                        href={pub.publishedUrl}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className="inline-flex items-center gap-1 font-bold text-[var(--md-sys-color-primary)] hover:underline"
-                                                    >
-                                                        Buka Postingan <ExternalLink className="w-3.5 h-3.5" />
-                                                    </a>
-                                                ) : (
-                                                    <span className="text-[var(--md-sys-color-on-surface-muted)]">—</span>
-                                                )}
-                                            </td>
+                        {completedPubs.length === 0 ? (
+                            <div className="p-12 text-center space-y-2">
+                                <CheckCircle2 className="w-9 h-9 text-[var(--md-sys-color-on-surface-muted)] mx-auto" />
+                                <p className="text-sm font-bold text-[var(--md-sys-color-on-surface)]">
+                                    Belum ada riwayat publikasi resmi pada filter ini
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs border-collapse">
+                                    <thead>
+                                        <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
+                                            <th className="py-3 px-4">Kode &amp; Judul</th>
+                                            <th className="py-3 px-3">Kanal</th>
+                                            <th className="py-3 px-3">Waktu Tayang Aktual</th>
+                                            <th className="py-3 px-3">Publisher</th>
+                                            <th className="py-3 px-3">Tautan Bukti Tayang</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                    </thead>
+                                    <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
+                                        {completedPubs.map((pub) => (
+                                            <tr key={pub.id} className="notion-row">
+                                                <td className="py-3 px-4 max-w-sm">
+                                                    <div className="space-y-0.5 min-w-0">
+                                                        <ContentIdBadge contentId={pub.contentId} />
+                                                        <span className="font-bold text-[var(--md-sys-color-on-surface)] block truncate">
+                                                            {pub.title}
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <td className="py-3 px-3 whitespace-nowrap">
+                                                    <PlatformChip platform={pub.platform} />
+                                                </td>
+                                                <td className="py-3 px-3 whitespace-nowrap font-medium text-[var(--md-sys-color-on-surface)]">
+                                                    <span className="sparc-code-id">
+                                                        {pub.publishedActualAt || '-'}
+                                                    </span>
+                                                </td>
+                                                <td className="py-3 px-3 whitespace-nowrap text-[var(--md-sys-color-on-surface-muted)]">
+                                                    {pub.picName}
+                                                </td>
+                                                <td className="py-3 px-4 whitespace-nowrap">
+                                                    {pub.publishedUrl ? (
+                                                        <a
+                                                            href={pub.publishedUrl}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center gap-1 font-semibold text-[var(--md-sys-color-primary)] hover:underline"
+                                                        >
+                                                            Lihat Postingan <ExternalLink className="w-3 h-3" />
+                                                        </a>
+                                                    ) : (
+                                                        <span className="text-[var(--md-sys-color-on-surface-muted)] italic">
+                                                            Tanpa URL
+                                                        </span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -727,7 +1064,7 @@ export default function PublishingIndex({
             <Modal
                 isOpen={Boolean(igModalPub)}
                 onClose={() => setIgModalPub(null)}
-                title="Direct Publish & Auto-Schedule Instagram"
+                title="Direct Publish &amp; Auto-Schedule Instagram"
                 description={
                     igModalPub
                         ? `${igModalPub.contentId} — ${igModalPub.title}`
@@ -872,7 +1209,7 @@ export default function PublishingIndex({
                         <div className="flex items-center justify-between gap-2">
                             <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] flex items-center gap-1.5">
                                 <Upload className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
-                                Sumber Media (Hybrid: Upload File Lokal / URL Publik HTTPS)
+                                Sumber Media (Upload File / URL HTTPS Publik)
                             </span>
                             {igPublishForm.data.media_type === 'REELS' && (
                                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
@@ -883,15 +1220,15 @@ export default function PublishingIndex({
 
                         {isLocalStorage && igPublishForm.data.media_type !== 'REELS' && (
                             <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-800 dark:text-amber-200">
-                                <strong>Catatan Localhost:</strong> Server Anda berjalan di domain lokal. Meta Graph API mewajibkan URL HTTPS publik untuk <strong>Foto / Carousel</strong> (unggah file lokal langsung ke server Meta hanya didukung untuk <strong>Reels</strong>). Tempel tautan gambar HTTPS publik di bawah.
+                                <strong>Catatan Localhost:</strong> Server Anda berjalan di domain lokal. Meta Graph API mewajibkan URL HTTPS publik untuk <strong>Foto / Carousel</strong>. Untuk <strong>Reels</strong>, unggah berkas video lokal MP4/MOV langsung didukung tanpa URL publik.
                             </div>
                         )}
 
                         <div className="space-y-1">
                             <label className="block text-[11px] font-semibold text-[var(--md-sys-color-on-surface-variant)]">
                                 {igPublishForm.data.media_type === 'REELS'
-                                    ? 'Unggah File Video MP4/MOV dari Komputer (Bekerja di Localhost & Server Publik)'
-                                    : 'Unggah File Gambar/Video (Server berdomain publik HTTPS)'}
+                                    ? 'Unggah Berkas Video MP4/MOV dari Komputer'
+                                    : 'Unggah Berkas Gambar/Video'}
                             </label>
                             <input
                                 type="file"
@@ -927,7 +1264,7 @@ export default function PublishingIndex({
                             label={
                                 igPublishForm.data.media_type === 'CAROUSEL'
                                     ? 'Atau Tempel Tautan Media HTTPS Publik (1 URL per baris, 2–10 slide)'
-                                    : 'Atau Tempel Tautan Media HTTPS Publik (Langsung ke file .jpg / .mp4)'
+                                    : 'Atau Tempel Tautan Media HTTPS Publik (File .jpg / .mp4)'
                             }
                             rows={igPublishForm.data.media_type === 'CAROUSEL' ? 3 : 2}
                             placeholder={
@@ -964,7 +1301,7 @@ export default function PublishingIndex({
                     </div>
 
                     <Textarea
-                        label="Caption Resmi & Hashtag (Maks. 2.200 Karakter)"
+                        label="Caption Resmi &amp; Hashtag (Maks. 2.200 Karakter)"
                         rows={4}
                         value={igPublishForm.data.caption}
                         onChange={(e) => igPublishForm.setData('caption', e.target.value)}

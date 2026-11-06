@@ -1,11 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Head, useForm, usePage } from '@inertiajs/react';
+import { Head, router, useForm, usePage } from '@inertiajs/react';
 import {
     AlertTriangle,
     CheckCircle2,
+    Eye,
+    EyeOff,
     Mail,
     Search,
     Shield,
+    Sparkles,
+    Trash2,
     UserPlus,
     Users,
 } from 'lucide-react';
@@ -34,6 +38,16 @@ const ROLE_KEYS: UserRoleKey[] = [
     'publisher',
     'viewer',
 ];
+function generateRandomPassword(): string {
+    const letters = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ';
+    const digits = '23456789';
+    const symbols = '!@#$%&*';
+    let pwd = '';
+    for (let i = 0; i < 6; i++) pwd += letters[Math.floor(Math.random() * letters.length)];
+    for (let i = 0; i < 3; i++) pwd += digits[Math.floor(Math.random() * digits.length)];
+    for (let i = 0; i < 2; i++) pwd += symbols[Math.floor(Math.random() * symbols.length)];
+    return pwd.split('').sort(() => Math.random() - 0.5).join('');
+}
 
 export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
@@ -43,7 +57,9 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
     const [searchQuery, setSearchQuery] = useState('');
     const [roleFilter, setRoleFilter] = useState<'all' | UserRoleKey>('all');
     const [inviteModalOpen, setInviteModalOpen] = useState(false);
-
+    const [updatingId, setUpdatingId] = useState<string | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<SparcTeamMember | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
     const filteredTeam = useMemo(() => {
         return team.filter((member) => {
             if (roleFilter !== 'all' && !member.roles.includes(roleFilter)) {
@@ -64,25 +80,44 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
     const inviteForm = useForm({
         name: '',
         email: '',
+        role: 'creator' as UserRoleKey,
         roles: ['creator'] as UserRoleKey[],
+        password: '',
     });
+    const [showPassword, setShowPassword] = useState(false);
 
-    const toggleRoleSelection = (roleKey: UserRoleKey) => {
-        const current = inviteForm.data.roles;
-        if (current.includes(roleKey)) {
-            if (current.length > 1) {
-                inviteForm.setData(
-                    'roles',
-                    current.filter((r) => r !== roleKey)
-                );
+    const handleGeneratePassword = () => {
+        const newPwd = generateRandomPassword();
+        inviteForm.setData('password', newPwd);
+        setShowPassword(true);
+    };
+
+
+    const handleUpdateRole = (memberId: string, newRole: UserRoleKey) => {
+        setUpdatingId(memberId);
+        router.patch(
+            `/team/${memberId}/role`,
+            { role: newRole },
+            {
+                preserveScroll: true,
+                onFinish: () => setUpdatingId(null),
             }
-        } else {
-            inviteForm.setData('roles', [...current, roleKey]);
-        }
+        );
+    };
+
+    const handleConfirmDelete = () => {
+        if (!deleteTarget) return;
+        setIsDeleting(true);
+        router.delete(`/team/${deleteTarget.id}`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setDeleteTarget(null);
+            },
+            onFinish: () => setIsDeleting(false),
+        });
     };
 
     const handleInviteSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
         inviteForm.post('/team/invite', {
             preserveScroll: true,
             onSuccess: () => {
@@ -280,12 +315,15 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
                                     <th className="py-3 px-3 text-right">Tenggat Minggu Ini</th>
                                     <th className="py-3 px-3 text-right">Terlambat</th>
                                     <th className="py-3 px-4 text-right">Status Sesi</th>
+                                    {can?.inviteTeam && (
+                                        <th className="py-3 px-4 text-right">Kelola</th>
+                                    )}
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
                                 {filteredTeam.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="py-10 text-center text-[var(--md-sys-color-on-surface-muted)]">
+                                        <td colSpan={can?.inviteTeam ? 7 : 6} className="py-10 text-center text-[var(--md-sys-color-on-surface-muted)]">
                                             <Users className="w-7 h-7 mx-auto mb-2 opacity-60" />
                                             Tidak ada personel yang sesuai filter pencarian.
                                         </td>
@@ -338,6 +376,40 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
                                                     {member.status}
                                                 </span>
                                             </td>
+                                            {can?.inviteTeam && (
+                                                <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                                                    <div className="inline-flex items-center gap-1.5 justify-end">
+                                                        <select
+                                                            aria-label={`Ubah peran ${member.name}`}
+                                                            value={member.primaryRole}
+                                                            disabled={updatingId === member.id}
+                                                            onChange={(e) =>
+                                                                handleUpdateRole(
+                                                                    member.id,
+                                                                    e.target.value as UserRoleKey
+                                                                )
+                                                            }
+                                                            className="text-[11px] font-semibold bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-lg px-2 py-1 cursor-pointer focus:ring-1 focus:ring-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-surface)]"
+                                                        >
+                                                            {ROLE_KEYS.map((rk) => (
+                                                                <option key={rk} value={rk}>
+                                                                    {ROLE_META[rk].label}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        {member.id !== String(props.auth?.user?.id) && (
+                                                            <button
+                                                                type="button"
+                                                                title={`Hapus ${member.name}`}
+                                                                onClick={() => setDeleteTarget(member)}
+                                                                className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                                                            >
+                                                                <Trash2 className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            )}
                                         </tr>
                                     ))
                                 )}
@@ -348,11 +420,12 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
             </div>
 
             {/* Invite Member Modal (`POST /team/invite`) */}
+            {/* Modal Tambah / Undang Personel (Format Bersih & Terarah seperti HaloAPU) */}
             <Modal
                 isOpen={inviteModalOpen}
                 onClose={() => setInviteModalOpen(false)}
-                title="Undang Personel Baru ke Ruang Kerja HUMAS"
-                description="Tetapkan satu atau beberapa peran sesuai tanggung jawab produksi"
+                title="Tambah Personel Tim HUMAS"
+                description="Daftarkan akun staf baru dan tentukan peran akses di ruang kerja SPARC"
                 maxWidth="md"
             >
                 <form onSubmit={handleInviteSubmit} className="space-y-4" noValidate>
@@ -375,34 +448,73 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
                         error={inviteForm.errors.email}
                     />
 
-                    <div className="space-y-2">
-                        <label className="text-xs font-bold text-[var(--md-sys-color-on-surface)] block">
-                            Penugasan Peran RBAC
+                    {/* Role Selection Dropdown (Format Standar seperti HaloAPU) */}
+                    <div className="space-y-1.5">
+                        <label htmlFor="invite-role" className="block text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                            Peran / Hak Akses
                         </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {ROLE_KEYS.map((rk) => {
-                                const checked = inviteForm.data.roles.includes(rk);
-                                return (
-                                    <button
-                                        key={rk}
-                                        type="button"
-                                        onClick={() => toggleRoleSelection(rk)}
-                                        className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
-                                            checked
-                                                ? 'bg-[var(--md-sys-color-primary-container)]/50 border-[var(--md-sys-color-primary)]'
-                                                : 'bg-[var(--md-sys-color-surface-container-low)] border-[var(--md-sys-color-outline-variant)]'
-                                        }`}
-                                    >
-                                        <div className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
-                                            {ROLE_META[rk].label}
-                                        </div>
-                                        <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] mt-0.5">
-                                            {ROLE_META[rk].description}
-                                        </div>
-                                    </button>
-                                );
-                            })}
+                        <select
+                            id="invite-role"
+                            value={inviteForm.data.role}
+                            onChange={(e) => {
+                                const newRole = e.target.value as UserRoleKey;
+                                inviteForm.setData((prev) => ({
+                                    ...prev,
+                                    role: newRole,
+                                    roles: [newRole],
+                                }));
+                            }}
+                            className="w-full h-9 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] px-3 text-xs text-[var(--md-sys-color-on-surface)] font-medium outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer"
+                        >
+                            {ROLE_KEYS.map((rk) => (
+                                <option key={rk} value={rk}>
+                                    {ROLE_META[rk].label}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] leading-relaxed">
+                            {ROLE_META[inviteForm.data.role]?.description}
+                        </p>
+                    </div>
+
+                    {/* Password Input with Auto Generate (Persis HaloAPU) */}
+                    <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between">
+                            <label htmlFor="invite-password" className="block text-xs font-bold text-[var(--md-sys-color-on-surface)]">
+                                Kata Sandi Awal (Opsional)
+                            </label>
+                            <button
+                                type="button"
+                                onClick={handleGeneratePassword}
+                                className="text-[11px] text-[var(--md-sys-color-primary)] hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                                Auto Generate
+                            </button>
                         </div>
+                        <div className="relative">
+                            <input
+                                id="invite-password"
+                                type={showPassword ? 'text' : 'password'}
+                                value={inviteForm.data.password}
+                                onChange={(e) => inviteForm.setData('password', e.target.value)}
+                                placeholder="Kosongkan jika ingin sistem mengacak otomatis"
+                                className="w-full h-9 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] px-3 pr-9 text-xs text-[var(--md-sys-color-on-surface)] outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 font-mono"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(!showPassword)}
+                                aria-label="Tampilkan kata sandi"
+                                className="absolute right-2.5 top-2 text-[var(--md-sys-color-on-surface-muted)] hover:text-[var(--md-sys-color-on-surface)] cursor-pointer"
+                            >
+                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                        </div>
+                        {inviteForm.data.password && (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium block">
+                                Pastikan Anda menyalin kata sandi ini untuk diberikan ke personel terkait.
+                            </span>
+                        )}
                     </div>
 
                     <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
@@ -422,10 +534,41 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
                             isLoading={inviteForm.processing}
                             icon={<UserPlus className="w-3.5 h-3.5" />}
                         >
-                            Kirim Undangan
+                            Simpan Personel
                         </Button>
                     </div>
                 </form>
+            </Modal>
+
+            {/* Delete Member Confirmation Modal */}
+            <Modal
+                isOpen={Boolean(deleteTarget)}
+                onClose={() => setDeleteTarget(null)}
+                title="Hapus Personel Tim HUMAS"
+                description={`Apakah Anda yakin ingin menghapus ${deleteTarget?.name} (${deleteTarget?.email}) dari sistem? Tindakan ini akan menghapus akun pengguna secara permanen.`}
+                maxWidth="sm"
+            >
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--md-sys-color-outline-variant)]">
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={isDeleting}
+                        onClick={() => setDeleteTarget(null)}
+                    >
+                        Batal
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        icon={<Trash2 className="w-3.5 h-3.5" />}
+                        isLoading={isDeleting}
+                        onClick={handleConfirmDelete}
+                    >
+                        Hapus Personel
+                    </Button>
+                </div>
             </Modal>
         </AppLayout>
     );
