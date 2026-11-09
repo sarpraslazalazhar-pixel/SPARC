@@ -98,6 +98,19 @@ const INDONESIAN_MONTHS = [
 function pad2(n: number): string {
     return n < 10 ? `0${n}` : `${n}`;
 }
+function formatFullIndoDate(dateStr: string): string {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        const dt = new Date(y, m - 1, d);
+        const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+        const dayName = days[dt.getDay()] || '';
+        return `${dayName}, ${d} ${INDONESIAN_MONTHS[m - 1]} ${y}`;
+    }
+    return dateStr;
+}
 
 export default function CalendarIndex({
     today = '2026-10-27',
@@ -138,6 +151,9 @@ export default function CalendarIndex({
 
     const [activityModalOpen, setActivityModalOpen] = useState(false);
     const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+    const [selectedCellDate, setSelectedCellDate] = useState<string>(today);
+    const [quickCreateModalOpen, setQuickCreateModalOpen] = useState(false);
+    const [quickCreateTab, setQuickCreateTab] = useState<'activity' | 'schedule'>('activity');
 
     const activeMonth = useMemo(() => {
         const d = new Date(activeYear, activeMonthNum - 1, 1);
@@ -418,6 +434,7 @@ export default function CalendarIndex({
         activityForm.post('/calendar/activities', {
             preserveScroll: true,
             onSuccess: () => {
+                setQuickCreateModalOpen(false);
                 setActivityModalOpen(false);
                 activityForm.reset();
             },
@@ -432,6 +449,7 @@ export default function CalendarIndex({
         scheduleForm.post('/calendar/events', {
             preserveScroll: true,
             onSuccess: () => {
+                setQuickCreateModalOpen(false);
                 setScheduleModalOpen(false);
                 scheduleForm.reset();
                 handleResetToday();
@@ -440,6 +458,14 @@ export default function CalendarIndex({
                 toastError('Validasi Jadwal Gagal', 'Periksa kembali judul dan jam tayang.');
             },
         });
+    };
+    const handleCellClick = (dateStr: string, dayNum: number) => {
+        setSelectedCellDate(dateStr);
+        activityForm.setData('activity_date', dateStr);
+        activityForm.clearErrors();
+        scheduleForm.setData('day', dayNum);
+        scheduleForm.clearErrors();
+        setQuickCreateModalOpen(true);
     };
 
     const openRescheduleDialog = (entry: UnifiedCalendarEntry) => {
@@ -605,8 +631,11 @@ export default function CalendarIndex({
                             size="sm"
                             icon={<Flag className="w-3.5 h-3.5" />}
                             onClick={() => {
+                                setSelectedCellDate(today);
+                                activityForm.setData('activity_date', today);
                                 activityForm.clearErrors();
-                                setActivityModalOpen(true);
+                                setQuickCreateTab('activity');
+                                setQuickCreateModalOpen(true);
                             }}
                         >
                             Agenda Lembaga
@@ -619,8 +648,13 @@ export default function CalendarIndex({
                             size="sm"
                             icon={<Plus className="w-3.5 h-3.5" />}
                             onClick={() => {
+                                const parts = today.split('-');
+                                const dayNum = parts.length === 3 ? parseInt(parts[2], 10) : 1;
+                                setSelectedCellDate(today);
+                                scheduleForm.setData('day', dayNum);
                                 scheduleForm.clearErrors();
-                                setScheduleModalOpen(true);
+                                setQuickCreateTab('schedule');
+                                setQuickCreateModalOpen(true);
                             }}
                         >
                             Jadwal Konten
@@ -747,26 +781,40 @@ export default function CalendarIndex({
                                         const dateStr = `${activeMonth.key}-${pad2(day)}`;
                                         const dayItems = monthEntries.filter((e) => e.date === dateStr);
                                         const isToday = dateStr === today;
-
                                         return (
                                             <div
                                                 key={dateStr}
-                                                className={`p-2 min-h-[120px] flex flex-col justify-between transition-colors ${
+                                                onClick={() => handleCellClick(dateStr, day)}
+                                                className={`group p-2 min-h-[120px] flex flex-col justify-between transition-all cursor-pointer relative ${
                                                     isToday
-                                                        ? 'bg-[var(--md-sys-color-primary-container)]/20'
-                                                        : 'hover:bg-[var(--md-sys-color-surface-container-low)]/60'
+                                                        ? 'bg-[var(--md-sys-color-primary-container)]/20 hover:bg-[var(--md-sys-color-primary-container)]/30'
+                                                        : 'hover:bg-[var(--md-sys-color-surface-container-low)]/80 hover:shadow-xs'
                                                 }`}
                                             >
                                                 <div className="flex items-center justify-between">
-                                                    <span
-                                                        className={`sparc-code-id w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                                                            isToday
-                                                                ? 'bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]'
-                                                                : 'text-[var(--md-sys-color-on-surface)]'
-                                                        }`}
-                                                    >
-                                                        {day}
-                                                    </span>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span
+                                                            className={`sparc-code-id w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-transform group-hover:scale-105 ${
+                                                                isToday
+                                                                    ? 'bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] shadow-xs'
+                                                                    : 'text-[var(--md-sys-color-on-surface)]'
+                                                            }`}
+                                                        >
+                                                            {day}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            aria-label={`Tambah pada ${day} ${activeMonth.label}`}
+                                                            title="Klik untuk buat jadwal baru"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleCellClick(dateStr, day);
+                                                            }}
+                                                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded-md hover:bg-[var(--md-sys-color-primary)] hover:text-white text-[var(--md-sys-color-primary)] cursor-pointer"
+                                                        >
+                                                            <Plus className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
                                                     {dayItems.length > 0 && (
                                                         <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-on-surface-muted)]">
                                                             {dayItems.length} item
@@ -781,11 +829,20 @@ export default function CalendarIndex({
                                                     {dayItems.length > 3 && (
                                                         <button
                                                             type="button"
-                                                            onClick={() => setViewMode('agenda')}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setViewMode('agenda');
+                                                            }}
                                                             className="text-[10px] font-bold text-[var(--md-sys-color-primary)] hover:underline px-1 cursor-pointer"
                                                         >
                                                             +{dayItems.length - 3} lainnya
                                                         </button>
+                                                    )}
+                                                    {dayItems.length === 0 && (
+                                                        <div className="opacity-0 group-hover:opacity-70 text-[10px] text-[var(--md-sys-color-on-surface-muted)] flex items-center gap-1 mt-auto pt-2 transition-opacity">
+                                                            <Plus className="w-3 h-3 text-[var(--md-sys-color-primary)]" />
+                                                            <span>Buat jadwal</span>
+                                                        </div>
                                                     )}
                                                 </div>
                                             </div>
@@ -807,18 +864,33 @@ export default function CalendarIndex({
                             return (
                                 <div
                                     key={wd.dateStr}
-                                    className={`rounded-2xl border p-3 space-y-2.5 min-h-[240px] ${
+                                    onClick={() => handleCellClick(wd.dateStr, wd.day)}
+                                    className={`group rounded-2xl border p-3 space-y-2.5 min-h-[240px] cursor-pointer transition-all ${
                                         isToday
-                                            ? 'bg-[var(--md-sys-color-primary-container)]/20 border-[var(--md-sys-color-primary)]/50'
-                                            : 'bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border-[var(--md-sys-color-outline-variant)]'
+                                            ? 'bg-[var(--md-sys-color-primary-container)]/20 border-[var(--md-sys-color-primary)]/50 hover:bg-[var(--md-sys-color-primary-container)]/30'
+                                            : 'bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border-[var(--md-sys-color-outline-variant)] hover:border-[var(--md-sys-color-primary)]/50 hover:shadow-xs'
                                     }`}
                                 >
                                     <div className="flex items-center justify-between pb-2 border-b border-[var(--md-sys-color-outline-variant)]/70">
-                                        <div>
-                                            <span className="sparc-eyebrow block">{wd.weekday}</span>
-                                            <span className="sparc-code-id text-base font-black text-[var(--md-sys-color-on-surface)]">
-                                                {wd.day}
-                                            </span>
+                                        <div className="flex items-center gap-2">
+                                            <div>
+                                                <span className="sparc-eyebrow block">{wd.weekday}</span>
+                                                <span className="sparc-code-id text-base font-black text-[var(--md-sys-color-on-surface)]">
+                                                    {wd.day}
+                                                </span>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                aria-label={`Tambah pada ${wd.weekday}, ${wd.day}`}
+                                                title="Tambah Jadwal / Acara"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleCellClick(wd.dateStr, wd.day);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-lg hover:bg-[var(--md-sys-color-primary)] hover:text-white text-[var(--md-sys-color-primary)] cursor-pointer"
+                                            >
+                                                <Plus className="w-3.5 h-3.5" />
+                                            </button>
                                         </div>
                                         {isToday && (
                                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]">
@@ -828,9 +900,13 @@ export default function CalendarIndex({
                                     </div>
 
                                     {dayItems.length === 0 ? (
-                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] pt-2">
-                                            Kosong
-                                        </p>
+                                        <div className="pt-2 text-[11px] text-[var(--md-sys-color-on-surface-muted)] flex flex-col items-center justify-center min-h-[140px] text-center">
+                                            <CalendarIcon className="w-6 h-6 opacity-30 mb-1" />
+                                            <span className="opacity-70">Belum ada agenda</span>
+                                            <span className="opacity-0 group-hover:opacity-100 text-[10px] text-[var(--md-sys-color-primary)] font-bold mt-1.5 transition-opacity">
+                                                + Klik untuk buat
+                                            </span>
+                                        </div>
                                     ) : (
                                         <div className="space-y-1.5">
                                             {dayItems.map((entry) => renderEntryPill(entry))}
@@ -1068,160 +1144,187 @@ export default function CalendarIndex({
             </Modal>
 
             {/* Add Institutional Activity Modal (`POST /calendar/activities`) */}
+            {/* Google Calendar-Style Unified Quick Create Modal on Clicked Date */}
             <Modal
-                isOpen={activityModalOpen}
-                onClose={() => setActivityModalOpen(false)}
-                title="Tambah Agenda / Kegiatan Lembaga"
-                description="Tandai momentum penting lembaga sebagai acuan perencanaan konten HUMAS"
+                isOpen={quickCreateModalOpen}
+                onClose={() => setQuickCreateModalOpen(false)}
+                title={`Tambah ke Kalender — ${formatFullIndoDate(selectedCellDate)}`}
+                description="Jadwalkan agenda kelembagaan atau konten media sosial pada tanggal ini"
                 maxWidth="md"
             >
-                <form onSubmit={handleCreateActivity} className="space-y-4" noValidate>
-                    <Input
-                        label="Nama Kegiatan / Momentum"
-                        required
-                        placeholder="Contoh: Rapat Koordinasi Nasional Keterbukaan Informasi"
-                        value={activityForm.data.title}
-                        onChange={(e) => activityForm.setData('title', e.target.value)}
-                        error={activityForm.errors.title}
-                    />
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <Input
-                            type="date"
-                            label="Tanggal Pelaksanaan"
-                            required
-                            value={activityForm.data.activity_date}
-                            onChange={(e) => activityForm.setData('activity_date', e.target.value)}
-                            error={activityForm.errors.activity_date}
-                        />
-                        <Select
-                            label="Kategori Agenda"
-                            value={activityForm.data.type}
-                            onChange={(e) =>
-                                activityForm.setData(
-                                    'type',
-                                    e.target.value as typeof activityForm.data.type
-                                )
-                            }
-                        >
-                            <option value="agenda">Agenda Resmi</option>
-                            <option value="event">Event Publik</option>
-                            <option value="hari_besar">Hari Besar Nasional</option>
-                            <option value="kampanye">Kampanye Tematik</option>
-                            <option value="momentum">Momentum Khusus</option>
-                        </Select>
-                    </div>
-                    <Textarea
-                        label="Catatan Liputan / Kebutuhan Konten"
-                        rows={3}
-                        placeholder="Kebutuhan dokumentasi foto, siaran pers, atau reels liputan..."
-                        value={activityForm.data.description}
-                        onChange={(e) => activityForm.setData('description', e.target.value)}
-                    />
-                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
-                        <Button
+                <div className="space-y-4">
+                    {/* Google Calendar-Style Segmented Switcher */}
+                    <div className="flex p-1 rounded-2xl bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)]">
+                        <button
                             type="button"
-                            variant="secondary"
-                            size="md"
-                            disabled={activityForm.processing}
-                            onClick={() => setActivityModalOpen(false)}
+                            onClick={() => setQuickCreateTab('activity')}
+                            className={cn(
+                                'flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer',
+                                quickCreateTab === 'activity'
+                                    ? 'bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] shadow-xs'
+                                    : 'text-[var(--md-sys-color-on-surface-muted)] hover:text-[var(--md-sys-color-on-surface)]'
+                            )}
                         >
-                            Batal
-                        </Button>
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            size="md"
-                            isLoading={activityForm.processing}
+                            <Flag className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Agenda / Acara Lembaga</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setQuickCreateTab('schedule')}
+                            className={cn(
+                                'flex-1 py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer',
+                                quickCreateTab === 'schedule'
+                                    ? 'bg-[var(--md-sys-color-surface)] text-[var(--md-sys-color-on-surface)] shadow-xs'
+                                    : 'text-[var(--md-sys-color-on-surface-muted)] hover:text-[var(--md-sys-color-on-surface)]'
+                            )}
                         >
-                            Simpan Agenda
-                        </Button>
+                            <Send className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
+                            <span>Jadwal Konten Medsos</span>
+                        </button>
                     </div>
-                </form>
-            </Modal>
 
-            {/* Quick Schedule Post Modal (`POST /calendar/events`) */}
-            <Modal
-                isOpen={scheduleModalOpen}
-                onClose={() => setScheduleModalOpen(false)}
-                title="Jadwalkan Slot Publikasi Cepat"
-                description="Tambahkan jadwal tayang cepat pada kalender distribusi"
-                maxWidth="md"
-            >
-                <form onSubmit={handleCreateSchedule} className="space-y-4" noValidate>
-                    <Input
-                        label="Judul Konten"
-                        required
-                        placeholder="Contoh: Pengumuman Layanan Terpadu Akhir Pekan"
-                        value={scheduleForm.data.title}
-                        onChange={(e) => scheduleForm.setData('title', e.target.value)}
-                        error={scheduleForm.errors.title}
-                    />
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <Select
-                            label="Platform"
-                            value={scheduleForm.data.platform}
-                            onChange={(e) => scheduleForm.setData('platform', e.target.value)}
-                        >
-                            <option value="instagram">Instagram</option>
-                            <option value="youtube">YouTube</option>
-                            <option value="tiktok">TikTok</option>
-                            <option value="facebook">Facebook</option>
-                        </Select>
-                        <Select
-                            label="Format"
-                            value={scheduleForm.data.format}
-                            onChange={(e) => scheduleForm.setData('format', e.target.value)}
-                        >
-                            <option value="reels">Reels / Shorts</option>
-                            <option value="carousel">Carousel</option>
-                            <option value="single">Single Image</option>
-                            <option value="video">Video Panjang</option>
-                        </Select>
-                        <Input
-                            type="time"
-                            label="Jam Tayang (WIB)"
-                            required
-                            value={scheduleForm.data.time}
-                            onChange={(e) => scheduleForm.setData('time', e.target.value)}
-                            error={scheduleForm.errors.time}
-                        />
-                    </div>
-                    <Input
-                        type="number"
-                        min={1}
-                        max={30}
-                        label="Tanggal (November 2026)"
-                        required
-                        value={scheduleForm.data.day}
-                        onChange={(e) => scheduleForm.setData('day', Number(e.target.value))}
-                        error={scheduleForm.errors.day}
-                    />
-                    <Textarea
-                        label="Catatan / Draft Caption"
-                        rows={2}
-                        value={scheduleForm.data.caption}
-                        onChange={(e) => scheduleForm.setData('caption', e.target.value)}
-                    />
-                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
-                        <Button
-                            type="button"
-                            variant="secondary"
-                            size="md"
-                            disabled={scheduleForm.processing}
-                            onClick={() => setScheduleModalOpen(false)}
-                        >
-                            Batal
-                        </Button>
-                        <Button
-                            type="submit"
-                            variant="primary"
-                            size="md"
-                            isLoading={scheduleForm.processing}
-                        >
-                            Simpan Jadwal
-                        </Button>
-                    </div>
-                </form>
+                    {quickCreateTab === 'activity' ? (
+                        <form onSubmit={handleCreateActivity} className="space-y-4" noValidate>
+                            <Input
+                                label="Nama Kegiatan / Momentum"
+                                required
+                                placeholder="Contoh: Rapat Koordinasi Nasional Keterbukaan Informasi"
+                                value={activityForm.data.title}
+                                onChange={(e) => activityForm.setData('title', e.target.value)}
+                                error={activityForm.errors.title}
+                            />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <Input
+                                    type="date"
+                                    label="Tanggal Pelaksanaan"
+                                    required
+                                    value={activityForm.data.activity_date}
+                                    onChange={(e) => activityForm.setData('activity_date', e.target.value)}
+                                    error={activityForm.errors.activity_date}
+                                />
+                                <Select
+                                    label="Kategori Agenda"
+                                    value={activityForm.data.type}
+                                    onChange={(e) =>
+                                        activityForm.setData(
+                                            'type',
+                                            e.target.value as typeof activityForm.data.type
+                                        )
+                                    }
+                                >
+                                    <option value="agenda">Agenda Resmi</option>
+                                    <option value="event">Event Publik</option>
+                                    <option value="hari_besar">Hari Besar Nasional</option>
+                                    <option value="kampanye">Kampanye Tematik</option>
+                                    <option value="momentum">Momentum Khusus</option>
+                                </Select>
+                            </div>
+                            <Textarea
+                                label="Catatan Liputan / Kebutuhan Konten"
+                                rows={3}
+                                placeholder="Kebutuhan dokumentasi foto, siaran pers, atau reels liputan..."
+                                value={activityForm.data.description}
+                                onChange={(e) => activityForm.setData('description', e.target.value)}
+                            />
+                            <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="md"
+                                    disabled={activityForm.processing}
+                                    onClick={() => setQuickCreateModalOpen(false)}
+                                >
+                                    Batal
+                                </Button>
+                                <Button
+                                    type="submit"
+                                    variant="primary"
+                                    size="md"
+                                    isLoading={activityForm.processing}
+                                >
+                                    Simpan Agenda
+                                </Button>
+                            </div>
+                        </form>
+                    ) : (
+                        <form onSubmit={handleCreateSchedule} className="space-y-4" noValidate>
+                            <Input
+                                label="Judul Konten"
+                                required
+                                placeholder="Contoh: Pengumuman Layanan Terpadu Akhir Pekan"
+                                value={scheduleForm.data.title}
+                                onChange={(e) => scheduleForm.setData('title', e.target.value)}
+                                error={scheduleForm.errors.title}
+                            />
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <Select
+                                    label="Platform"
+                                    value={scheduleForm.data.platform}
+                                    onChange={(e) => scheduleForm.setData('platform', e.target.value)}
+                                >
+                                    <option value="instagram">Instagram</option>
+                                    <option value="youtube">YouTube</option>
+                                    <option value="tiktok">TikTok</option>
+                                    <option value="facebook">Facebook</option>
+                                </Select>
+                                <Select
+                                    label="Format"
+                                    value={scheduleForm.data.format}
+                                    onChange={(e) => scheduleForm.setData('format', e.target.value)}
+                                >
+                                    <option value="reels">Reels / Shorts</option>
+                                    <option value="carousel">Carousel</option>
+                                    <option value="single">Single Image</option>
+                                    <option value="video">Video Panjang</option>
+                                </Select>
+                                <Input
+                                    type="time"
+                                    label="Jam Tayang (WIB)"
+                                    required
+                                    value={scheduleForm.data.time}
+                                    onChange={(e) => scheduleForm.setData('time', e.target.value)}
+                                    error={scheduleForm.errors.time}
+                                />
+                            </div>
+                            <Input
+                                type="number"
+                                min={1}
+                                max={31}
+                                label={`Tanggal (${activeMonth.label})`}
+                                required
+                                value={scheduleForm.data.day}
+                                onChange={(e) => scheduleForm.setData('day', Number(e.target.value))}
+                                error={scheduleForm.errors.day}
+                            />
+                            <Textarea
+                                label="Catatan / Draft Caption"
+                                rows={2}
+                                placeholder="Catatan konsep atau caption..."
+                                value={scheduleForm.data.caption}
+                                onChange={(e) => scheduleForm.setData('caption', e.target.value)}
+                            />
+                            <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="md"
+                                    disabled={scheduleForm.processing}
+                                    onClick={() => setQuickCreateModalOpen(false)}
+                                >
+                                    Batal
+                                </Button>
+                                <Button
+                                    type="submit"
+                                    variant="primary"
+                                    size="md"
+                                    isLoading={scheduleForm.processing}
+                                >
+                                    Simpan Jadwal
+                                </Button>
+                            </div>
+                        </form>
+                    )}
+                </div>
             </Modal>
         </AppLayout>
     );
