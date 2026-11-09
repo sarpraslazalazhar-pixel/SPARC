@@ -180,6 +180,10 @@ class InstagramGraphService
             }
         }
 
+        if (str_starts_with($redirectUri, 'http://') && ! str_contains($redirectUri, 'localhost') && ! str_contains($redirectUri, '127.0.0.1')) {
+            $redirectUri = 'https://'.substr($redirectUri, 7);
+        }
+
         return [
             'app_id' => $appId,
             'app_secret' => $appSecret,

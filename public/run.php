@@ -70,7 +70,19 @@ if ($isAuthenticated && isset($_POST['command'])) {
             $kernel = $app->make(Kernel::class);
             $kernel->bootstrap();
 
-            if ($executedCmd === 'sparc:reset-instagram') {
+            if ($executedCmd === 'sparc:fix-env') {
+                $envFile = base_path('.env');
+                if (file_exists($envFile)) {
+                    $content = file_get_contents($envFile);
+                    $content = preg_replace('/^APP_URL=.*$/m', 'APP_URL=https://sparc.apudev.id', $content);
+                    $content = preg_replace('/^META_REDIRECT_URI=.*$/m', 'META_REDIRECT_URI=https://sparc.apudev.id/settings/instagram/oauth/callback', $content);
+                    file_put_contents($envFile, $content);
+                    Artisan::call('optimize:clear');
+                    $output = "Berhasil memperbaiki .env:\n- APP_URL=https://sparc.apudev.id\n- META_REDIRECT_URI=https://sparc.apudev.id/settings/instagram/oauth/callback\n- Cache konfigurasi berhasil dibersihkan (optimize:clear).\n\nSilakan coba klik lagi tombol login Meta di SPARC.";
+                } else {
+                    $output = 'File .env tidak ditemukan di '.$envFile;
+                }
+            } elseif ($executedCmd === 'sparc:reset-instagram') {
                 if (Schema::hasTable('instagram_connections')) {
                     $conn = InstagramConnection::current();
                     $conn->update([
@@ -209,6 +221,10 @@ if ($isAuthenticated && isset($_POST['command'])) {
                 <form method="POST">
                     <input type="hidden" name="command" value="sparc:reset-instagram">
                     <button type="submit" class="btn-secondary" style="width: 100%;">Reset Akun Instagram</button>
+                </form>
+                <form method="POST">
+                    <input type="hidden" name="command" value="sparc:fix-env">
+                    <button type="submit" class="btn-success" style="width: 100%;">Perbaiki .ENV ke HTTPS (sparc.apudev.id)</button>
                 </form>
             </div>
 
