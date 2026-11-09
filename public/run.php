@@ -1,8 +1,10 @@
 <?php
 
+use App\Models\InstagramConnection;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * SPARC v3 — Web Artisan Runner for cPanel (No SSH/Terminal)
@@ -68,8 +70,26 @@ if ($isAuthenticated && isset($_POST['command'])) {
             $kernel = $app->make(Kernel::class);
             $kernel->bootstrap();
 
-            // Khusus storage:link dengan fallback PHP natif jika fungsi symlink dinonaktifkan hosting
-            if ($executedCmd === 'storage:link') {
+            if ($executedCmd === 'sparc:reset-instagram') {
+                if (Schema::hasTable('instagram_connections')) {
+                    $conn = InstagramConnection::current();
+                    $conn->update([
+                        'account_id' => null,
+                        'username' => null,
+                        'name' => null,
+                        'page_id' => null,
+                        'page_name' => null,
+                        'access_token' => null,
+                        'user_access_token' => null,
+                        'candidate_accounts' => null,
+                        'token_expires_at' => null,
+                        'connected' => false,
+                    ]);
+                    $output = "Koneksi Instagram berhasil diputus & akun dibersihkan total dari database.\nStatus koneksi sekarang: Belum Terhubung.";
+                } else {
+                    $output = 'Tabel instagram_connections belum tersedia.';
+                }
+            } elseif ($executedCmd === 'storage:link') {
                 try {
                     Artisan::call('storage:link');
                     $output = Artisan::output();
@@ -185,6 +205,10 @@ if ($isAuthenticated && isset($_POST['command'])) {
                 <form method="POST">
                     <input type="hidden" name="command" value="db:seed --force">
                     <button type="submit" class="btn-secondary" style="width: 100%;">Jalankan Seeder</button>
+                </form>
+                <form method="POST">
+                    <input type="hidden" name="command" value="sparc:reset-instagram">
+                    <button type="submit" class="btn-secondary" style="width: 100%;">Reset Akun Instagram</button>
                 </form>
             </div>
 

@@ -899,7 +899,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                             <form onSubmit={handleSaveInstagram} className="space-y-3 pt-3" noValidate>
                                 <Input
                                     label="Instagram Business Account ID / Page ID"
-                                    placeholder="Contoh: 17841450403761765"
+                                    placeholder="Contoh: 17841400000000000"
                                     value={igForm.data.account_id}
                                     onChange={(e) => igForm.setData('account_id', e.target.value)}
                                 />

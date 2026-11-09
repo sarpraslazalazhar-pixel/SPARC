@@ -95,7 +95,10 @@ class InstagramConnection extends Model
         $connection = static::query()->first();
 
         if (! $connection) {
-            $connection = static::query()->forceCreate(['id' => 1]);
+            $connection = static::query()->forceCreate([
+                'id' => 1,
+                'connected' => false,
+            ]);
         }
 
         if ($connection->wasRecentlyCreated && empty($connection->account_id) && ! empty(config('services.instagram.account_id'))) {
@@ -105,7 +108,7 @@ class InstagramConnection extends Model
                 'account_id' => $cfgAcc,
                 'access_token' => $cfgToken,
                 'connected' => ! empty($cfgAcc) && ! empty($cfgToken),
-                'username' => 'gbrnmewing',
+                'username' => null,
                 'last_tested_at' => now(),
             ]);
         }
