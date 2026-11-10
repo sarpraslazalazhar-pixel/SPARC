@@ -18,7 +18,7 @@ class ContentItemResource extends JsonResource
     {
         $igComments = [];
         if ($this->relationLoaded('igComments')) {
-            $igComments = $this->igComments->map(fn ($c): array => [
+            $igComments = $this->igComments->take(20)->map(fn ($c): array => [
                 'id' => (string) $c->id,
                 'igCommentId' => (string) $c->ig_comment_id,
                 'username' => (string) $c->username,
@@ -31,20 +31,25 @@ class ContentItemResource extends JsonResource
                 'commentedAt' => $c->commented_at?->format('d M Y, H:i') ?? '',
                 'convertedContentItemId' => $c->converted_content_item_id ? (string) $c->converted_content_item_id : null,
             ])->values()->all();
-        } elseif ($this->ig_media_id && Schema::hasTable('instagram_comments')) {
-            $igComments = $this->igComments()->limit(20)->get()->map(fn ($c): array => [
-                'id' => (string) $c->id,
-                'igCommentId' => (string) $c->ig_comment_id,
-                'username' => (string) $c->username,
-                'text' => (string) $c->text,
-                'likeCount' => (int) $c->like_count,
-                'isHidden' => (bool) $c->is_hidden,
-                'isReplied' => (bool) $c->is_replied,
-                'replyText' => $c->reply_text,
-                'repliedBy' => $c->replied_by,
-                'commentedAt' => $c->commented_at?->format('d M Y, H:i') ?? '',
-                'convertedContentItemId' => $c->converted_content_item_id ? (string) $c->converted_content_item_id : null,
-            ])->values()->all();
+        } elseif ($this->ig_media_id) {
+            if (! $request->attributes->has('_sparc_has_ig_comments_table')) {
+                $request->attributes->set('_sparc_has_ig_comments_table', Schema::hasTable('instagram_comments'));
+            }
+            if ($request->attributes->get('_sparc_has_ig_comments_table')) {
+                $igComments = $this->igComments()->limit(20)->get()->map(fn ($c): array => [
+                    'id' => (string) $c->id,
+                    'igCommentId' => (string) $c->ig_comment_id,
+                    'username' => (string) $c->username,
+                    'text' => (string) $c->text,
+                    'likeCount' => (int) $c->like_count,
+                    'isHidden' => (bool) $c->is_hidden,
+                    'isReplied' => (bool) $c->is_replied,
+                    'replyText' => $c->reply_text,
+                    'repliedBy' => $c->replied_by,
+                    'commentedAt' => $c->commented_at?->format('d M Y, H:i') ?? '',
+                    'convertedContentItemId' => $c->converted_content_item_id ? (string) $c->converted_content_item_id : null,
+                ])->values()->all();
+            }
         }
 
         $ticket = $this->haloApuTicket;
@@ -55,10 +60,13 @@ class ContentItemResource extends JsonResource
             $rawAvatar = trim((string) ($ticket->requester_avatar ?? ''));
             if ($rawAvatar !== '') {
                 if (! str_starts_with($rawAvatar, 'http')) {
-                    $haloBase = Schema::hasTable('haloapu_connections')
-                        ? rtrim((string) (HaloApuConnection::current()->base_url ?: 'http://127.0.0.1:8001'), '/')
-                        : 'http://127.0.0.1:8001';
-                    $requesterAvatar = $haloBase.'/'.ltrim($rawAvatar, '/');
+                    if (! $request->attributes->has('_sparc_halo_base_url')) {
+                        $haloBase = Schema::hasTable('haloapu_connections')
+                            ? rtrim((string) (HaloApuConnection::current()->base_url ?: 'http://127.0.0.1:8001'), '/')
+                            : 'http://127.0.0.1:8001';
+                        $request->attributes->set('_sparc_halo_base_url', $haloBase);
+                    }
+                    $requesterAvatar = $request->attributes->get('_sparc_halo_base_url').'/'.ltrim($rawAvatar, '/');
                 } elseif (str_contains($rawAvatar, ':8000/storage/avatars/')) {
                     $requesterAvatar = str_replace(':8000/storage/avatars/', ':8001/storage/avatars/', $rawAvatar);
                 } else {

@@ -12,6 +12,7 @@ use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
@@ -1019,5 +1020,52 @@ class WorkspaceFlowTest extends TestCase
         $response
             ->assertRedirect(route('assets.index'))
             ->assertSessionHasErrors(['external_url']);
+    }
+
+    /**
+     * Ensure dashboard and content endpoints stay bounded in SQL queries even with dozens of synced IG posts (no N+1 on ig_comments).
+     */
+    public function test_dashboard_avoids_n_plus_one_queries_with_many_instagram_items(): void
+    {
+        // Prime session & initial ticket auto-conversion
+        $this->get('/')->assertOk();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->get('/')->assertOk();
+        $baselineCount = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        for ($i = 1; $i <= 40; $i++) {
+            ContentItem::create([
+                'title' => "Synced IG Post #{$i}",
+                'status' => 'published',
+                'priority' => 'normal',
+                'platform' => 'instagram',
+                'format' => 'feed',
+                'pillar' => 'kelembagaan',
+                'pic_name' => 'Instagram Auto-Sync',
+                'production_deadline' => '2026-10-01',
+                'publish_date' => '2026-10-01',
+                'ig_media_id' => (string) (1900000 + $i),
+                'views' => 500 + $i,
+            ]);
+        }
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->get('/')->assertOk();
+        $afterFortyMoreCount = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $this->get('/content')->assertOk();
+        $contentPageCount = count(DB::getQueryLog());
+        DB::disableQueryLog();
+
+        $this->assertLessThanOrEqual($baselineCount + 2, $afterFortyMoreCount, sprintf('N+1 detected on GET /: baseline %d vs %d with +40 IG items.', $baselineCount, $afterFortyMoreCount));
+        $this->assertLessThan(40, $afterFortyMoreCount);
+        $this->assertLessThan(40, $contentPageCount);
     }
 }

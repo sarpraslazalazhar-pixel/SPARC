@@ -42,10 +42,16 @@ class WorkspaceV3Controller extends Controller
      */
     public static function hydrateWorkspace(Request $request): array
     {
+        if ($request->isMethodSafe() && $request->attributes->has('_sparc_hydrated_workspace')) {
+            /** @var array<string, mixed> $cachedState */
+            $cachedState = $request->attributes->get('_sparc_hydrated_workspace');
+
+            return $cachedState;
+        }
+
         if (! $request->hasSession()) {
             return self::defaultSeed();
         }
-
         $session = $request->session();
 
         if (! $session->has('sparc_v3.initialized') || $session->get('sparc_v3.seed_version') !== 2) {
@@ -172,19 +178,51 @@ class WorkspaceV3Controller extends Controller
                     }
                 }
 
-                $dbItems = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
+                $relations = ['tasks', 'comments', 'history', 'haloApuTicket'];
+                if (Schema::hasTable('instagram_comments')) {
+                    $relations[] = 'igComments';
+                }
+
+                $dbItems = ContentItem::with($relations)
                     ->orderByDesc('publish_date')
                     ->orderByDesc('id')
                     ->get();
 
                 $resolvedDbItems = ContentItemResource::collection($dbItems)->resolve();
+                $existingContentById = [];
+                $existingContentByCode = [];
+                foreach ($contentItems as $c) {
+                    if (isset($c['id']) && $c['id'] !== '') {
+                        $existingContentById[(string) $c['id']] = true;
+                    }
+                    if (! empty($c['contentId'])) {
+                        $existingContentByCode[(string) $c['contentId']] = true;
+                    }
+                }
                 foreach ($resolvedDbItems as $dbArr) {
-                    $existsInContent = collect($contentItems)->contains(
-                        fn (array $c): bool => (string) ($c['id'] ?? '') === (string) $dbArr['id']
-                            || (! empty($dbArr['contentId']) && ($c['contentId'] ?? '') === $dbArr['contentId'])
-                    );
-                    if (! $existsInContent) {
-                        $contentItems[] = $dbArr;
+                    $dbIdKey = (string) ($dbArr['id'] ?? '');
+                    $dbCodeKey = (string) ($dbArr['contentId'] ?? '');
+                    if (($dbIdKey !== '' && isset($existingContentById[$dbIdKey])) || ($dbCodeKey !== '' && isset($existingContentByCode[$dbCodeKey]))) {
+                        continue;
+                    }
+                    $contentItems[] = $dbArr;
+                    if ($dbIdKey !== '') {
+                        $existingContentById[$dbIdKey] = true;
+                    }
+                    if ($dbCodeKey !== '') {
+                        $existingContentByCode[$dbCodeKey] = true;
+                    }
+                }
+
+                $pubIdxByContentItemId = [];
+                $pubIdxByCodePlatform = [];
+                foreach ($publications as $pIdx => $existingPub) {
+                    if (! empty($existingPub['contentItemId'])) {
+                        $pubIdxByContentItemId[(string) $existingPub['contentItemId']] = $pIdx;
+                    }
+                    if (! empty($existingPub['contentId'])) {
+                        $cpKey = strtolower((string) $existingPub['contentId']).'|'.strtolower((string) ($existingPub['platform'] ?? ''));
+                        $pubIdxByCodePlatform[$cpKey] = $pIdx;
                     }
                 }
 
@@ -194,16 +232,15 @@ class WorkspaceV3Controller extends Controller
                     }
 
                     $matchedPubIdx = null;
-                    foreach ($publications as $pIdx => $existingPub) {
-                        if (
-                            (! empty($dbItem->content_id) && strcasecmp((string) ($existingPub['contentId'] ?? ''), (string) $dbItem->content_id) === 0 && strtolower((string) ($existingPub['platform'] ?? '')) === strtolower((string) $dbItem->platform))
-                            || (string) ($existingPub['contentItemId'] ?? '') === (string) $dbItem->id
-                        ) {
-                            $matchedPubIdx = $pIdx;
-                            break;
+                    $dbItemIdStr = (string) $dbItem->id;
+                    if (isset($pubIdxByContentItemId[$dbItemIdStr])) {
+                        $matchedPubIdx = $pubIdxByContentItemId[$dbItemIdStr];
+                    } elseif (! empty($dbItem->content_id)) {
+                        $cpKey = strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform);
+                        if (isset($pubIdxByCodePlatform[$cpKey])) {
+                            $matchedPubIdx = $pubIdxByCodePlatform[$cpKey];
                         }
                     }
-
                     $hasApiMetrics = $dbItem->metrics_synced_at !== null
                         || $dbItem->reach !== null
                         || (int) $dbItem->views > 0
@@ -247,6 +284,7 @@ class WorkspaceV3Controller extends Controller
 
                     $synId = 'pub-db-'.$dbItem->id;
                     $isLive = $dbItem->status === 'published';
+                    $newPubIdx = count($publications);
                     $publications[] = [
                         'id' => $synId,
                         'contentItemId' => (string) $dbItem->id,
@@ -276,13 +314,17 @@ class WorkspaceV3Controller extends Controller
                             'recordedAt' => $dbItem->metrics_synced_at?->format('Y-m-d H:i') ?? $schedStr,
                         ] : null,
                     ];
+                    $pubIdxByContentItemId[(string) $dbItem->id] = $newPubIdx;
+                    if (! empty($dbItem->content_id)) {
+                        $pubIdxByCodePlatform[strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform)] = $newPubIdx;
+                    }
                 }
             } catch (\Throwable) {
                 // Ignore DB errors during early bootstrap
             }
         }
 
-        return [
+        $state = [
             'currentUser' => $currentUser,
             'can' => self::permissionsForRole($activeRole),
             'personas' => array_values($personas),
@@ -308,6 +350,12 @@ class WorkspaceV3Controller extends Controller
             })(),
             'notifications' => $session->get('sparc_v3.notifications', []),
         ];
+
+        if ($request->isMethodSafe()) {
+            $request->attributes->set('_sparc_hydrated_workspace', $state);
+        }
+
+        return $state;
     }
 
     /**
@@ -438,6 +486,13 @@ class WorkspaceV3Controller extends Controller
      */
     public static function defaultIncomingTickets(Request $request): array
     {
+        if ($request->isMethodSafe() && $request->attributes->has('_sparc_incoming_tickets')) {
+            /** @var array<int, array<string, mixed>> $cachedTickets */
+            $cachedTickets = $request->attributes->get('_sparc_incoming_tickets');
+
+            return $cachedTickets;
+        }
+
         if (! Schema::hasTable('haloapu_tickets')) {
             return [];
         }
@@ -445,7 +500,7 @@ class WorkspaceV3Controller extends Controller
         /** @var array<string, string> $overrides */
         $overrides = $request->hasSession() ? $request->session()->get('sparc.ticket_overrides', []) : [];
 
-        return HaloApuTicket::orderBy('id')
+        $tickets = HaloApuTicket::orderBy('id')
             ->limit(50)
             ->get()
             ->map(function (HaloApuTicket $t) use ($overrides): array {
@@ -504,6 +559,12 @@ class WorkspaceV3Controller extends Controller
                 ];
             })
             ->all();
+
+        if ($request->isMethodSafe()) {
+            $request->attributes->set('_sparc_incoming_tickets', $tickets);
+        }
+
+        return $tickets;
     }
 
     /**
@@ -603,13 +664,12 @@ class WorkspaceV3Controller extends Controller
     public function contentPlan(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $items = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
-            ->orderBy('publish_date')
-            ->get();
+        $items = $state['contentItems'];
+        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
 
         return Inertia::render('Content/Index', [
             'today' => now()->toDateString(),
-            'contentItems' => ContentItemResource::collection($items)->resolve(),
+            'contentItems' => $items,
             'activities' => $state['activities'],
             'team' => $state['team'],
             'filters' => [
@@ -630,13 +690,12 @@ class WorkspaceV3Controller extends Controller
     public function productionBoard(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $items = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
-            ->orderBy('publish_date')
-            ->get();
+        $items = $state['contentItems'];
+        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
 
         return Inertia::render('Planner/Index', [
             'today' => now()->toDateString(),
-            'contentItems' => ContentItemResource::collection($items)->resolve(),
+            'contentItems' => $items,
             'activities' => $state['activities'],
             'team' => $state['team'],
             'sessionItems' => $request->session()->get('sparc.planner_items', []),
@@ -651,13 +710,8 @@ class WorkspaceV3Controller extends Controller
     public function calendar(Request $request): Response
     {
         $state = self::hydrateWorkspace($request);
-        $dbItems = ContentItem::with(['tasks', 'comments', 'history', 'haloApuTicket'])
-            ->orderBy('publish_date')
-            ->get();
-
-        $contentItems = $dbItems->isNotEmpty()
-            ? ContentItemResource::collection($dbItems)->resolve()
-            : $state['contentItems'];
+        $contentItems = $state['contentItems'];
+        usort($contentItems, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
 
         return Inertia::render('Calendar/Index', [
             'today' => now()->toDateString(),

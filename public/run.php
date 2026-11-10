@@ -116,6 +116,12 @@ if ($isAuthenticated && isset($_POST['command'])) {
                         $output = "PERINGATAN: Fungsi symlink dinonaktifkan di hosting ini.\n".$e->getMessage();
                     }
                 }
+            } elseif ($executedCmd === 'migrate:fresh --force') {
+                Artisan::call('migrate:fresh', ['--force' => true]);
+                $output = Artisan::output();
+            } elseif ($executedCmd === 'migrate:fresh --seed --force') {
+                Artisan::call('migrate:fresh', ['--force' => true, '--seed' => true]);
+                $output = Artisan::output();
             } else {
                 Artisan::call($executedCmd);
                 $output = Artisan::output();
@@ -217,6 +223,14 @@ if ($isAuthenticated && isset($_POST['command'])) {
                 <form method="POST">
                     <input type="hidden" name="command" value="db:seed --force">
                     <button type="submit" class="btn-secondary" style="width: 100%;">Jalankan Seeder</button>
+                </form>
+                <form method="POST" onsubmit="return confirm('PERINGATAN: Ini akan menghapus SEMUA data di database lalu membuat ulang tabel dari awal. Lanjutkan?');">
+                    <input type="hidden" name="command" value="migrate:fresh --force">
+                    <button type="submit" class="btn-danger" style="width: 100%;">Migrate Fresh (Reset DB)</button>
+                </form>
+                <form method="POST" onsubmit="return confirm('PERINGATAN: Ini akan menghapus SEMUA data di database, membuat ulang tabel, lalu mengisi ulang data seeder. Lanjutkan?');">
+                    <input type="hidden" name="command" value="migrate:fresh --seed --force">
+                    <button type="submit" class="btn-danger" style="width: 100%;">Migrate Fresh + Seed</button>
                 </form>
                 <form method="POST">
                     <input type="hidden" name="command" value="sparc:reset-instagram">
