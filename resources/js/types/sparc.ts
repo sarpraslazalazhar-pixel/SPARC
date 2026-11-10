@@ -169,11 +169,15 @@ export interface InstagramStoryItem {
     timestamp?: string;
     metrics: {
         reach: number;
+        views?: number;
         impressions: number;
         replies: number;
-        exits: number;
-        taps_forward: number;
-        taps_back: number;
+        navigation?: number;
+        shares?: number;
+        profile_visits?: number;
+        exits?: number;
+        taps_forward?: number;
+        taps_back?: number;
     };
 }
 
@@ -302,7 +306,8 @@ export interface SparcPublication {
 export interface SparcVisualAsset {
     id: string;
     title: string;
-    category: 'foto' | 'video' | 'ilustrasi' | 'template_desain' | 'infografis' | 'dokumen';
+    category: 'foto' | 'video' | 'ilustrasi' | 'template_desain' | 'infografis' | 'dokumen' | 'offline' | 'online';
+    session?: string | null;
     tags: string[];
     externalUrl: string;
     thumbnailUrl: string;

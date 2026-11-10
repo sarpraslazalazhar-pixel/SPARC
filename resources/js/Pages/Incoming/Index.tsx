@@ -17,6 +17,11 @@ import {
     RefreshCw,
     CheckCircle2,
     MessageSquare,
+    Clock,
+    Pause,
+    Play,
+    Send,
+    XCircle,
 } from 'lucide-react';
 import { AppLayout } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
@@ -24,8 +29,9 @@ import { Badge } from '@/Components/UI/Badge';
 import { Sheet } from '@/Components/UI/Sheet';
 import { Modal } from '@/Components/UI/Modal';
 import { Tabs } from '@/Components/UI/Tabs';
+import { Input } from '@/Components/UI/Input';
+import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
-
 export interface TicketAttachment {
     id?: string;
     fileName: string;
@@ -102,7 +108,25 @@ export default function IncomingIndex({
     const [previewImage, setPreviewImage] = useState<{ url: string; title: string } | null>(null);
     const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
     const [savedAssetIds, setSavedAssetIds] = useState<string[]>([]);
-    // Filter states
+    // Lifecycle action states
+    const [rejectModalOpen, setRejectModalOpen] = useState(false);
+    const [rejectCatatan, setRejectCatatan] = useState('');
+    const [isRejecting, setIsRejecting] = useState(false);
+
+    const [pauseModalOpen, setPauseModalOpen] = useState(false);
+    const [pauseCatatan, setPauseCatatan] = useState('');
+    const [isPausing, setIsPausing] = useState(false);
+
+    const [isResuming, setIsResuming] = useState(false);
+
+    const [replyModalOpen, setReplyModalOpen] = useState(false);
+    const [replyCatatan, setReplyCatatan] = useState('');
+    const [isReplying, setIsReplying] = useState(false);
+
+    const [deliverModalOpen, setDeliverModalOpen] = useState(false);
+    const [deliverUrl, setDeliverUrl] = useState('');
+    const [deliverCatatan, setDeliverCatatan] = useState('');
+    const [isDelivering, setIsDelivering] = useState(false);
     const [activeTab, setActiveTab] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState('');
@@ -188,6 +212,105 @@ export default function IncomingIndex({
                         setSelectedTicket((prev) => (prev ? { ...prev, syncStatus: ignore ? 'ignored' : 'pending' } : null));
                     }
                 },
+            }
+        );
+    };
+    const handleConfirmReject = () => {
+        if (!selectedTicket) return;
+        setIsRejecting(true);
+        router.post(
+            `/incoming/${selectedTicket.id}/ignore`,
+            { action: 'reject', catatan: rejectCatatan.trim() || 'Pengajuan ditolak oleh Tim Humas.' },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setRejectModalOpen(false);
+                    setRejectCatatan('');
+                    setTickets((prev) =>
+                        prev.map((t) => (t.id === selectedTicket.id ? { ...t, syncStatus: 'ignored', haloapuStatus: 'reject' } : t))
+                    );
+                    setSelectedTicket((prev) => (prev ? { ...prev, syncStatus: 'ignored', haloapuStatus: 'reject' } : null));
+                },
+                onFinish: () => setIsRejecting(false),
+            }
+        );
+    };
+
+    const handleConfirmPauseSla = () => {
+        if (!selectedTicket) return;
+        setIsPausing(true);
+        router.patch(
+            `/incoming/${selectedTicket.id}/remote-status`,
+            { status: 'pending', catatan: pauseCatatan.trim() || 'Meminta kelengkapan informasi dari pemohon.' },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setPauseModalOpen(false);
+                    setPauseCatatan('');
+                    setTickets((prev) =>
+                        prev.map((t) => (t.id === selectedTicket.id ? { ...t, haloapuStatus: 'pending' } : t))
+                    );
+                    setSelectedTicket((prev) => (prev ? { ...prev, haloapuStatus: 'pending' } : null));
+                },
+                onFinish: () => setIsPausing(false),
+            }
+        );
+    };
+
+    const handleResumeSla = () => {
+        if (!selectedTicket) return;
+        setIsResuming(true);
+        router.patch(
+            `/incoming/${selectedTicket.id}/remote-status`,
+            { status: 'on_proses', catatan: 'Tiket dilanjutkan oleh tim Humas.' },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setTickets((prev) =>
+                        prev.map((t) => (t.id === selectedTicket.id ? { ...t, haloapuStatus: 'on_proses' } : t))
+                    );
+                    setSelectedTicket((prev) => (prev ? { ...prev, haloapuStatus: 'on_proses' } : null));
+                },
+                onFinish: () => setIsResuming(false),
+            }
+        );
+    };
+
+    const handleConfirmReply = () => {
+        if (!selectedTicket || !replyCatatan.trim()) return;
+        setIsReplying(true);
+        router.post(
+            `/incoming/${selectedTicket.id}/reply`,
+            { catatan: replyCatatan.trim() },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setReplyModalOpen(false);
+                    setReplyCatatan('');
+                },
+                onFinish: () => setIsReplying(false),
+            }
+        );
+    };
+
+    const handleConfirmDeliver = () => {
+        if (!selectedTicket || !deliverUrl.trim()) return;
+        setIsDelivering(true);
+        router.post(
+            `/incoming/${selectedTicket.id}/deliver-result`,
+            { deliverable_url: deliverUrl.trim(), catatan: deliverCatatan.trim() || undefined },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setDeliverModalOpen(false);
+                    setDeliverUrl('');
+                    setDeliverCatatan('');
+                    setTickets((prev) =>
+                        prev.map((t) => (t.id === selectedTicket.id ? { ...t, haloapuStatus: 'solve' } : t))
+                    );
+                    setSelectedTicket((prev) => (prev ? { ...prev, haloapuStatus: 'solve' } : null));
+                },
+                onFinish: () => setIsDelivering(false),
             }
         );
     };
@@ -737,7 +860,7 @@ export default function IncomingIndex({
                         </div>
 
                         <div className="pt-4 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
                                 {selectedTicket.syncStatus === 'ignored' ? (
                                     <Button
                                         type="button"
@@ -749,15 +872,95 @@ export default function IncomingIndex({
                                         Pulihkan
                                     </Button>
                                 ) : (
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        icon={<Ban className="w-3.5 h-3.5" />}
-                                        onClick={() => handleToggleIgnore(selectedTicket.id, true)}
-                                    >
-                                        Abaikan
-                                    </Button>
+                                    <>
+                                        {/* Balas Pemohon */}
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            icon={<MessageSquare className="w-3.5 h-3.5" />}
+                                            onClick={() => {
+                                                setReplyCatatan('');
+                                                setReplyModalOpen(true);
+                                            }}
+                                        >
+                                            Balas
+                                        </Button>
+
+                                        {/* Pause or Resume SLA */}
+                                        {selectedTicket.haloapuStatus === 'pending' ? (
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                isLoading={isResuming}
+                                                icon={<Play className="w-3.5 h-3.5 text-emerald-600" />}
+                                                onClick={handleResumeSla}
+                                            >
+                                                Lanjutkan (Resume)
+                                            </Button>
+                                        ) : (
+                                            (selectedTicket.haloapuStatus === 'open' ||
+                                                selectedTicket.haloapuStatus === 'on_proses' ||
+                                                selectedTicket.haloapuStatus === 'need_revision') && (
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    icon={<Pause className="w-3.5 h-3.5 text-amber-600" />}
+                                                    onClick={() => {
+                                                        setPauseCatatan('');
+                                                        setPauseModalOpen(true);
+                                                    }}
+                                                >
+                                                    Pause SLA
+                                                </Button>
+                                            )
+                                        )}
+
+                                        {/* Kirim Hasil / Solve */}
+                                        {selectedTicket.haloapuStatus !== 'solve' && (
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                icon={<Send className="w-3.5 h-3.5 text-blue-600" />}
+                                                onClick={() => {
+                                                    setDeliverUrl('');
+                                                    setDeliverCatatan('');
+                                                    setDeliverModalOpen(true);
+                                                }}
+                                            >
+                                                Kirim Hasil
+                                            </Button>
+                                        )}
+
+                                        {/* Tolak Tiket */}
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            icon={<XCircle className="w-3.5 h-3.5" />}
+                                            className="text-red-600 hover:text-red-700 hover:bg-red-500/10 dark:text-red-400"
+                                            onClick={() => {
+                                                setRejectCatatan('');
+                                                setRejectModalOpen(true);
+                                            }}
+                                        >
+                                            Tolak
+                                        </Button>
+
+                                        {/* Abaikan */}
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            icon={<Ban className="w-3.5 h-3.5" />}
+                                            onClick={() => handleToggleIgnore(selectedTicket.id, true)}
+                                        >
+                                            Abaikan
+                                        </Button>
+                                    </>
                                 )}
                             </div>
 
@@ -786,6 +989,178 @@ export default function IncomingIndex({
                 )}
             </Sheet>
 
+            {/* Modal Tolak Tiket */}
+            <Modal
+                isOpen={rejectModalOpen}
+                onClose={() => setRejectModalOpen(false)}
+                title={`Tolak Pengajuan Tiket #${selectedTicket?.haloapuTicketId}`}
+                description={`Pengajuan dari ${selectedTicket?.requesterName} akan ditolak dan status penolakan beserta alasan akan dikirimkan ke pemohon di portal HaloAPU.`}
+                maxWidth="md"
+            >
+                <div className="space-y-4">
+                    <Textarea
+                        label="Alasan Penolakan (Catatan Pemohon)"
+                        required
+                        rows={3}
+                        placeholder="Jelaskan alasan penolakan, misal: Informasi konten tidak lengkap atau di luar lingkup layanan..."
+                        value={rejectCatatan}
+                        onChange={(e) => setRejectCatatan(e.target.value)}
+                    />
+                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isRejecting}
+                            onClick={() => setRejectModalOpen(false)}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            icon={<XCircle className="w-3.5 h-3.5" />}
+                            isLoading={isRejecting}
+                            onClick={handleConfirmReject}
+                        >
+                            Tolak Pengajuan
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Modal Pause SLA / Minta Kelengkapan */}
+            <Modal
+                isOpen={pauseModalOpen}
+                onClose={() => setPauseModalOpen(false)}
+                title={`Minta Informasi Tambahan (Pause SLA) — #${selectedTicket?.haloapuTicketId}`}
+                description="Timer SLA HaloAPU akan dijeda (status pending) sampai pemohon memberikan informasi atau bahan yang diminta."
+                maxWidth="md"
+            >
+                <div className="space-y-4">
+                    <Textarea
+                        label="Pesan / Permintaan Kelengkapan"
+                        required
+                        rows={3}
+                        placeholder="Tuliskan detail informasi atau bahan materi yang dibutuhkan dari pemohon..."
+                        value={pauseCatatan}
+                        onChange={(e) => setPauseCatatan(e.target.value)}
+                    />
+                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isPausing}
+                            onClick={() => setPauseModalOpen(false)}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            icon={<Pause className="w-3.5 h-3.5" />}
+                            isLoading={isPausing}
+                            onClick={handleConfirmPauseSla}
+                        >
+                            Jeda SLA & Kirim Permintaan
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Modal Balas Pemohon */}
+            <Modal
+                isOpen={replyModalOpen}
+                onClose={() => setReplyModalOpen(false)}
+                title={`Kirim Pesan ke Pemohon — #${selectedTicket?.haloapuTicketId}`}
+                description={`Pesan balasan akan dicatat pada riwayat tiket #${selectedTicket?.haloapuTicketId} dan diteruskan ke portal pemohon HaloAPU.`}
+                maxWidth="md"
+            >
+                <div className="space-y-4">
+                    <Textarea
+                        label="Pesan Balasan"
+                        required
+                        rows={3}
+                        placeholder="Tuliskan pesan balasan resmi dari Tim Humas..."
+                        value={replyCatatan}
+                        onChange={(e) => setReplyCatatan(e.target.value)}
+                    />
+                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isReplying}
+                            onClick={() => setReplyModalOpen(false)}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            icon={<MessageSquare className="w-3.5 h-3.5" />}
+                            isLoading={isReplying}
+                            disabled={!replyCatatan.trim()}
+                            onClick={handleConfirmReply}
+                        >
+                            Kirim Pesan
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Modal Kirim Hasil (Solve) */}
+            <Modal
+                isOpen={deliverModalOpen}
+                onClose={() => setDeliverModalOpen(false)}
+                title={`Kirim Hasil Produksi (Solve) — #${selectedTicket?.haloapuTicketId}`}
+                description="Tandai tiket telah selesai dikerjakan dan kirim tautan hasil publikasi/desain ke pemohon untuk ditinjau."
+                maxWidth="md"
+            >
+                <div className="space-y-4">
+                    <Input
+                        label="Tautan Hasil Publikasi / Desain (URL)"
+                        required
+                        type="url"
+                        placeholder="https://instagram.com/p/... atau link Google Drive / Figma"
+                        value={deliverUrl}
+                        onChange={(e) => setDeliverUrl(e.target.value)}
+                    />
+                    <Textarea
+                        label="Catatan Pengiriman (Opsional)"
+                        rows={2}
+                        placeholder="Pesan tambahan kepada pemohon terkait hasil produksi..."
+                        value={deliverCatatan}
+                        onChange={(e) => setDeliverCatatan(e.target.value)}
+                    />
+                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isDelivering}
+                            onClick={() => setDeliverModalOpen(false)}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="primary"
+                            size="sm"
+                            icon={<Send className="w-3.5 h-3.5" />}
+                            isLoading={isDelivering}
+                            disabled={!deliverUrl.trim()}
+                            onClick={handleConfirmDeliver}
+                        >
+                            Kirim Hasil & Selesaikan
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
 
             {/* Image Preview Lightbox Modal */}
             <Modal

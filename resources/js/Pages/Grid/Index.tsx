@@ -94,6 +94,7 @@ export default function GridIndex({
     useEffect(() => {
         setPlanned(initialPlanned);
     }, [initialPlanned]);
+    const [showOnlyLive, setShowOnlyLive] = useState(true);
 
     const [activeDragId, setActiveDragId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<'feed' | 'thumbnails'>('feed');
@@ -161,6 +162,7 @@ export default function GridIndex({
             figma_url: '',
             notes: '',
         });
+        setShowOnlyLive(false);
         setSheetOpen(true);
     };
 
@@ -365,7 +367,7 @@ export default function GridIndex({
     return (
         <AppLayout
             title="Visual Grid 3x3 Instagram"
-            subtitle="Perencanaan estetika feed 3 kolom terpadu — susun rencana konten di baris atas di atas feed Instagram asli yang telah tayang"
+            subtitle="Pratinjau estetika feed 3 kolom dari postingan yang telah tayang di akun Instagram resmi"
             actions={
                 <div className="flex flex-wrap items-center gap-2">
                     {can?.managePublishing && (
@@ -389,7 +391,7 @@ export default function GridIndex({
                             Tambah Slot Draft
                         </Button>
                     )}
-                    {(can?.editContent || can?.managePublishing) && planned.length > 0 && (
+                    {(can?.editContent || can?.managePublishing) && !showOnlyLive && planned.length > 0 && (
                         <Button
                             variant="primary"
                             size="sm"
@@ -415,7 +417,7 @@ export default function GridIndex({
                     >
                         {(
                             [
-                                { id: 'feed', label: 'Hybrid Feed Instagram (Grid 3xN)', icon: Grid3x3 },
+                                { id: 'feed', label: 'Feed Instagram (Grid 3x3)', icon: Grid3x3 },
                                 { id: 'thumbnails', label: 'Cover Reels (9:16)', icon: Video },
                             ] as const
                         ).map((item) => {
@@ -448,9 +450,27 @@ export default function GridIndex({
                         })}
                     </div>
 
-                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)] hidden md:block">
-                        Zona atas dapat digeser bebas; zona bawah menampilkan urutan riil postingan Instagram yang telah tayang.
-                    </p>
+                    <div className="flex items-center gap-2">
+                        {planned.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setShowOnlyLive(!showOnlyLive)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer flex items-center gap-1.5 ${
+                                    !showOnlyLive
+                                        ? 'bg-[var(--md-sys-color-primary-container)] text-[var(--md-sys-color-on-primary-container)] border-[var(--md-sys-color-primary)]/40'
+                                        : 'bg-[var(--md-sys-color-surface-container-low)] text-[var(--md-sys-color-on-surface-variant)] border-[var(--md-sys-color-outline-variant)] hover:text-[var(--md-sys-color-on-surface)]'
+                                }`}
+                            >
+                                <span className={`w-2 h-2 rounded-full ${!showOnlyLive ? 'bg-[var(--md-sys-color-primary)]' : 'bg-gray-400'}`} />
+                                {!showOnlyLive ? 'Tampilkan Feed Asli IG Saja' : `Simulasi Draft Rencana (${planned.length})`}
+                            </button>
+                        )}
+                        <p className="text-xs text-[var(--md-sys-color-on-surface-variant)] hidden md:block">
+                            {showOnlyLive
+                                ? 'Hanya menampilkan postingan yang benar-benar tayang di akun Instagram.'
+                                : 'Mode simulasi: seret kartu draft rencana untuk melihat komposisi estetika feed 3x3.'}
+                        </p>
+                    </div>
                 </div>
 
                 <AnimatePresence mode="wait" initial={false}>
@@ -555,31 +575,21 @@ export default function GridIndex({
                                 </div>
                             </div>
 
-                            {/* TOP ZONE: REORDERABLE PLANNED CONTENT & CUSTOM SLOTS */}
-                            <div className="space-y-2.5">
-                                <div className="flex items-center justify-between px-1">
-                                    <div className="flex items-center gap-2">
-                                        <span className="w-2 h-2 rounded-full bg-[var(--md-sys-color-primary)]" />
-                                        <h3 className="text-xs font-extrabold uppercase tracking-wider text-[var(--md-sys-color-on-surface)]">
-                                            Zona Rencana Tayang & Draft Visual ({planned.length})
-                                        </h3>
+                            {/* TOP ZONE: REORDERABLE PLANNED CONTENT & CUSTOM SLOTS (Hanya jika mode simulasi draft diaktifkan) */}
+                            {!showOnlyLive && planned.length > 0 && (
+                                <div className="space-y-2.5">
+                                    <div className="flex items-center justify-between px-1">
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-2 h-2 rounded-full bg-[var(--md-sys-color-primary)]" />
+                                            <h3 className="text-xs font-extrabold uppercase tracking-wider text-[var(--md-sys-color-on-surface)]">
+                                                Zona Rencana Tayang & Draft Visual ({planned.length})
+                                            </h3>
+                                        </div>
+                                        <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                            Seret kartu untuk menyimulasikan urutan masuk ke feed 3x3
+                                        </span>
                                     </div>
-                                    <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
-                                        Seret kartu untuk menyimulasikan urutan masuk ke feed 3x3
-                                    </span>
-                                </div>
 
-                                {planned.length === 0 ? (
-                                    <div className="p-8 rounded-2xl border border-dashed border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)]/60 text-center space-y-2">
-                                        <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)]">
-                                            Belum ada antrean rencana konten Instagram atau slot draft
-                                        </p>
-                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
-                                            Tambahkan konten berplatform Instagram di Content Plan atau klik{' '}
-                                            <strong>Tambah Slot Draft</strong> di atas untuk mulai menyusun pratinjau warna feed.
-                                        </p>
-                                    </div>
-                                ) : (
                                     <DndContext
                                         sensors={sensors}
                                         collisionDetection={closestCenter}
@@ -616,27 +626,44 @@ export default function GridIndex({
                                                 : null}
                                         </DragOverlay>
                                     </DndContext>
-                                )}
-                            </div>
-
+                                </div>
+                            )}
                             {/* BOTTOM ZONE: LOCKED LIVE INSTAGRAM FEED */}
                             <div className="space-y-2.5 pt-2">
                                 <div className="flex items-center justify-between px-1">
                                     <div className="flex items-center gap-2">
-                                        <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                                        <Grid3x3 className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
                                         <h3 className="text-xs font-extrabold uppercase tracking-wider text-[var(--md-sys-color-on-surface)]">
-                                            Feed Instagram Aktif — Urutan Riil Tayang ({livePosts.length})
+                                            Feed Instagram Asli — {livePosts.length} Kiriman Tayang
                                         </h3>
                                     </div>
                                     <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
-                                        Terkunci sesuai kronologi asli akun @{profileUsername}
+                                        Postingan riil akun @{profileUsername}
                                     </span>
                                 </div>
 
                                 {livePosts.length === 0 ? (
-                                    <div className="p-8 rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] text-center text-xs text-[var(--md-sys-color-on-surface-variant)]">
-                                        Belum ada postingan Instagram berstatus tayang yang tersinkronisasi. Klik{' '}
-                                        <strong>Sync Feed Asli IG</strong> untuk menarik media langsung dari Meta Graph API.
+                                    <div className="p-10 rounded-3xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] text-center space-y-3">
+                                        <div className="w-12 h-12 rounded-2xl bg-[var(--md-sys-color-surface-container-high)] text-[var(--md-sys-color-primary)] mx-auto flex items-center justify-center">
+                                            <Grid3x3 className="w-6 h-6" />
+                                        </div>
+                                        <p className="text-sm font-bold text-[var(--md-sys-color-on-surface)]">
+                                            Belum ada postingan Instagram yang tersinkronisasi
+                                        </p>
+                                        <p className="text-xs text-[var(--md-sys-color-on-surface-variant)] max-w-md mx-auto">
+                                            Hanya postingan yang benar-benar tayang di akun Instagram yang ditampilkan di sini.
+                                        </p>
+                                        {can?.managePublishing && (
+                                            <Button
+                                                variant="primary"
+                                                size="sm"
+                                                isLoading={isSyncingIg}
+                                                icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
+                                                onClick={handleSyncLiveIg}
+                                            >
+                                                Tarik Kiriman dari Instagram Sekarang
+                                            </Button>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
@@ -740,14 +767,16 @@ export default function GridIndex({
                                 </h3>
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                                     {[
-                                        ...planned
-                                            .filter((s) => s.format === 'reels')
-                                            .map((s) => ({
-                                                key: s.slotKey,
-                                                title: s.title,
-                                                img: s.imageUrl,
-                                                badge: 'Rencana Reels',
-                                            })),
+                                        ...(!showOnlyLive
+                                            ? planned
+                                                  .filter((s) => s.format === 'reels')
+                                                  .map((s) => ({
+                                                      key: s.slotKey,
+                                                      title: s.title,
+                                                      img: s.imageUrl,
+                                                      badge: 'Rencana Reels',
+                                                  }))
+                                            : []),
                                         ...livePosts
                                             .filter((p) => p.format === 'reels')
                                             .map((p) => ({

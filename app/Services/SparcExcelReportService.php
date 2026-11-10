@@ -32,6 +32,58 @@ class SparcExcelReportService
      * 18 = Editable Input Number Cell #,##0 (Soft Emerald Tint Fill, Thin Border)
      * 19 = Editable Input Empty Cell (Soft Emerald Tint Fill, Center Muted, Thin Border)
      */
+    public const FORMAT_GROUPS = [
+        'reels' => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+        'carousel' => ['carousel', 'carousel_feed'],
+        'feed' => ['feed', 'single', 'single_image', 'single_feed'],
+    ];
+
+    /**
+     * Filter publications by platform, format, and date range.
+     *
+     * @param  array<int, array<string, mixed>>  $publications
+     * @return array<int, array<string, mixed>>
+     */
+    public static function filterPublications(
+        array $publications,
+        string $platform = 'all',
+        string $format = 'all',
+        ?string $dateFrom = null,
+        ?string $dateTo = null
+    ): array {
+        return array_values(array_filter(
+            $publications,
+            static function (array $p) use ($platform, $format, $dateFrom, $dateTo): bool {
+                if ($platform !== 'all' && strtolower((string) ($p['platform'] ?? '')) !== strtolower($platform)) {
+                    return false;
+                }
+
+                if ($format !== 'all') {
+                    $allowedFormats = self::FORMAT_GROUPS[$format] ?? [];
+                    $pubFormat = strtolower((string) ($p['format'] ?? ''));
+                    if (! in_array($pubFormat, $allowedFormats, true)) {
+                        return false;
+                    }
+                }
+
+                if (($dateFrom !== null && $dateFrom !== '') || ($dateTo !== null && $dateTo !== '')) {
+                    $rawDate = (string) ($p['publishedActualAt'] ?: ($p['scheduledAt'] ?? ''));
+                    $dateStr = strlen($rawDate) >= 10 ? substr($rawDate, 0, 10) : '';
+                    if ($dateStr === '') {
+                        return false;
+                    }
+                    if ($dateFrom !== null && $dateFrom !== '' && $dateStr < $dateFrom) {
+                        return false;
+                    }
+                    if ($dateTo !== null && $dateTo !== '' && $dateStr > $dateTo) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        ));
+    }
 
     /**
      * Generate a complete, multi-sheet styled .xlsx Performance Report workbook.
@@ -39,6 +91,9 @@ class SparcExcelReportService
      * @param  array{
      *   today: string,
      *   platformFilter?: string,
+     *   formatFilter?: string,
+     *   dateFrom?: string|null,
+     *   dateTo?: string|null,
      *   activeLayer?: string,
      *   publications: array<int, array<string, mixed>>,
      *   contentItems: array<int, array<string, mixed>>,
@@ -51,26 +106,31 @@ class SparcExcelReportService
     {
         $today = (string) ($payload['today'] ?? now()->toDateString());
         $platformFilter = (string) ($payload['platformFilter'] ?? 'all');
+        $formatFilter = (string) ($payload['formatFilter'] ?? 'all');
+        $dateFrom = isset($payload['dateFrom']) && $payload['dateFrom'] !== '' ? (string) $payload['dateFrom'] : null;
+        $dateTo = isset($payload['dateTo']) && $payload['dateTo'] !== '' ? (string) $payload['dateTo'] : null;
         $activeLayer = (string) ($payload['activeLayer'] ?? 'content');
         $publications = $payload['publications'] ?? [];
         $contentItems = $payload['contentItems'] ?? [];
         $team = $payload['team'] ?? [];
         $ig = $payload['instagramSettings'] ?? [];
 
-        $filteredPubs = array_values(array_filter(
-            $publications,
-            static fn (array $p): bool => $platformFilter === 'all'
-                || strtolower((string) ($p['platform'] ?? '')) === strtolower($platformFilter)
-        ));
+        $filteredPubs = self::filterPublications($publications, $platformFilter, $formatFilter, $dateFrom, $dateTo);
+
+        $periodLabel = sprintf(
+            'Periode: %s s/d %s  •  Format: %s',
+            $dateFrom ?: 'Semua',
+            $dateTo ?: 'Semua',
+            $formatFilter === 'all' ? 'Semua Format' : strtoupper($formatFilter)
+        );
 
         $sheets = [
-            $this->buildContentPerformanceSheet($filteredPubs, $publications, $today, $platformFilter),
+            $this->buildContentPerformanceSheet($filteredPubs, $filteredPubs, $today, $platformFilter, $periodLabel),
             $this->buildCreatorDemographicsSheet($contentItems, $ig, $today),
             $this->buildMetaAdsSheet($ig, $today),
             $this->buildOperationalPipelineSheet($contentItems, $today),
             $this->buildTeamWorkloadSheet($team, $today),
         ];
-
         $activeTabMap = [
             'content' => 0,
             'creator' => 1,
@@ -339,7 +399,8 @@ class SparcExcelReportService
         array $filteredPubs,
         array $allPubs,
         string $today,
-        string $platformFilter
+        string $platformFilter,
+        string $periodLabel = ''
     ): array {
         $rows = [];
         $merges = ['A1:R1', 'A2:R2', 'A4:G4', 'I4:R4'];
@@ -350,13 +411,15 @@ class SparcExcelReportService
             'height' => 30,
             'cells' => $this->mergedRowCells(18, 'SPARC HUMAS — LAPORAN PERFORMA & DISTRIBUSI KONTEN', 1),
         ];
+        $subTitle = "Tanggal Laporan: {$today}  •  Filter Kanal: {$filterLabel}";
+        if ($periodLabel !== '') {
+            $subTitle .= "  •  {$periodLabel}";
+        }
+        $subTitle .= "  •  Prinsip Data: Nilai belum diukur ditampilkan sebagai '—' (bukan angka 0)";
+
         $rows[] = [
             'height' => 20,
-            'cells' => $this->mergedRowCells(
-                18,
-                "Tanggal Laporan: {$today}  •  Filter Kanal: {$filterLabel}  •  Prinsip Data: Nilai belum diukur ditampilkan sebagai '—' (bukan angka 0)",
-                2
-            ),
+            'cells' => $this->mergedRowCells(18, $subTitle, 2),
         ];
         $rows[] = ['height' => 10, 'cells' => []];
 
@@ -720,11 +783,11 @@ class SparcExcelReportService
                 ['value' => 'No', 'style' => 5],
                 ['value' => 'ID Story', 'style' => 5],
                 ['value' => 'Caption Story (24 Jam)', 'style' => 4],
-                ['value' => 'Reach', 'style' => 6],
-                ['value' => 'Impressions', 'style' => 6],
-                ['value' => 'Replies', 'style' => 6],
-                ['value' => 'Exits', 'style' => 6],
-                ['value' => 'Taps Forward / Back', 'style' => 5],
+                ['value' => 'Penonton (Reach)', 'style' => 6],
+                ['value' => 'Tayangan (Views)', 'style' => 6],
+                ['value' => 'Balasan (Replies)', 'style' => 6],
+                ['value' => 'Interaksi Navigasi', 'style' => 6],
+                ['value' => 'Tautan Story', 'style' => 5],
             ],
         ];
 
@@ -739,6 +802,8 @@ class SparcExcelReportService
             foreach ($stories as $idx => $st) {
                 $isEven = $idx % 2 === 1;
                 $sm = is_array($st['metrics'] ?? null) ? $st['metrics'] : [];
+                $views = (int) ($sm['views'] ?? $sm['impressions'] ?? 0);
+                $nav = (int) ($sm['navigation'] ?? (((int) ($sm['taps_forward'] ?? 0)) + ((int) ($sm['taps_back'] ?? 0)) + ((int) ($sm['exits'] ?? 0))));
                 $rows[] = [
                     'height' => 20,
                     'cells' => [
@@ -746,10 +811,10 @@ class SparcExcelReportService
                         ['value' => (string) ($st['id'] ?? '—'), 'style' => $isEven ? 10 : 9],
                         ['value' => (string) ($st['caption'] ?: 'Instagram Story'), 'style' => $isEven ? 8 : 7],
                         ['value' => (int) ($sm['reach'] ?? 0), 'type' => 'n', 'style' => $isEven ? 12 : 11],
-                        ['value' => (int) ($sm['impressions'] ?? 0), 'type' => 'n', 'style' => $isEven ? 12 : 11],
+                        ['value' => $views, 'type' => 'n', 'style' => $isEven ? 12 : 11],
                         ['value' => (int) ($sm['replies'] ?? 0), 'type' => 'n', 'style' => $isEven ? 12 : 11],
-                        ['value' => (int) ($sm['exits'] ?? 0), 'type' => 'n', 'style' => $isEven ? 12 : 11],
-                        ['value' => ((int) ($sm['taps_forward'] ?? 0)).' / '.((int) ($sm['taps_back'] ?? 0)), 'style' => $isEven ? 10 : 9],
+                        ['value' => $nav, 'type' => 'n', 'style' => $isEven ? 12 : 11],
+                        ['value' => (string) ($st['permalink'] ?: '—'), 'style' => $isEven ? 10 : 9],
                     ],
                 ];
             }

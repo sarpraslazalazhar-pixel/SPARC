@@ -830,10 +830,16 @@ class InstagramOperationsController extends Controller
             $publishedItems = ContentItem::query()
                 ->where('platform', 'instagram')
                 ->where('status', 'published')
+                ->where(function ($q) {
+                    $q->whereNotNull('ig_media_id')
+                        ->orWhereNotNull('ig_media_url')
+                        ->orWhereNotNull('ig_thumbnail_url')
+                        ->orWhereNotNull('published_url');
+                })
                 ->orderByDesc('publish_date')
                 ->orderByDesc('publish_time')
                 ->orderByDesc('id')
-                ->limit(30)
+                ->limit(36)
                 ->get();
 
             foreach ($publishedItems as $item) {

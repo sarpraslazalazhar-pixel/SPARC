@@ -1,12 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import {
+    Cloud,
     Copy,
     ExternalLink,
     FileImage,
     FileText,
     Film,
     FolderOpen,
+    HardDrive,
     LayoutTemplate,
     Plus,
     RotateCcw,
@@ -33,6 +35,7 @@ interface AssetsPageProps {
 const ASSET_CATEGORIES: Array<{
     key: 'all' | SparcVisualAsset['category'];
     label: string;
+    shortLabel?: string;
 }> = [
     { key: 'all', label: 'Semua Kategori' },
     { key: 'foto', label: 'Foto Liputan' },
@@ -41,11 +44,18 @@ const ASSET_CATEGORIES: Array<{
     { key: 'template_desain', label: 'Template Desain' },
     { key: 'ilustrasi', label: 'Ilustrasi' },
     { key: 'dokumen', label: 'Dokumen' },
+    { key: 'offline', label: 'Offline (Flashdisk / Harddisk / SSD)', shortLabel: 'Offline (HDD/SSD)' },
+    { key: 'online', label: 'Online (Cloud / Drive)', shortLabel: 'Online (Cloud)' },
 ];
 
 function categoryLabel(cat: SparcVisualAsset['category']): string {
     return ASSET_CATEGORIES.find((c) => c.key === cat)?.label ?? cat;
 }
+function categoryBadgeLabel(cat: SparcVisualAsset['category']): string {
+    const item = ASSET_CATEGORIES.find((c) => c.key === cat);
+    return item?.shortLabel ?? item?.label ?? cat;
+}
+
 
 function renderCategoryIcon(cat: SparcVisualAsset['category'], iconClass = 'w-3.5 h-3.5') {
     if (cat === 'video') {
@@ -56,6 +66,12 @@ function renderCategoryIcon(cat: SparcVisualAsset['category'], iconClass = 'w-3.
     }
     if (cat === 'dokumen') {
         return <FileText className={iconClass} />;
+    }
+    if (cat === 'offline') {
+        return <HardDrive className={iconClass} />;
+    }
+    if (cat === 'online') {
+        return <Cloud className={iconClass} />;
     }
     return <FileImage className={iconClass} />;
 }
@@ -127,6 +143,24 @@ function AssetThumbnailCard({
             />
         );
     }
+    if (category === 'offline') {
+        return (
+            <div
+                className={`w-full h-full flex flex-col items-center justify-center p-3 bg-gradient-to-br from-[var(--md-sys-color-surface-container)] to-[var(--md-sys-color-surface-container-high)] text-center select-none group-hover:from-[var(--md-sys-color-surface-container-high)] group-hover:to-[var(--md-sys-color-surface-container-highest)] transition-colors ${className}`}
+            >
+                <div className="w-12 h-12 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container-lowest)] p-2 shadow-sm border border-[var(--md-sys-color-outline-variant)]/60 flex items-center justify-center text-[var(--md-sys-color-primary)] group-hover:scale-105 transition-transform duration-200">
+                    <HardDrive className="w-6 h-6" />
+                </div>
+                <span className="mt-2 text-[11px] font-bold text-[var(--md-sys-color-on-surface)] truncate max-w-[170px] px-2 py-0.5 rounded-full bg-[var(--md-sys-color-surface)]/80 dark:bg-[var(--md-sys-color-surface-container-lowest)]/80 border border-[var(--md-sys-color-outline-variant)]/50">
+                    {externalUrl || 'Penyimpanan Offline'}
+                </span>
+                <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] mt-0.5">
+                    Flashdisk / Harddisk / SSD
+                </span>
+            </div>
+        );
+    }
+
 
     if (domain && resolvedFavicon && !faviconFailed) {
         return (
@@ -185,7 +219,9 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                 const inTitle = asset.title.toLowerCase().includes(q);
                 const inTags = asset.tags.some((t) => t.toLowerCase().includes(q));
                 const inContent = asset.contentId?.toLowerCase().includes(q) ?? false;
-                if (!inTitle && !inTags && !inContent) {
+                const inLocation = asset.externalUrl?.toLowerCase().includes(q) ?? false;
+                const inSession = asset.session?.toLowerCase().includes(q) ?? false;
+                if (!inTitle && !inTags && !inContent && !inLocation && !inSession) {
                     return false;
                 }
             }
@@ -196,6 +232,7 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
     const createForm = useForm({
         title: '',
         category: 'infografis' as SparcVisualAsset['category'],
+        session: '',
         external_url: '',
         tags: 'humas, resmi, 2026',
         content_id: '',
@@ -212,7 +249,9 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
             onError: () => {
                 toastError(
                     'Validasi Aset Visual Gagal',
-                    'Pastikan judul dan URL sumber aset (https://...) telah diisi.'
+                    createForm.data.category === 'offline'
+                        ? 'Pastikan judul dan lokasi media penyimpanan offline fisik telah diisi.'
+                        : 'Pastikan judul dan URL sumber aset (https://...) telah diisi.'
                 );
             },
         });
@@ -357,18 +396,32 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                                     />
                                     <span className="absolute top-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-[var(--md-sys-color-surface)]/90 dark:bg-[var(--md-sys-color-surface-container-highest)]/90 text-[var(--md-sys-color-on-surface)] border border-[var(--md-sys-color-outline-variant)] backdrop-blur-xs">
                                         {renderCategoryIcon(asset.category)}
-                                        {categoryLabel(asset.category)}
+                                        {categoryBadgeLabel(asset.category)}
                                     </span>
                                 </div>
 
                                 <div className="p-3.5 flex-1 flex flex-col justify-between space-y-2.5">
                                     <div className="space-y-1.5">
-                                        {asset.contentId && (
-                                            <ContentIdBadge contentId={asset.contentId} />
-                                        )}
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            {asset.contentId && (
+                                                <ContentIdBadge contentId={asset.contentId} />
+                                            )}
+                                            {asset.session && (
+                                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-[var(--md-sys-color-secondary-container)] text-[var(--md-sys-color-on-secondary-container)] border border-[var(--md-sys-color-outline-variant)]">
+                                                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--md-sys-color-primary)]" />
+                                                    {asset.session}
+                                                </span>
+                                            )}
+                                        </div>
                                         <h3 className="text-xs font-bold text-[var(--md-sys-color-on-surface)] group-hover:text-[var(--md-sys-color-primary)] transition-colors line-clamp-2">
                                             {asset.title}
                                         </h3>
+                                        {asset.category === 'offline' && (
+                                            <div className="flex items-center gap-1 text-[10px] font-medium text-[var(--md-sys-color-on-surface-muted)] truncate">
+                                                <HardDrive className="w-3 h-3 text-[var(--md-sys-color-primary)] shrink-0" />
+                                                <span className="truncate">{asset.externalUrl}</span>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="space-y-2">
@@ -422,12 +475,43 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                                 </p>
                             </div>
                             <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
-                                <span className="sparc-eyebrow block">Dimensi / Format</span>
-                                <p className="sparc-code-id font-bold text-[var(--md-sys-color-on-surface)] mt-1">
-                                    {selectedAsset.dimensions || 'Resolusi Tinggi'}
+                                <span className="sparc-eyebrow block">
+                                    {selectedAsset.category === 'offline' ? 'Media / Tipe' : 'Dimensi / Format'}
+                                </span>
+                                <p className="sparc-code-id font-bold text-[var(--md-sys-color-on-surface)] mt-1 truncate">
+                                    {selectedAsset.dimensions || (selectedAsset.category === 'offline' ? 'Media Offline / Fisik' : 'Resolusi Tinggi')}
                                 </p>
                             </div>
                         </div>
+                        <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-xs">
+                            <span className="sparc-eyebrow block">
+                                {selectedAsset.category === 'offline'
+                                    ? 'Lokasi Media Penyimpanan Fisik (Offline)'
+                                    : 'Tautan Sumber / Cloud Storage'}
+                            </span>
+                            <div className="flex items-center gap-2 mt-1">
+                                {selectedAsset.category === 'offline' ? (
+                                    <HardDrive className="w-4 h-4 text-[var(--md-sys-color-primary)] shrink-0" />
+                                ) : (
+                                    <ExternalLink className="w-4 h-4 text-[var(--md-sys-color-primary)] shrink-0" />
+                                )}
+                                <span className="font-bold text-[var(--md-sys-color-on-surface)] break-all select-all">
+                                    {selectedAsset.externalUrl}
+                                </span>
+                            </div>
+                        </div>
+
+                        {selectedAsset.session && (
+                            <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between text-xs">
+                                <span className="text-[var(--md-sys-color-on-surface-variant)]">
+                                    Sesi Kegiatan / Liputan:
+                                </span>
+                                <span className="font-bold text-[var(--md-sys-color-on-surface)] px-2 py-0.5 rounded-md bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)]">
+                                    {selectedAsset.session}
+                                </span>
+                            </div>
+                        )}
+
 
                         {selectedAsset.contentId && (
                             <div className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center justify-between text-xs">
@@ -459,7 +543,7 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                                     icon={<Copy className="w-3.5 h-3.5" />}
                                     onClick={() => handleCopyLink(selectedAsset.externalUrl)}
                                 >
-                                    Salin Link
+                                    {selectedAsset.category === 'offline' ? 'Salin Lokasi' : 'Salin Link'}
                                 </Button>
                                 {can?.manageAssets && (
                                     <Button
@@ -474,14 +558,21 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                                 )}
                             </div>
 
-                            <a
-                                href={selectedAsset.externalUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] text-xs font-bold hover:brightness-105 transition"
-                            >
-                                Buka Sumber Aset <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
+                            {selectedAsset.externalUrl.startsWith('http://') || selectedAsset.externalUrl.startsWith('https://') ? (
+                                <a
+                                    href={selectedAsset.externalUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] text-xs font-bold hover:brightness-105 transition"
+                                >
+                                    Buka Sumber Aset <ExternalLink className="w-3.5 h-3.5" />
+                                </a>
+                            ) : (
+                                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface)] text-xs font-medium border border-[var(--md-sys-color-outline-variant)]">
+                                    <HardDrive className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
+                                    <span>Penyimpanan Offline Fisik</span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -522,7 +613,7 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                 isOpen={createModalOpen}
                 onClose={() => setCreateModalOpen(false)}
                 title="Tambah Aset Visual ke Katalog"
-                description="Daftarkan tautan master aset (Drive, Figma, Canva, atau Storage Humas)"
+                description="Daftarkan tautan master aset (Drive, Figma, Canva) atau media penyimpanan offline (Flashdisk, Harddisk, SSD)"
                 maxWidth="md"
             >
                 <form onSubmit={handleCreateSubmit} className="space-y-4" noValidate>
@@ -552,31 +643,56 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                             <option value="template_desain">Template Desain</option>
                             <option value="ilustrasi">Ilustrasi</option>
                             <option value="dokumen">Dokumen</option>
+                            <option value="offline">Offline (Flashdisk / Harddisk / SSD)</option>
+                            <option value="online">Online (Cloud Storage / Drive)</option>
                         </Select>
 
-                        <Select
-                            label="Tautkan ke Kode Konten (Opsional)"
-                            value={createForm.data.content_id}
-                            onChange={(e) => createForm.setData('content_id', e.target.value)}
-                        >
-                            <option value="">— Aset Umum —</option>
-                            {contentItems.map((item) => (
-                                <option key={item.id} value={item.contentId}>
-                                    {item.contentId} — {item.title}
-                                </option>
-                            ))}
-                        </Select>
+                        <Input
+                            label="Sesi Kegiatan / Liputan (Opsional)"
+                            placeholder="Contoh: Sesi 1, Sesi Pagi, Sesi Pembukaan"
+                            value={createForm.data.session}
+                            onChange={(e) => createForm.setData('session', e.target.value)}
+                            error={createForm.errors.session}
+                        />
                     </div>
 
+                    <Select
+                        label="Tautkan ke Kode Konten (Opsional)"
+                        value={createForm.data.content_id}
+                        onChange={(e) => createForm.setData('content_id', e.target.value)}
+                    >
+                        <option value="">— Aset Umum —</option>
+                        {contentItems.map((item) => (
+                            <option key={item.id} value={item.contentId}>
+                                {item.contentId} — {item.title}
+                            </option>
+                        ))}
+                    </Select>
+
                     <Input
-                        type="url"
-                        label="URL Sumber Master Aset"
+                        type={createForm.data.category === 'offline' ? 'text' : 'text'}
+                        label={
+                            createForm.data.category === 'offline'
+                                ? 'Lokasi / Media Penyimpanan Fisik (Flashdisk / Harddisk / SSD)'
+                                : createForm.data.category === 'online'
+                                  ? 'URL / Sumber Master Aset (Cloud / Drive / Storage)'
+                                  : 'URL Sumber Master Aset'
+                        }
                         required
-                        placeholder="https://drive.google.com/... atau https://figma.com/..."
+                        placeholder={
+                            createForm.data.category === 'offline'
+                                ? 'Contoh: Harddisk Eksternal Humas 01 (Folder Master), Flashdisk SanDisk 64GB, Rak Arsip B'
+                                : 'https://drive.google.com/... atau https://figma.com/...'
+                        }
                         value={createForm.data.external_url}
                         onChange={(e) => createForm.setData('external_url', e.target.value)}
                         error={createForm.errors.external_url}
                     />
+                    {createForm.data.category === 'offline' && (
+                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] -mt-2">
+                            Simpan informasi fisik tempat file master disimpan (nama flashdisk, harddisk eksternal, atau SSD tim).
+                        </p>
+                    )}
                     {createForm.data.external_url && (
                         <div className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] flex items-center gap-3">
                             <div className="w-16 h-12 rounded-lg overflow-hidden shrink-0 border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)]">
@@ -588,10 +704,18 @@ export default function AssetsIndex({ assets = [], contentItems = [] }: AssetsPa
                             </div>
                             <div className="min-w-0 text-xs">
                                 <span className="font-bold text-[var(--md-sys-color-on-surface)] block truncate">
-                                    {isDirectImage(createForm.data.external_url) ? 'Gambar Langsung Terdeteksi' : 'Favicon Layanan Terdeteksi'}
+                                    {createForm.data.category === 'offline'
+                                        ? 'Media Fisik Offline Terdata'
+                                        : isDirectImage(createForm.data.external_url)
+                                          ? 'Gambar Langsung Terdeteksi'
+                                          : getDomainFromUrl(createForm.data.external_url)
+                                            ? 'Favicon Layanan Terdeteksi'
+                                            : 'Sumber Master Aset Terdata'}
                                 </span>
                                 <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] block truncate">
-                                    {getDomainFromUrl(createForm.data.external_url) || createForm.data.external_url}
+                                    {createForm.data.category === 'offline'
+                                        ? createForm.data.external_url
+                                        : getDomainFromUrl(createForm.data.external_url) || createForm.data.external_url}
                                 </span>
                             </div>
                         </div>

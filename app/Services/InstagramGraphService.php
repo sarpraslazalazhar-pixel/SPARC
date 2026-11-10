@@ -2818,18 +2818,31 @@ class InstagramGraphService
                     $storyId = (string) ($s['id'] ?? '');
                     $storyMetrics = [
                         'reach' => 0,
+                        'views' => 0,
                         'impressions' => 0,
                         'replies' => 0,
+                        'shares' => 0,
+                        'navigation' => 0,
+                        'profile_visits' => 0,
                         'exits' => 0,
                         'taps_forward' => 0,
                         'taps_back' => 0,
                     ];
 
                     try {
+                        // Meta Graph API v22.0+ story metrics
                         $sInsight = Http::timeout(6)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
-                            'metric' => 'reach,impressions,replies,exits,taps_forward,taps_back',
+                            'metric' => 'reach,views,replies,shares,navigation,profile_visits',
                             'access_token' => $this->accessToken,
                         ]);
+
+                        if (! $sInsight->successful()) {
+                            // Fallback to older Graph API format
+                            $sInsight = Http::timeout(6)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
+                                'metric' => 'reach,views,replies,navigation',
+                                'access_token' => $this->accessToken,
+                            ]);
+                        }
 
                         if ($sInsight->successful()) {
                             /** @var array<int, array<string, mixed>> $insightRows */
@@ -2841,6 +2854,11 @@ class InstagramGraphService
                                     $storyMetrics[$k] = $v;
                                 }
                             }
+                        }
+
+                        // Sync impressions with views for backward compatibility
+                        if ($storyMetrics['impressions'] === 0 && $storyMetrics['views'] > 0) {
+                            $storyMetrics['impressions'] = $storyMetrics['views'];
                         }
                     } catch (\Throwable) {
                         // ignore individual story insight failure

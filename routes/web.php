@@ -74,6 +74,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/calendar/events', [WorkspaceActionController::class, 'storeCalendarEvent'])->name('calendar.events.store');
     Route::post('/calendar/activities', [WorkspaceV3Controller::class, 'storeActivity'])->name('calendar.activities.store');
     Route::patch('/calendar/reschedule', [WorkspaceV3Controller::class, 'rescheduleCalendarItem'])->name('calendar.reschedule');
+    Route::delete('/calendar/items', [WorkspaceV3Controller::class, 'destroyCalendarItem'])->name('calendar.items.destroy');
+    Route::post('/calendar/items/delete', [WorkspaceV3Controller::class, 'destroyCalendarItem'])->name('calendar.items.destroy.post');
 
     // =====================================================================
     // 3. DISTRIBUTION & INSIGHTS — Publishing & Performance Report

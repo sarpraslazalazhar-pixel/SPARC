@@ -20,6 +20,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -288,7 +289,15 @@ class WorkspaceV3Controller extends Controller
             'contentItems' => $contentItems,
             'activities' => $session->get('sparc_v3.activities', []),
             'publications' => $publications,
-            'assets' => $session->get('sparc_v3.assets', []),
+            'assets' => (function () use ($session) {
+                $assets = $session->get('sparc_v3.assets');
+                if ($assets === null || (! $session->has('sparc_v3.assets_touched') && empty($assets))) {
+                    $assets = self::defaultSeedAssets();
+                    $session->put('sparc_v3.assets', $assets);
+                }
+
+                return $assets;
+            })(),
             'team' => self::loadRealTeam(),
             'settings' => (function () use ($session, $request) {
                 $s = $session->get('sparc_v3.settings', []);
@@ -1838,6 +1847,118 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
+     * Delete an item from the calendar (`DELETE /calendar/items`).
+     */
+    public function destroyCalendarItem(Request $request): RedirectResponse
+    {
+        $state = self::hydrateWorkspace($request);
+        if (! $state['can']['editContent']) {
+            abort(403, 'Peran Anda tidak diizinkan menghapus jadwal kalender.');
+        }
+
+        $validated = $request->validate([
+            'uid' => ['required', 'string'],
+            'entity_type' => ['required', 'string', 'in:activity,production,publish'],
+            'entity_id' => ['required', 'string'],
+        ]);
+
+        $uid = $validated['uid'];
+        $entityType = $validated['entity_type'];
+        $entityId = $validated['entity_id'];
+
+        $idCandidates = array_values(array_unique(array_filter([
+            $entityId,
+            $uid,
+            preg_replace('/^act-/', '', $entityId),
+            preg_replace('/^act-/', '', $uid),
+            'act-'.ltrim($entityId, 'act-'),
+            'act-'.ltrim($uid, 'act-'),
+            'e-'.preg_replace('/^(ev|e)-/', '', $entityId),
+            'e-'.preg_replace('/^(ev|e)-/', '', $uid),
+        ])));
+
+        if ($entityType === 'activity' || str_starts_with($uid, 'act-')) {
+            /** @var array<int, array<string, mixed>> $activities */
+            $activities = $request->session()->get('sparc_v3.activities', []);
+            $activities = array_values(array_filter(
+                $activities,
+                fn (array $act): bool => ! in_array($act['id'] ?? '', $idCandidates, true)
+            ));
+            $request->session()->put('sparc_v3.activities', $activities);
+
+            self::flashToast(
+                $request,
+                'info',
+                'Agenda Dihapus',
+                'Agenda kelembagaan berhasil dihapus dari kalender.'
+            );
+
+            return back();
+        }
+
+        if (str_starts_with($uid, 'ev-') || str_starts_with($uid, 'e-')) {
+            /** @var array<int, array<string, mixed>> $events */
+            $events = $request->session()->get('sparc.calendar_events', []);
+            $events = array_values(array_filter(
+                $events,
+                fn (array $ev): bool => ! in_array($ev['id'] ?? '', $idCandidates, true)
+            ));
+            $request->session()->put('sparc.calendar_events', $events);
+
+            self::flashToast(
+                $request,
+                'info',
+                'Jadwal Dihapus',
+                'Jadwal publikasi berhasil dihapus dari kalender.'
+            );
+
+            return back();
+        }
+
+        // Production / Publication linked to ContentItem
+        $cleanContentId = preg_replace('/^(prod|pub)-/', '', $entityId);
+        $dbItem = ContentItem::where('id', $entityId)
+            ->orWhere('content_id', $entityId)
+            ->orWhere('id', $cleanContentId)
+            ->orWhere('content_id', $cleanContentId)
+            ->first();
+
+        if ($dbItem) {
+            $title = $dbItem->title;
+            $dbItem->delete();
+
+            $deleted = (array) $request->session()->get('sparc.deleted_planner_ids', []);
+            $deleted[] = (string) $dbItem->id;
+            $deleted[] = $dbItem->content_id;
+            $request->session()->put('sparc.deleted_planner_ids', array_unique($deleted));
+
+            self::flashToast(
+                $request,
+                'info',
+                'Jadwal Konten Dihapus',
+                sprintf('"%s" berhasil dihapus dari kalender dan dipindahkan ke Trash.', $title)
+            );
+        } else {
+            /** @var array<int, array<string, mixed>> $items */
+            $items = $request->session()->get('sparc_v3.content_items', []);
+            $items = array_values(array_filter(
+                $items,
+                fn (array $item): bool => ($item['id'] ?? '') !== $entityId && ($item['contentId'] ?? '') !== $entityId
+            ));
+            $request->session()->put('sparc_v3.content_items', $items);
+
+            self::flashToast(
+                $request,
+                'info',
+                'Jadwal Dihapus',
+                'Jadwal berhasil dihapus dari kalender.'
+            );
+        }
+
+        return back();
+    }
+
+    /**
      * Toggle a pre-publication checklist item (`PATCH /publications/{id}/checklist`).
      */
     public function togglePublishChecklist(Request $request, string $id): RedirectResponse
@@ -2098,12 +2219,27 @@ class WorkspaceV3Controller extends Controller
     {
         $state = self::hydrateWorkspace($request);
         $today = now()->toDateString();
-        $platformFilter = (string) $request->query('platform', 'all');
-        $activeLayer = (string) $request->query('layer', 'content');
+
+        $validated = $request->validate([
+            'date_from' => ['nullable', 'date_format:Y-m-d'],
+            'date_to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'format' => ['nullable', 'in:all,reels,feed,carousel'],
+            'platform' => ['nullable', 'string'],
+            'layer' => ['nullable', 'string'],
+        ]);
+
+        $platformFilter = (string) ($validated['platform'] ?? $request->query('platform', 'all'));
+        $activeLayer = (string) ($validated['layer'] ?? $request->query('layer', 'content'));
+        $formatFilter = (string) ($validated['format'] ?? $request->query('format', 'all'));
+        $dateFrom = $validated['date_from'] ?? null;
+        $dateTo = $validated['date_to'] ?? null;
 
         $binary = $excelService->generateReportWorkbook([
             'today' => $today,
             'platformFilter' => $platformFilter,
+            'formatFilter' => $formatFilter,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
             'activeLayer' => $activeLayer,
             'publications' => $state['publications'],
             'contentItems' => $state['contentItems'],
@@ -2111,7 +2247,15 @@ class WorkspaceV3Controller extends Controller
             'instagramSettings' => $state['settings']['instagram'] ?? [],
         ]);
 
-        $filename = sprintf('Laporan-Performa-SPARC-%s.xlsx', $today);
+        if (! empty($dateFrom) || ! empty($dateTo)) {
+            $filename = sprintf(
+                'Laporan-Performa-SPARC-%s_sd_%s.xlsx',
+                $dateFrom ?: 'awal',
+                $dateTo ?: 'sekarang'
+            );
+        } else {
+            $filename = sprintf('Laporan-Performa-SPARC-%s.xlsx', $today);
+        }
 
         return response($binary, 200, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -2405,15 +2549,30 @@ class WorkspaceV3Controller extends Controller
         $validated = $request->validate(
             [
                 'title' => ['required', 'string', 'min:3', 'max:180'],
-                'category' => ['required', 'string', 'in:foto,video,ilustrasi,template_desain,infografis,dokumen'],
-                'external_url' => ['required', 'url', 'max:500'],
+                'category' => ['required', 'string', 'in:foto,video,ilustrasi,template_desain,infografis,dokumen,offline,online'],
+                'session' => ['nullable', 'string', 'max:80'],
+                'external_url' => [
+                    'required',
+                    'string',
+                    'max:500',
+                    function ($attribute, $value, $fail) use ($request) {
+                        $cat = (string) $request->input('category');
+                        if ($cat === 'offline') {
+                            return;
+                        }
+                        if (in_array($cat, ['foto', 'video', 'ilustrasi', 'template_desain', 'infografis', 'dokumen'], true)) {
+                            if (! filter_var($value, FILTER_VALIDATE_URL)) {
+                                $fail('Masukkan URL aset yang valid (diawali https://).');
+                            }
+                        }
+                    },
+                ],
                 'tags' => ['nullable', 'string', 'max:250'],
                 'content_id' => ['nullable', 'string', 'max:30'],
             ],
             [
                 'title.required' => 'Judul aset visual wajib diisi.',
-                'external_url.required' => 'Tautan sumber aset (Canva / Figma / Drive / Storage) wajib diisi.',
-                'external_url.url' => 'Masukkan URL aset yang valid (diawali https://).',
+                'external_url.required' => 'Tautan sumber aset atau lokasi media penyimpanan wajib diisi.',
             ]
         );
 
@@ -2422,21 +2581,35 @@ class WorkspaceV3Controller extends Controller
             explode(',', (string) ($validated['tags'] ?? ''))
         )));
 
+        $externalUrl = trim($validated['external_url']);
+        if ($validated['category'] === 'online' && ! preg_match('#^https?://#i', $externalUrl) && str_contains($externalUrl, '.')) {
+            $externalUrl = 'https://'.$externalUrl;
+        }
+
+        $dimensions = match ($validated['category']) {
+            'offline' => 'Media Fisik (Flashdisk / HDD / SSD)',
+            'online' => 'Cloud Storage / Tautan Online',
+            'video' => '1080p / 4K Footage',
+            default => '1080 × 1350 px',
+        };
+
         /** @var array<int, array<string, mixed>> $assets */
         $assets = $request->session()->get('sparc_v3.assets', []);
         array_unshift($assets, [
             'id' => 'ast-'.Str::lower(Str::random(5)),
             'title' => $validated['title'],
             'category' => $validated['category'],
+            'session' => ($validated['session'] ?? null) ? trim((string) $validated['session']) : null,
             'tags' => $tagList ?: ['humas', 'resmi'],
-            'externalUrl' => $validated['external_url'],
-            'thumbnailUrl' => self::deriveAssetThumbnailUrl($validated['external_url']),
+            'externalUrl' => $externalUrl,
+            'thumbnailUrl' => self::deriveAssetThumbnailUrl($externalUrl),
             'contentId' => ($validated['content_id'] ?? null) ?: null,
             'uploadedBy' => $state['currentUser']['name'],
-            'createdAt' => '27 Okt 2026',
-            'dimensions' => '1080 × 1350 px',
+            'createdAt' => now()->format('d M Y'),
+            'dimensions' => $dimensions,
         ]);
         $request->session()->put('sparc_v3.assets', $assets);
+        $request->session()->put('sparc_v3.assets_touched', true);
 
         self::flashToast(
             $request,
@@ -2506,6 +2679,7 @@ class WorkspaceV3Controller extends Controller
             }
         }
         $request->session()->put('sparc_v3.assets', $remaining);
+        $request->session()->put('sparc_v3.assets_touched', true);
 
         /** @var array<int, array<string, mixed>> $trash */
         $trash = $request->session()->get('sparc.trash_items', []);
@@ -3478,7 +3652,7 @@ class WorkspaceV3Controller extends Controller
             'content_items' => [],
             'activities' => [],
             'publications' => [],
-            'assets' => [],
+            'assets' => self::defaultSeedAssets(),
             'team' => [
                 [
                     'id' => 'tm-1',
@@ -3589,6 +3763,55 @@ class WorkspaceV3Controller extends Controller
                 'haloApuLogs' => [],
             ],
             'notifications' => [],
+        ];
+    }
+
+    /**
+     * Default visual assets seeded for HUMAS catalog.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function defaultSeedAssets(): array
+    {
+        return [
+            [
+                'id' => 'ast-raw01',
+                'title' => 'Master Footage Liputan 4K Hari Keterbukaan Informasi Publik',
+                'category' => 'offline',
+                'session' => 'Sesi 1 (Pembukaan & Pleno)',
+                'tags' => ['footage', 'liputan', 'raw', 'offline', 'harddisk'],
+                'externalUrl' => 'Harddisk Eksternal Humas 01 (Folder: RAW_2026/KIP)',
+                'thumbnailUrl' => '',
+                'contentId' => null,
+                'uploadedBy' => 'Dimas Pratama',
+                'createdAt' => '25 Okt 2026',
+                'dimensions' => 'Media Fisik (HDD 2TB)',
+            ],
+            [
+                'id' => 'ast-cld02',
+                'title' => 'Folder Shared Drive Dokumentasi Video Humas Q3-Q4',
+                'category' => 'online',
+                'session' => 'Sesi Dokumentasi Tahunan',
+                'tags' => ['drive', 'cloud', 'arsip', 'online'],
+                'externalUrl' => 'https://drive.google.com/drive/folders/humas-dokumentasi-2026',
+                'thumbnailUrl' => 'https://www.google.com/s2/favicons?domain=drive.google.com&sz=128',
+                'contentId' => null,
+                'uploadedBy' => 'Nadia Putri',
+                'createdAt' => '26 Okt 2026',
+                'dimensions' => 'Cloud Storage (Google Drive)',
+            ],
+            [
+                'id' => 'ast-tpl03',
+                'title' => 'Master Template Feed & Carousel Instagram SPARC 2026',
+                'category' => 'template_desain',
+                'tags' => ['template', 'canva', 'feed', 'carousel'],
+                'externalUrl' => 'https://www.canva.com/design/DAFxxxxx/view',
+                'thumbnailUrl' => 'https://www.google.com/s2/favicons?domain=canva.com&sz=128',
+                'contentId' => null,
+                'uploadedBy' => 'Dimas Pratama',
+                'createdAt' => '27 Okt 2026',
+                'dimensions' => '1080 × 1350 px',
+            ],
         ];
     }
 }

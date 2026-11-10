@@ -841,6 +841,26 @@ class WorkspaceFlowTest extends TestCase
             (string) $exportResponse->headers->get('Content-Type')
         );
         $this->assertStringStartsWith("PK\x03\x04", (string) $exportResponse->getContent());
+        // Filtered export with format & date range
+        $filteredExportResponse = $this->get(route('report.export.excel', [
+            'platform' => 'all',
+            'layer' => 'content',
+            'format' => 'reels',
+            'date_from' => '2026-10-01',
+            'date_to' => '2026-10-31',
+        ]));
+        $filteredExportResponse->assertOk();
+        $this->assertStringContainsString(
+            'Laporan-Performa-SPARC-2026-10-01_sd_2026-10-31.xlsx',
+            (string) $filteredExportResponse->headers->get('Content-Disposition')
+        );
+
+        // Validation failure on date_to < date_from
+        $invalidExportResponse = $this->get(route('report.export.excel', [
+            'date_from' => '2026-10-31',
+            'date_to' => '2026-10-01',
+        ]));
+        $invalidExportResponse->assertSessionHasErrors('date_to');
 
         $templateResponse = $this->get(route('report.template.excel'));
         $templateResponse->assertOk();
@@ -884,5 +904,77 @@ class WorkspaceFlowTest extends TestCase
         $this->assertSame(4120, $updatedPub['metrics']['likes']);
         $this->assertNull($updatedPub['metrics']['clicks']);
         $this->assertSame('excel', $updatedPub['metrics']['source']);
+    }
+
+    /**
+     * Ensure storing an offline physical storage asset (flashdisk, harddisk, SSD) succeeds without URL validation failure.
+     */
+    public function test_store_visual_asset_with_offline_physical_storage(): void
+    {
+        $response = $this->from(route('assets.index'))->post(route('assets.store'), [
+            'title' => 'Master Dokumentasi Video Liputan HD 2026',
+            'category' => 'offline',
+            'session' => 'Sesi 1 (Pagi)',
+            'external_url' => 'Harddisk Eksternal WD 2TB Humas / Folder 2026',
+            'tags' => 'liputan, offline, harddisk',
+        ]);
+
+        $response
+            ->assertRedirect(route('assets.index'))
+            ->assertSessionHasNoErrors()
+            ->assertSessionHas('toast.type', 'success');
+
+        /** @var array<int, array<string, mixed>> $assets */
+        $assets = session('sparc_v3.assets', []);
+        $stored = collect($assets)->firstWhere('title', 'Master Dokumentasi Video Liputan HD 2026');
+
+        $this->assertNotNull($stored);
+        $this->assertSame('offline', $stored['category']);
+        $this->assertSame('Harddisk Eksternal WD 2TB Humas / Folder 2026', $stored['externalUrl']);
+        $this->assertSame('Media Fisik (Flashdisk / HDD / SSD)', $stored['dimensions']);
+        $this->assertSame('Sesi 1 (Pagi)', $stored['session']);
+    }
+
+    /**
+     * Ensure storing an online cloud asset succeeds and normalizes URL if needed.
+     */
+    public function test_store_visual_asset_with_online_cloud_storage(): void
+    {
+        $response = $this->from(route('assets.index'))->post(route('assets.store'), [
+            'title' => 'Koleksi Foto Dokumentasi Google Drive Humas',
+            'category' => 'online',
+            'external_url' => 'drive.google.com/drive/folders/sample-asset',
+            'tags' => 'online, cloud, foto',
+        ]);
+
+        $response
+            ->assertRedirect(route('assets.index'))
+            ->assertSessionHasNoErrors()
+            ->assertSessionHas('toast.type', 'success');
+
+        /** @var array<int, array<string, mixed>> $assets */
+        $assets = session('sparc_v3.assets', []);
+        $stored = collect($assets)->firstWhere('title', 'Koleksi Foto Dokumentasi Google Drive Humas');
+
+        $this->assertNotNull($stored);
+        $this->assertSame('online', $stored['category']);
+        $this->assertSame('https://drive.google.com/drive/folders/sample-asset', $stored['externalUrl']);
+        $this->assertSame('Cloud Storage / Tautan Online', $stored['dimensions']);
+    }
+
+    /**
+     * Ensure traditional categories (foto, video, etc.) still enforce valid URL.
+     */
+    public function test_store_visual_asset_validates_url_for_standard_categories(): void
+    {
+        $response = $this->from(route('assets.index'))->post(route('assets.store'), [
+            'title' => 'Foto Kegiatan Tanpa URL Valid',
+            'category' => 'foto',
+            'external_url' => 'bukan-url-valid',
+        ]);
+
+        $response
+            ->assertRedirect(route('assets.index'))
+            ->assertSessionHasErrors(['external_url']);
     }
 }

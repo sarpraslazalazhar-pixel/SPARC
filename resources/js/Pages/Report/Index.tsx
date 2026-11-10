@@ -20,6 +20,7 @@ import {
     PieChart,
     Plus,
     RefreshCw,
+    RotateCcw,
     Sparkles,
     Tag,
     TrendingUp,
@@ -71,6 +72,16 @@ function formatNullableMetric(value: number | null | undefined): string {
     }
     return value.toLocaleString('id-ID');
 }
+const FORMAT_GROUPS: Record<'reels' | 'feed' | 'carousel', string[]> = {
+    reels: ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+    carousel: ['carousel', 'carousel_feed'],
+    feed: ['feed', 'single', 'single_image', 'single_feed'],
+};
+
+function publicationDate(pub: SparcPublication): string {
+    const raw = pub.publishedActualAt || pub.scheduledAt || '';
+    return raw.length >= 10 ? raw.slice(0, 10) : '';
+}
 
 function computeEngagementRate(pub: SparcPublication): string {
     const m = pub.metrics;
@@ -81,7 +92,6 @@ function computeEngagementRate(pub: SparcPublication): string {
         (m.likes ?? 0) + (m.comments ?? 0) + (m.shares ?? 0) + (m.saves ?? 0);
     return `${((interactions / m.reach) * 100).toFixed(1)}%`;
 }
-
 export default function ReportIndex({
     today = '2026-10-27',
     contentItems = [],
@@ -100,7 +110,9 @@ export default function ReportIndex({
     const [isSyncingStories, setIsSyncingStories] = useState(false);
     const [isSyncingMentions, setIsSyncingMentions] = useState(false);
     const [platformFilter, setPlatformFilter] = useState('all');
-
+    const [formatFilter, setFormatFilter] = useState<'all' | 'reels' | 'feed' | 'carousel'>('all');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
     const [manualModalOpen, setManualModalOpen] = useState(false);
     const [csvModalOpen, setCsvModalOpen] = useState(false);
 
@@ -181,10 +193,31 @@ export default function ReportIndex({
     };
     const filteredPubs = useMemo(
         () =>
-            publications.filter((p) =>
-                platformFilter === 'all' ? true : p.platform === platformFilter
-            ),
-        [publications, platformFilter]
+            publications.filter((p) => {
+                if (platformFilter !== 'all' && p.platform !== platformFilter) {
+                    return false;
+                }
+                if (
+                    formatFilter !== 'all' &&
+                    !FORMAT_GROUPS[formatFilter].includes((p.format || '').toLowerCase())
+                ) {
+                    return false;
+                }
+                if (dateFrom || dateTo) {
+                    const d = publicationDate(p);
+                    if (!d) {
+                        return false;
+                    }
+                    if (dateFrom && d < dateFrom) {
+                        return false;
+                    }
+                    if (dateTo && d > dateTo) {
+                        return false;
+                    }
+                }
+                return true;
+            }),
+        [publications, platformFilter, formatFilter, dateFrom, dateTo]
     );
 
     // Aggregate KPI metrics strictly from non-null recorded rows
@@ -220,7 +253,7 @@ export default function ReportIndex({
     // Channel Reach Breakdown for readable bar visualization
     const channelStats = useMemo(() => {
         const map: Record<string, { platform: string; reach: number; posts: number }> = {};
-        publications.forEach((p) => {
+        filteredPubs.forEach((p) => {
             if (!map[p.platform]) {
                 map[p.platform] = { platform: p.platform, reach: 0, posts: 0 };
             }
@@ -232,7 +265,7 @@ export default function ReportIndex({
         const list = Object.values(map).sort((a, b) => b.reach - a.reach);
         const maxReach = Math.max(1, ...list.map((c) => c.reach));
         return list.map((c) => ({ ...c, pct: Math.round((c.reach / maxReach) * 100) }));
-    }, [publications]);
+    }, [filteredPubs]);
 
     // Operational stage & pillar counts
     const operationalSummary = useMemo(() => {
@@ -357,8 +390,11 @@ export default function ReportIndex({
     const handleDownloadExcelReport = () => {
         const params = new URLSearchParams({
             platform: platformFilter,
+            format: formatFilter,
             layer: activeLayer,
         });
+        if (dateFrom) params.set('date_from', dateFrom);
+        if (dateTo) params.set('date_to', dateTo);
         const downloadUrl = `/report/export-excel?${params.toString()}`;
         try {
             const a = document.createElement('a');
@@ -476,19 +512,75 @@ export default function ReportIndex({
                     />
 
                     {activeLayer === 'content' && (
-                        <select
-                            aria-label="Filter kanal pada laporan"
-                            value={platformFilter}
-                            onChange={(e) => setPlatformFilter(e.target.value)}
-                            className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
-                        >
-                            <option value="all">Kanal: Semua Platform</option>
-                            <option value="instagram">Instagram</option>
-                            <option value="tiktok">TikTok</option>
-                            <option value="youtube">YouTube</option>
-                            <option value="website">Website Resmi</option>
-                            <option value="whatsapp">WhatsApp</option>
-                        </select>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <select
+                                aria-label="Filter kanal pada laporan"
+                                value={platformFilter}
+                                onChange={(e) => setPlatformFilter(e.target.value)}
+                                className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
+                            >
+                                <option value="all">Kanal: Semua Platform</option>
+                                <option value="instagram">Instagram</option>
+                                <option value="tiktok">TikTok</option>
+                                <option value="youtube">YouTube</option>
+                                <option value="website">Website Resmi</option>
+                                <option value="whatsapp">WhatsApp</option>
+                            </select>
+
+                            <select
+                                aria-label="Filter format konten"
+                                value={formatFilter}
+                                onChange={(e) => setFormatFilter(e.target.value as typeof formatFilter)}
+                                className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
+                            >
+                                <option value="all">Format: Semua</option>
+                                <option value="reels">Reels / Video</option>
+                                <option value="feed">Feed (Single)</option>
+                                <option value="carousel">Carousel</option>
+                            </select>
+
+                            <div className="flex items-center gap-1.5 bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 h-9">
+                                <input
+                                    type="date"
+                                    aria-label="Tanggal dari"
+                                    value={dateFrom}
+                                    max={dateTo || undefined}
+                                    onChange={(e) => setDateFrom(e.target.value)}
+                                    className="bg-transparent text-xs text-[var(--md-sys-color-on-surface)] outline-none cursor-pointer"
+                                    title="Tanggal Mulai"
+                                />
+                                <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] font-medium select-none">
+                                    s/d
+                                </span>
+                                <input
+                                    type="date"
+                                    aria-label="Tanggal sampai"
+                                    value={dateTo}
+                                    min={dateFrom || undefined}
+                                    onChange={(e) => setDateTo(e.target.value)}
+                                    className="bg-transparent text-xs text-[var(--md-sys-color-on-surface)] outline-none cursor-pointer"
+                                    title="Tanggal Selesai"
+                                />
+                            </div>
+
+                            {(platformFilter !== 'all' || formatFilter !== 'all' || dateFrom || dateTo) && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    icon={<RotateCcw className="w-3.5 h-3.5" />}
+                                    onClick={() => {
+                                        setPlatformFilter('all');
+                                        setFormatFilter('all');
+                                        setDateFrom('');
+                                        setDateTo('');
+                                    }}
+                                    className="text-xs"
+                                >
+                                    Reset
+                                </Button>
+                            )}
+                        </div>
                     )}
                 </div>
 
@@ -688,7 +780,8 @@ export default function ReportIndex({
                                     <thead>
                                         <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
                                             <th className="py-3 px-4">Kode & Konten</th>
-                                            <th className="py-3 px-3">Kanal</th>
+                                            <th className="py-3 px-3">Kanal & Format</th>
+                                            <th className="py-3 px-3">Tanggal</th>
                                             <th className="py-3 px-3 text-right">Reach</th>
                                             <th className="py-3 px-3 text-right">Views</th>
                                             <th className="py-3 px-3 text-right">Likes</th>
@@ -701,30 +794,43 @@ export default function ReportIndex({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {filteredPubs.map((pub) => {
-                                            const m = pub.metrics;
-                                            const er = computeEngagementRate(pub);
-                                            return (
-                                                <tr key={pub.id} className="notion-row">
-                                                    <td className="py-3 px-4 min-w-[230px]">
-                                                        <div className="flex items-center gap-1.5 mb-0.5">
-                                                            <ContentIdBadge contentId={pub.contentId} />
-                                                            {m?.source && (
-                                                                <span className="text-[10px] uppercase font-semibold text-[var(--md-sys-color-on-surface-muted)]">
-                                                                    • {m.source}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                        <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
-                                                            {pub.title}
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-3 px-3 whitespace-nowrap">
-                                                        <PlatformChip platform={pub.platform} compact />
-                                                    </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id font-semibold text-[var(--md-sys-color-on-surface)]">
-                                                        {formatNullableMetric(m?.reach)}
-                                                    </td>
+                                        {filteredPubs.length === 0 ? (
+                                            <tr>
+                                                <td
+                                                    colSpan={can?.managePublishing ? 10 : 9}
+                                                    className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]"
+                                                >
+                                                    Tidak ada publikasi pada rentang tanggal / format ini.
+                                                </td>
+                                            </tr>
+                                        ) : (
+                                            filteredPubs.map((pub) => {
+                                                const m = pub.metrics;
+                                                const er = computeEngagementRate(pub);
+                                                return (
+                                                    <tr key={pub.id} className="notion-row">
+                                                        <td className="py-3 px-4 min-w-[230px]">
+                                                            <div className="flex items-center gap-1.5 mb-0.5">
+                                                                <ContentIdBadge contentId={pub.contentId} />
+                                                                {m?.source && (
+                                                                    <span className="text-[10px] uppercase font-semibold text-[var(--md-sys-color-on-surface-muted)]">
+                                                                        • {m.source}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
+                                                                {pub.title}
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 px-3 whitespace-nowrap">
+                                                            <PlatformChip platform={pub.platform} format={pub.format} />
+                                                        </td>
+                                                        <td className="py-3 px-3 whitespace-nowrap sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {publicationDate(pub) || '—'}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id font-semibold text-[var(--md-sys-color-on-surface)]">
+                                                            {formatNullableMetric(m?.reach)}
+                                                        </td>
                                                     <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
                                                         {formatNullableMetric(m?.views)}
                                                     </td>
@@ -760,7 +866,7 @@ export default function ReportIndex({
                                                     )}
                                                 </tr>
                                             );
-                                        })}
+                                        }))}
                                     </tbody>
                                 </table>
                             </div>
@@ -1310,7 +1416,7 @@ export default function ReportIndex({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {contentItems.filter((i) => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'].includes((i.format || '').toLowerCase())).length === 0 ? (
+                                        {contentItems.filter((i) => FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase())).length === 0 ? (
                                             <tr>
                                                 <td colSpan={6} className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
                                                     Belum ada konten Reels yang dipublikasikan.
@@ -1318,7 +1424,7 @@ export default function ReportIndex({
                                             </tr>
                                         ) : (
                                             contentItems
-                                                .filter((i) => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'].includes((i.format || '').toLowerCase()))
+                                                .filter((i) => FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase()))
                                                 .map((item) => (
                                                     <tr key={item.id} className="notion-row">
                                                         <td className="py-3 px-4 font-bold text-[var(--md-sys-color-on-surface)]">
@@ -1350,7 +1456,7 @@ export default function ReportIndex({
 
                         {/* Active 24-Hour Stories */}
                         <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] p-4 space-y-3">
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                 <div>
                                     <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)] flex items-center gap-2">
                                         <History className="w-4 h-4 text-pink-500" />
@@ -1360,38 +1466,82 @@ export default function ReportIndex({
                                         Metrik penonton, balasan, dan interaksi navigasi story Instagram
                                     </p>
                                 </div>
-                                <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
-                                    {igAccount?.storiesData?.length ?? 0} Story Aktif
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        isLoading={isSyncingStories}
+                                        icon={<RefreshCw className="w-3.5 h-3.5 text-pink-500" />}
+                                        onClick={handleSyncStories}
+                                    >
+                                        Tarik Metrik Story
+                                    </Button>
+                                    <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
+                                        {igAccount?.storiesData?.length ?? 0} Story Aktif
+                                    </span>
+                                </div>
                             </div>
 
                             {(igAccount?.storiesData?.length ?? 0) === 0 ? (
                                 <div className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    Tidak ada story aktif yang terdeteksi dalam 24 jam terakhir.
+                                    Tidak ada story aktif yang terdeteksi dalam 24 jam terakhir. Klik &ldquo;Tarik Metrik Story&rdquo; untuk memperbarui data dari Instagram Graph API.
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                                    {igAccount?.storiesData?.map((st) => (
-                                        <div key={st.id} className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-2">
-                                            <div className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] line-clamp-1">
-                                                {st.caption || 'Instagram Story'}
+                                    {igAccount?.storiesData?.map((st) => {
+                                        const reach = st.metrics?.reach ?? 0;
+                                        const views = st.metrics?.views ?? st.metrics?.impressions ?? 0;
+                                        const replies = st.metrics?.replies ?? 0;
+                                        const navigation = st.metrics?.navigation ?? ((st.metrics?.taps_forward ?? 0) + (st.metrics?.taps_back ?? 0) + (st.metrics?.exits ?? 0));
+                                        return (
+                                            <div key={st.id} className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-2.5 flex flex-col justify-between">
+                                                <div className="flex items-start gap-2.5">
+                                                    {st.thumbnail_url ? (
+                                                        <img
+                                                            src={st.thumbnail_url}
+                                                            alt={st.caption || 'Instagram Story'}
+                                                            className="w-11 h-14 object-cover rounded-lg border border-[var(--md-sys-color-outline-variant)] shrink-0 bg-black/10"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-11 h-14 rounded-lg border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)] flex items-center justify-center shrink-0 text-pink-500">
+                                                            <History className="w-5 h-5" />
+                                                        </div>
+                                                    )}
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] line-clamp-2">
+                                                            {st.caption || 'Instagram Story'}
+                                                        </div>
+                                                        {st.permalink && (
+                                                            <a
+                                                                href={st.permalink}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="inline-flex items-center gap-1 text-[10px] text-pink-600 dark:text-pink-400 font-semibold hover:underline mt-0.5"
+                                                            >
+                                                                Buka Story <ExternalLink className="w-2.5 h-2.5" />
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-1.5 text-[11px] pt-2 border-t border-[var(--md-sys-color-outline-variant)]/60">
+                                                    <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                        Penonton: <strong className="text-[var(--md-sys-color-on-surface)] sparc-code-id">{reach.toLocaleString('id-ID')}</strong>
+                                                    </div>
+                                                    <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                        Tayangan: <strong className="text-[var(--md-sys-color-on-surface)] sparc-code-id">{views.toLocaleString('id-ID')}</strong>
+                                                    </div>
+                                                    <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                        Balasan: <strong className="text-blue-600 dark:text-blue-400 sparc-code-id">{replies.toLocaleString('id-ID')}</strong>
+                                                    </div>
+                                                    <div className="text-[var(--md-sys-color-on-surface-muted)]">
+                                                        Navigasi: <strong className="text-purple-600 dark:text-purple-400 sparc-code-id">{navigation.toLocaleString('id-ID')}</strong>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Reach: <strong className="text-[var(--md-sys-color-on-surface)]">{st.metrics?.reach ?? 0}</strong>
-                                                </div>
-                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Impressions: <strong className="text-[var(--md-sys-color-on-surface)]">{st.metrics?.impressions ?? 0}</strong>
-                                                </div>
-                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Replies: <strong className="text-blue-600">{st.metrics?.replies ?? 0}</strong>
-                                                </div>
-                                                <div className="text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Exits: <strong className="text-zinc-500">{st.metrics?.exits ?? 0}</strong>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>

@@ -35,6 +35,7 @@ import {
     TrendingUp,
     User,
     Users,
+    X,
 } from 'lucide-react';
 import { SparcLogo } from '@/Components/SparcLogo';
 import { InertiaFlashListener } from '@/Components/InertiaFlashListener';
@@ -563,7 +564,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                     {
                         href: '/grid',
                         matchHref: ['/grid'],
-                        label: 'Grid Drafting',
+                        label: 'Grid Instagram',
                         icon: Grid3x3,
                     },
                     {

@@ -13,6 +13,7 @@ import {
     List,
     Plus,
     Send,
+    Trash2,
     Wrench,
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
@@ -154,6 +155,8 @@ export default function CalendarIndex({
     const [selectedCellDate, setSelectedCellDate] = useState<string>(today);
     const [quickCreateModalOpen, setQuickCreateModalOpen] = useState(false);
     const [quickCreateTab, setQuickCreateTab] = useState<'activity' | 'schedule'>('activity');
+    const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+    const [isDeletingEntry, setIsDeletingEntry] = useState(false);
 
     const activeMonth = useMemo(() => {
         const d = new Date(activeYear, activeMonthNum - 1, 1);
@@ -501,6 +504,26 @@ export default function CalendarIndex({
                 },
             }
         );
+    };
+    const handleConfirmDeleteEntry = () => {
+        if (!selectedEntry) return;
+        setIsDeletingEntry(true);
+        router.post('/calendar/items/delete', {
+            uid: selectedEntry.uid,
+            entity_type: selectedEntry.layer,
+            entity_id: String(selectedEntry.entityId),
+        }, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setIsDeletingEntry(false);
+                setDeleteModalOpen(false);
+                setSelectedEntry(null);
+            },
+            onError: () => {
+                setIsDeletingEntry(false);
+                toastError('Gagal Menghapus', 'Terjadi kesalahan saat menghapus jadwal dari kalender.');
+            },
+        });
     };
 
     const renderEntryPill = (entry: UnifiedCalendarEntry) => {
@@ -1075,22 +1098,34 @@ export default function CalendarIndex({
                         )}
 
                         <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2">
-                            {selectedEntry.canReschedule && can?.editContent ? (
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    icon={<CalendarRange className="w-3.5 h-3.5" />}
-                                    onClick={() => openRescheduleDialog(selectedEntry)}
-                                >
-                                    Jadwal Ulang...
-                                </Button>
-                            ) : (
-                                <span />
-                            )}
+                            <div className="flex items-center gap-2">
+                                {selectedEntry.canReschedule && can?.editContent && (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        icon={<CalendarRange className="w-3.5 h-3.5" />}
+                                        onClick={() => openRescheduleDialog(selectedEntry)}
+                                    >
+                                        Jadwal Ulang...
+                                    </Button>
+                                )}
+                                {can?.editContent && (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        icon={<Trash2 className="w-3.5 h-3.5" />}
+                                        className="text-red-600 hover:text-red-700 hover:bg-red-500/10 dark:text-red-400"
+                                        onClick={() => setDeleteModalOpen(true)}
+                                    >
+                                        Hapus
+                                    </Button>
+                                )}
+                            </div>
                             <Button
                                 type="button"
-                                variant="primary"
+                                variant="secondary"
                                 size="sm"
                                 onClick={() => setSelectedEntry(null)}
                             >
@@ -1138,6 +1173,43 @@ export default function CalendarIndex({
                             onClick={handleConfirmReschedule}
                         >
                             Konfirmasi Jadwal Baru
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+            {/* Delete Confirmation Modal */}
+            <Modal
+                isOpen={deleteModalOpen}
+                onClose={() => setDeleteModalOpen(false)}
+                title="Hapus Jadwal dari Kalender?"
+                description={`Apakah Anda yakin ingin menghapus "${selectedEntry?.title}" dari kalender?`}
+                maxWidth="sm"
+            >
+                <div className="space-y-4">
+                    <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] leading-relaxed">
+                        {selectedEntry?.layer === 'activity'
+                            ? 'Agenda kelembagaan ini akan dihapus permanen dari kalender operasional.'
+                            : 'Jadwal konten ini akan dihapus dari kalender dan dipindahkan ke menu Trash jika diperlukan untuk pemulihan.'}
+                    </p>
+                    <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-end gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isDeletingEntry}
+                            onClick={() => setDeleteModalOpen(false)}
+                        >
+                            Batal
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="danger"
+                            size="sm"
+                            icon={<Trash2 className="w-3.5 h-3.5" />}
+                            isLoading={isDeletingEntry}
+                            onClick={handleConfirmDeleteEntry}
+                        >
+                            Ya, Hapus Jadwal
                         </Button>
                     </div>
                 </div>
