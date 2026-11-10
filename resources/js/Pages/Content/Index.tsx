@@ -173,26 +173,6 @@ export default function ContentPlanIndex({
     );
     const boardScrollRef = useRef<HTMLDivElement | null>(null);
     const [boardOverflowing, setBoardOverflowing] = useState(false);
-
-    useEffect(() => {
-        const el = boardScrollRef.current;
-        if (!el || viewMode !== 'kanban') {
-            setBoardOverflowing(false);
-            return;
-        }
-        const checkOverflow = () => {
-            setBoardOverflowing(el.scrollWidth > el.clientWidth + 4);
-        };
-        checkOverflow();
-        const ro = new ResizeObserver(checkOverflow);
-        ro.observe(el);
-        window.addEventListener('resize', checkOverflow);
-        return () => {
-            ro.disconnect();
-            window.removeEventListener('resize', checkOverflow);
-        };
-    }, [viewMode, filteredItems.length]);
-
     const scrollBoardBy = (dx: number) => {
         boardScrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
     };
@@ -252,6 +232,25 @@ export default function ContentPlanIndex({
             return true;
         });
     }, [items, platformFilter, pillarFilter, statusFilter, priorityFilter, picFilter, searchQuery]);
+
+    useEffect(() => {
+        const el = boardScrollRef.current;
+        if (!el || viewMode !== 'kanban') {
+            setBoardOverflowing(false);
+            return;
+        }
+        const checkOverflow = () => {
+            setBoardOverflowing(el.scrollWidth > el.clientWidth + 4);
+        };
+        checkOverflow();
+        const ro = new ResizeObserver(checkOverflow);
+        ro.observe(el);
+        window.addEventListener('resize', checkOverflow);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener('resize', checkOverflow);
+        };
+    }, [viewMode, filteredItems.length]);
 
     const hasActiveFilters =
         searchQuery.trim() !== '' ||
