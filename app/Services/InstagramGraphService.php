@@ -7,6 +7,8 @@ use App\Models\InstagramComment;
 use App\Models\InstagramConnection;
 use App\Models\InstagramSchedule;
 use Illuminate\Http\Client\Batch;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -121,6 +123,29 @@ class InstagramGraphService
             ?: (string) config('services.instagram.graph_version', 'v21.0');
 
         $this->baseUrl = sprintf('https://graph.facebook.com/%s', trim($this->graphVersion, '/'));
+    }
+
+    /**
+     * Build a resilient HTTP client for Meta Graph API (forces IPv4 to avoid broken IPv6 SYN stalls and retries transient connection drops).
+     */
+    protected function metaHttp(int $timeout = 25, int $connectTimeout = 15, bool $retryOnConnectionError = true): PendingRequest
+    {
+        $client = Http::connectTimeout($connectTimeout)
+            ->timeout($timeout)
+            ->withOptions([
+                'force_ip_resolve' => 'v4',
+            ]);
+
+        if ($retryOnConnectionError) {
+            $client = $client->retry(
+                2,
+                400,
+                static fn (\Throwable $exception): bool => $exception instanceof ConnectionException,
+                throw: false
+            );
+        }
+
+        return $client;
     }
 
     /**
@@ -351,7 +376,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $response = Http::timeout(10)->get(sprintf('%s/me/permissions', $this->baseUrl), [
+            $response = $this->metaHttp(15, 10)->get(sprintf('%s/me/permissions', $this->baseUrl), [
                 'access_token' => $tokenToInspect,
             ]);
 
@@ -685,7 +710,7 @@ class InstagramGraphService
                 $igFields
             );
 
-            $response = Http::timeout(15)->get(sprintf('%s/me/accounts', $this->baseUrl), [
+            $response = $this->metaHttp(20, 12)->get(sprintf('%s/me/accounts', $this->baseUrl), [
                 'fields' => $pageFields,
                 'limit' => 100,
                 'access_token' => $userAccessToken,
@@ -712,7 +737,7 @@ class InstagramGraphService
 
             if (! $hasAnyIgOnPersonal) {
                 try {
-                    $bizResp = Http::timeout(12)->get(sprintf('%s/me/businesses', $this->baseUrl), [
+                    $bizResp = $this->metaHttp(18, 12)->get(sprintf('%s/me/businesses', $this->baseUrl), [
                         'fields' => sprintf('id,name,owned_pages{%s},client_pages{%s}', $pageFields, $pageFields),
                         'limit' => 50,
                         'access_token' => $userAccessToken,
@@ -839,7 +864,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $nodeResponse = Http::timeout(10)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
+            $nodeResponse = $this->metaHttp(18, 12)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
                 'fields' => 'id,name,username,biography,website,profile_picture_url,followers_count,follows_count,media_count,instagram_business_account{id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count}',
                 'access_token' => $this->accessToken,
             ]);
@@ -903,7 +928,7 @@ class InstagramGraphService
                 ];
             }
 
-            $igDirect = Http::timeout(10)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
+            $igDirect = $this->metaHttp(18, 12)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
                 'fields' => 'id,username,name,followers_count,media_count,profile_picture_url',
                 'access_token' => $this->accessToken,
             ]);
@@ -952,7 +977,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $profileResp = Http::timeout(10)->get(sprintf('%s/%s', $this->baseUrl, $actualIgId), [
+            $profileResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s', $this->baseUrl, $actualIgId), [
                 'fields' => 'id,username,name,biography,website,profile_picture_url,followers_count,follows_count,media_count',
                 'access_token' => $this->accessToken,
             ]);
@@ -971,7 +996,7 @@ class InstagramGraphService
             ];
 
             // 1. Account-level 28-day insights (v21/v22 compatible)
-            $insightsResp = Http::timeout(10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+            $insightsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
                 'metric' => 'reach,views,accounts_engaged,total_interactions',
                 'metric_type' => 'total_value',
                 'period' => 'day',
@@ -981,7 +1006,7 @@ class InstagramGraphService
             ]);
 
             if (! $insightsResp->successful()) {
-                $insightsResp = Http::timeout(10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+                $insightsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
                     'metric' => 'reach',
                     'period' => 'days_28',
                     'access_token' => $this->accessToken,
@@ -1019,7 +1044,7 @@ class InstagramGraphService
             }
 
             // 2. Online followers hourly distribution -> convert PST (UTC-8) to WIB (UTC+7 = +15h)
-            $onlineResp = Http::timeout(8)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+            $onlineResp = $this->metaHttp(15, 10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
                 'metric' => 'online_followers',
                 'period' => 'lifetime',
                 'access_token' => $this->accessToken,
@@ -1144,7 +1169,7 @@ class InstagramGraphService
         }
 
         try {
-            $check = Http::timeout(8)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
+            $check = $this->metaHttp(12, 10)->get(sprintf('%s/%s', $this->baseUrl, $this->accountId), [
                 'fields' => 'instagram_business_account{id}',
                 'access_token' => $this->accessToken,
             ]);
@@ -1240,13 +1265,17 @@ class InstagramGraphService
                 $responses = Http::batch(function (Batch $batch) use ($chunk): array {
                     $reqs = [];
                     foreach ($chunk as $mId) {
-                        $reqs[] = $batch->as((string) $mId)->timeout(10)->get(
-                            sprintf('%s/%s/insights', $this->baseUrl, $mId),
-                            [
-                                'metric' => 'reach,views,saved,shares',
-                                'access_token' => $this->accessToken,
-                            ]
-                        );
+                        $reqs[] = $batch->as((string) $mId)
+                            ->connectTimeout(12)
+                            ->timeout(15)
+                            ->withOptions(['force_ip_resolve' => 'v4'])
+                            ->get(
+                                sprintf('%s/%s/insights', $this->baseUrl, $mId),
+                                [
+                                    'metric' => 'reach,views,saved,shares',
+                                    'access_token' => $this->accessToken,
+                                ]
+                            );
                     }
 
                     return $reqs;
@@ -1274,7 +1303,7 @@ class InstagramGraphService
                         if ($resp->status() === 400) {
                             // Graceful fallback if `shares` or `views` was rejected on legacy media object
                             try {
-                                $fallback = Http::timeout(8)->get(sprintf('%s/%s/insights', $this->baseUrl, $mId), [
+                                $fallback = $this->metaHttp(12, 10, false)->get(sprintf('%s/%s/insights', $this->baseUrl, $mId), [
                                     'metric' => 'reach,saved',
                                     'access_token' => $this->accessToken,
                                 ]);
@@ -1311,13 +1340,13 @@ class InstagramGraphService
     protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500): array
     {
         $targetMax = max(1, min(2500, $maxItems));
-        $pageSize = min(100, $targetMax);
+        $pageSize = min(50, $targetMax);
         $collected = [];
         $seenIds = [];
         $lastResponse = null;
-        $maxPages = 25;
+        $maxPages = 30;
 
-        $firstResponse = Http::timeout(15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+        $firstResponse = $this->metaHttp(25, 15, true)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
             'fields' => $fields,
             'limit' => $pageSize,
             'access_token' => $this->accessToken,
@@ -1359,7 +1388,7 @@ class InstagramGraphService
             $pageCount++;
 
             try {
-                $pageResponse = Http::timeout(15)->get($nextUrl);
+                $pageResponse = $this->metaHttp(25, 15, true)->get($nextUrl);
                 if (! $pageResponse->successful()) {
                     break;
                 }
@@ -2367,7 +2396,7 @@ class InstagramGraphService
         $ownUsername = strtolower((string) ($conn?->username ?? ''));
 
         try {
-            $response = Http::timeout(15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+            $response = $this->metaHttp(25, 15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
                 'fields' => 'id,caption,permalink,media_url,thumbnail_url,comments.limit(100){id,text,username,timestamp,like_count,hidden,replies{id,text,username,timestamp,like_count}}',
                 'limit' => max(1, min(50, $mediaLimit)),
                 'access_token' => $this->accessToken,
@@ -2423,7 +2452,7 @@ class InstagramGraphService
                 while (is_string($nextPageUrl) && $nextPageUrl !== '' && $pageGuard < 4) {
                     $pageGuard++;
                     try {
-                        $nextResp = Http::timeout(10)->get($nextPageUrl);
+                        $nextResp = $this->metaHttp(15, 10)->get($nextPageUrl);
                         if (! $nextResp->successful()) {
                             break;
                         }
@@ -2757,7 +2786,11 @@ class InstagramGraphService
                 $responses = Http::batch(function (Batch $batch) use ($chunk): array {
                     $reqs = [];
                     foreach ($chunk as $prefix => $info) {
-                        $reqs[] = $batch->as((string) $prefix)->timeout(4)->get($info['url']);
+                        $reqs[] = $batch->as((string) $prefix)
+                            ->connectTimeout(6)
+                            ->timeout(8)
+                            ->withOptions(['force_ip_resolve' => 'v4'])
+                            ->get($info['url']);
                     }
 
                     return $reqs;
