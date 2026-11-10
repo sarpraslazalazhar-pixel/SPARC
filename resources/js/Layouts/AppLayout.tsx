@@ -15,7 +15,6 @@ import {
     CheckCircle2,
     ChevronDown,
     FileText,
-    FolderKanban,
     Grid3x3,
     Image as ImageIcon,
     Info,
@@ -884,11 +883,11 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                             <Tooltip.Trigger asChild>
                                 <button
                                     type="button"
-                                    onClick={() => setWorkspacePrefsOpen(true)}
-                                    aria-label="Pengaturan Workspace"
+                                    onClick={() => router.visit('/content')}
+                                    aria-label="Content Planner"
                                     className="p-1.5 text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] rounded-xl cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] transition-colors"
                                 >
-                                    <FolderKanban className="w-4 h-4" />
+                                    <TableProperties className="w-4 h-4" />
                                 </button>
                             </Tooltip.Trigger>
                             <Tooltip.Portal>
@@ -897,7 +896,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                     sideOffset={10}
                                     className="z-[80] px-2.5 py-1.5 rounded-xl bg-[#0F172A] dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-semibold shadow-md select-none"
                                 >
-                                    Pengaturan Workspace
+                                    Content Planner
                                     <Tooltip.Arrow className="fill-[#0F172A] dark:fill-slate-100" />
                                 </Tooltip.Content>
                             </Tooltip.Portal>
@@ -905,35 +904,149 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                     </>
                 ) : (
                     <>
-                        <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="relative shrink-0">
-                                <div className="w-8 h-8 rounded-full overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)]">
-                                    <img
-                                        src={currentUser.avatar}
-                                        alt={currentUser.name}
-                                        className="w-full h-full object-cover"
-                                    />
+                        {isMobile ? (
+                            <Link
+                                href="/profile"
+                                onClick={() => setMobileMenuOpen(false)}
+                                className="flex items-center gap-2.5 min-w-0 hover:opacity-85 transition-opacity"
+                            >
+                                <div className="relative shrink-0">
+                                    <div className="w-8 h-8 rounded-full overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)]">
+                                        <img
+                                            src={currentUser.avatar}
+                                            alt={currentUser.name}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    </div>
+                                    <span className="absolute bottom-0 right-0 w-2 h-2 bg-[#057A55] border border-[var(--md-sys-color-surface)] rounded-full" />
                                 </div>
-                                <span className="absolute bottom-0 right-0 w-2 h-2 bg-[#057A55] border border-[var(--md-sys-color-surface)] rounded-full" />
+                                <div className="truncate">
+                                    <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate leading-tight">
+                                        {currentUser.name}
+                                    </p>
+                                    <p className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] font-medium truncate">
+                                        {currentUser.roleLabel}
+                                    </p>
+                                </div>
+                            </Link>
+                        ) : (
+                            <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="relative shrink-0">
+                                    <div className="w-8 h-8 rounded-full overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container)]">
+                                        <img
+                                            src={currentUser.avatar}
+                                            alt={currentUser.name}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    </div>
+                                    <span className="absolute bottom-0 right-0 w-2 h-2 bg-[#057A55] border border-[var(--md-sys-color-surface)] rounded-full" />
+                                </div>
+                                <div className="truncate">
+                                    <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate leading-tight">
+                                        {currentUser.name}
+                                    </p>
+                                    <p className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] font-medium truncate">
+                                        {currentUser.roleLabel}
+                                    </p>
+                                </div>
                             </div>
-                            <div className="truncate">
-                                <p className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate leading-tight">
-                                    {currentUser.name}
-                                </p>
-                                <p className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] font-medium truncate">
-                                    {currentUser.roleLabel}
-                                </p>
-                            </div>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => setWorkspacePrefsOpen(true)}
-                            aria-label="Pengaturan Workspace"
-                            title="Preferensi Tampilan & Tema"
-                            className="md-btn-tactile p-2 text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] rounded-xl cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)]"
-                        >
-                            <FolderKanban className="w-4 h-4" />
-                        </button>
+                        )}
+                        {isMobile ? (
+                            <DropdownMenu.Root>
+                                <DropdownMenu.Trigger asChild>
+                                    <button
+                                        type="button"
+                                        aria-label={`Menu Akun & Profil ${currentUser.name}`}
+                                        title="Menu Profil & Keluar"
+                                        className="md-btn-tactile p-2 text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] rounded-xl cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] transition-colors"
+                                    >
+                                        <ChevronDown className="w-4 h-4" />
+                                    </button>
+                                </DropdownMenu.Trigger>
+
+                                <DropdownMenu.Portal>
+                                    <DropdownMenu.Content
+                                        side="top"
+                                        align="end"
+                                        sideOffset={8}
+                                        className="z-[90] w-64 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)] p-2 shadow-[var(--md-elevation-3)] outline-none"
+                                    >
+                                        <div className="px-2.5 py-2 border-b border-[var(--md-sys-color-outline-variant)] mb-1">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate">
+                                                    {currentUser.name}
+                                                </span>
+                                                <RoleBadge role={currentUser.role} />
+                                            </div>
+                                            <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] truncate mt-0.5">
+                                                {currentUser.email}
+                                            </p>
+                                        </div>
+
+                                        <div className="space-y-0.5">
+                                            <DropdownMenu.Item asChild>
+                                                <Link
+                                                    href="/profile"
+                                                    onClick={() => setMobileMenuOpen(false)}
+                                                    className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                >
+                                                    <User className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                    <span>Profil & Pengaturan Akun</span>
+                                                </Link>
+                                            </DropdownMenu.Item>
+                                            <DropdownMenu.Item asChild>
+                                                <Link
+                                                    href="/team"
+                                                    onClick={() => setMobileMenuOpen(false)}
+                                                    className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                >
+                                                    <Users className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                    <span>Direktori Tim HUMAS</span>
+                                                </Link>
+                                            </DropdownMenu.Item>
+
+                                            {can?.manageSettings && (
+                                                <DropdownMenu.Item asChild>
+                                                    <Link
+                                                        href="/settings"
+                                                        onClick={() => setMobileMenuOpen(false)}
+                                                        className="flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container)] focus:bg-[var(--md-sys-color-surface-container)] cursor-pointer select-none outline-none font-medium transition-colors"
+                                                    >
+                                                        <Settings className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                        <span>Pengaturan Sistem</span>
+                                                    </Link>
+                                                </DropdownMenu.Item>
+                                            )}
+                                        </div>
+
+                                        <div className="pt-1 mt-1 border-t border-[var(--md-sys-color-outline-variant)]">
+                                            <DropdownMenu.Item asChild>
+                                                <Link
+                                                    method="post"
+                                                    href="/logout"
+                                                    as="button"
+                                                    onClick={() => setMobileMenuOpen(false)}
+                                                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs text-[var(--md-sys-color-error)] hover:bg-[var(--md-sys-color-error-container)]/40 focus:bg-[var(--md-sys-color-error-container)]/40 cursor-pointer select-none outline-none font-semibold transition-colors"
+                                                >
+                                                    <LogOut className="w-3.5 h-3.5 shrink-0" />
+                                                    <span>Keluar dari Akun</span>
+                                                </Link>
+                                            </DropdownMenu.Item>
+                                        </div>
+                                    </DropdownMenu.Content>
+                                </DropdownMenu.Portal>
+                            </DropdownMenu.Root>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => router.visit('/content')}
+                                aria-label="Content Planner"
+                                title="Buka Content Planner"
+                                className="md-btn-tactile p-2 text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] rounded-xl cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[var(--md-sys-color-primary)] transition-colors"
+                            >
+                                <TableProperties className="w-4 h-4" />
+                            </button>
+                        )}
                     </>
                 )}
             </div>
