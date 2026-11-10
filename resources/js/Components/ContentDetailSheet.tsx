@@ -53,6 +53,19 @@ interface ContentDetailSheetProps {
     onClose: () => void;
 }
 
+function resolvePicAvatar(item: SparcContentItem, team: SparcTeamMember[] = []): string {
+    if (item.picAvatar) {
+        return item.picAvatar;
+    }
+    const matched = team.find(
+        (m) => m.name.toLowerCase() === (item.picName || '').toLowerCase()
+    );
+    if (matched?.avatar) {
+        return matched.avatar;
+    }
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(item.picName || 'PIC')}&background=0F172A&color=fff&size=96&bold=true`;
+}
+
 export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
     item,
     today = '2026-10-27',
@@ -522,19 +535,49 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                         </div>
 
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-3 border-t border-[var(--md-sys-color-outline-variant)]/70">
-                            <div className="inline-flex items-center gap-2 min-w-0">
-                                <img
-                                    src={item.picAvatar}
-                                    alt={item.picName}
-                                    className="w-6 h-6 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
-                                />
-                                <div className="min-w-0">
-                                    <p className="text-[10px] uppercase tracking-wide text-[var(--md-sys-color-on-surface-muted)]">
-                                        Penanggung Jawab
-                                    </p>
-                                    <p className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] truncate">
-                                        {item.picName}
-                                    </p>
+                            <div className="flex flex-wrap items-center gap-4 min-w-0">
+                                {(item.requesterName || item.haloapuTicketId || item.ticketId) && (
+                                    <div className="inline-flex items-center gap-2 min-w-0">
+                                        {item.requesterAvatar && (
+                                            <img
+                                                src={item.requesterAvatar}
+                                                alt={item.requesterName || 'Pemohon HaloAPU'}
+                                                className="w-6 h-6 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                            />
+                                        )}
+                                        <div className="min-w-0">
+                                            <p className="text-[10px] uppercase tracking-wide text-[var(--md-sys-color-on-surface-muted)]">
+                                                Diajukan (Pemohon)
+                                            </p>
+                                            <p className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] truncate">
+                                                {item.requesterName || 'Pemohon HaloAPU'}
+                                                {item.requesterUnit ? ` (${item.requesterUnit})` : ''}
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="inline-flex items-center gap-2 min-w-0">
+                                    {item.picName && item.picName !== 'Belum Ditugaskan' ? (
+                                        <img
+                                            src={resolvePicAvatar(item, team)}
+                                            alt={item.picName}
+                                            className="w-6 h-6 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                        />
+                                    ) : null}
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] uppercase tracking-wide text-[var(--md-sys-color-on-surface-muted)]">
+                                            Dipertugaskan (PIC)
+                                        </p>
+                                        {item.picName && item.picName !== 'Belum Ditugaskan' ? (
+                                            <p className="text-xs font-semibold text-[var(--md-sys-color-on-surface)] truncate">
+                                                {item.picName}
+                                            </p>
+                                        ) : (
+                                            <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                                                Belum ditugaskan
+                                            </p>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -588,10 +631,15 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                     )}
                                 </div>
                                 <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                    {item.requesterName ? (
+                                        <>
+                                            Diajukan oleh <strong className="text-[var(--md-sys-color-on-surface)]">{item.requesterName}</strong>
+                                            {item.requesterUnit ? ` (${item.requesterUnit})` : ''} •{' '}
+                                        </>
+                                    ) : null}
                                     Status tiket pada portal HaloAPU sinkron secara langsung dengan progres SPARC.
                                 </p>
                             </div>
-
                         </div>
                     )}
 
@@ -989,12 +1037,35 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                <Input
-                                    label="Penanggung Jawab (PIC)"
-                                    value={editForm.data.pic_name}
-                                    onChange={(e) => editForm.setData('pic_name', e.target.value)}
-                                    disabled={!can?.editContent}
-                                />
+                                {team.length > 0 ? (
+                                    <Select
+                                        label="Dipertugaskan (PIC)"
+                                        value={editForm.data.pic_name}
+                                        onChange={(e) => editForm.setData('pic_name', e.target.value)}
+                                        disabled={!can?.editContent}
+                                    >
+                                        <option value="Belum Ditugaskan">— Belum Ditugaskan —</option>
+                                        {editForm.data.pic_name &&
+                                            editForm.data.pic_name !== 'Belum Ditugaskan' &&
+                                            !team.some((m) => m.name === editForm.data.pic_name) && (
+                                                <option value={editForm.data.pic_name}>
+                                                    {editForm.data.pic_name}
+                                                </option>
+                                            )}
+                                        {team.map((m) => (
+                                            <option key={m.id} value={m.name}>
+                                                {m.name}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                ) : (
+                                    <Input
+                                        label="Dipertugaskan (PIC)"
+                                        value={editForm.data.pic_name}
+                                        onChange={(e) => editForm.setData('pic_name', e.target.value)}
+                                        disabled={!can?.editContent}
+                                    />
+                                )}
                                 <Input
                                     label="Tenggat Produksi"
                                     type="date"

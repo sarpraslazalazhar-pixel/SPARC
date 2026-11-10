@@ -1138,7 +1138,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                 {/* Main Operational Column */}
                 <div className="flex-1 flex flex-col min-w-0">
                     {/* Desktop Sticky Editorial & Bento Topbar */}
-                    <header className="hidden md:flex items-center justify-between gap-4 h-16 px-6 lg:px-8 bg-[var(--md-sys-color-surface)]/92 dark:bg-[var(--md-sys-color-surface-container-low)]/92 backdrop-blur-md border-b border-[var(--md-sys-color-outline-variant)]/80 sticky top-0 z-20">
+                    <header className="hidden md:flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-h-16 py-2 px-6 lg:px-8 bg-[var(--md-sys-color-surface)]/92 dark:bg-[var(--md-sys-color-surface-container-low)]/92 backdrop-blur-md border-b border-[var(--md-sys-color-outline-variant)]/80 sticky top-0 z-20">
                         <div className="min-w-0 flex items-center gap-3 flex-1">
                             <div ref={setTitleSlot} className="min-w-0 empty:hidden" />
                         </div>
@@ -1146,9 +1146,9 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         {/* Center Capsule Slot (Used by Dashboard Period Pills like Panze Topbar) */}
                         <div ref={setCenterSlot} className="flex items-center justify-center shrink-0 empty:hidden" />
 
-                        <div className="flex items-center justify-end gap-2.5 shrink-0">
+                        <div className="flex flex-wrap items-center justify-end gap-2.5 min-w-0">
                             {/* Page-Specific Contextual Actions */}
-                            <div ref={setActionsSlot} className="flex items-center gap-2 shrink-0 empty:hidden" />
+                            <div ref={setActionsSlot} className="flex flex-wrap items-center gap-2 min-w-0 empty:hidden" />
 
                             {/* Persistent Notification Bell with Live Unread Count */}
                             <button
@@ -1271,7 +1271,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                     </header>
 
                     {/* Page Canvas with Isolated MD3 Exit + Enter Transitions */}
-                    <main className="flex-1 p-4 sm:p-6 lg:p-7">
+                    <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-7">
                         <AnimatePresence mode="wait" initial={false}>
                             <motion.div
                                 key={pathname}
@@ -1279,7 +1279,7 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                                 initial="initial"
                                 animate="animate"
                                 exit="exit"
-                                className="w-full max-w-[1600px] mx-auto"
+                                className="w-full min-w-0 max-w-[1600px] mx-auto"
                             >
                                 <PresenceContext.Provider value={null}>
                                     <LayoutGroup id={`page-${pathname}`}>

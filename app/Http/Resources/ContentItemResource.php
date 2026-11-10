@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\HaloApuConnection;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Schema;
@@ -46,16 +47,47 @@ class ContentItemResource extends JsonResource
             ])->values()->all();
         }
 
+        $ticket = $this->haloApuTicket;
+        $requesterName = $ticket?->requester_name ? trim((string) $ticket->requester_name) : null;
+        $requesterUnit = $ticket?->requester_unit ? trim((string) $ticket->requester_unit) : null;
+        $requesterAvatar = null;
+        if ($ticket && $requesterName) {
+            $rawAvatar = trim((string) ($ticket->requester_avatar ?? ''));
+            if ($rawAvatar !== '') {
+                if (! str_starts_with($rawAvatar, 'http')) {
+                    $haloBase = Schema::hasTable('haloapu_connections')
+                        ? rtrim((string) (HaloApuConnection::current()->base_url ?: 'http://127.0.0.1:8001'), '/')
+                        : 'http://127.0.0.1:8001';
+                    $requesterAvatar = $haloBase.'/'.ltrim($rawAvatar, '/');
+                } elseif (str_contains($rawAvatar, ':8000/storage/avatars/')) {
+                    $requesterAvatar = str_replace(':8000/storage/avatars/', ':8001/storage/avatars/', $rawAvatar);
+                } else {
+                    $requesterAvatar = $rawAvatar;
+                }
+            } else {
+                $requesterAvatar = 'https://ui-avatars.com/api/?name='.urlencode($requesterName).'&background=1546D8&color=fff&size=96&bold=true';
+            }
+        }
+
+        $picAvatar = trim((string) ($this->pic_avatar ?? ''));
+        if ($picAvatar === '' && ! empty($this->pic_name) && $this->pic_name !== 'Belum Ditugaskan') {
+            $picAvatar = 'https://ui-avatars.com/api/?name='.urlencode((string) $this->pic_name).'&background=0F172A&color=fff&size=96&bold=true';
+        }
+
         return [
             'id' => (string) $this->id,
             'contentId' => $this->content_id,
             'ticketId' => $this->ticket_id,
-            'haloapuTicketId' => $this->haloApuTicket?->haloapu_ticket_id,
-            'haloapuStatus' => $this->haloApuTicket?->haloapu_status,
-            'isResultAccepted' => $this->haloApuTicket ? (bool) $this->haloApuTicket->is_result_accepted : null,
-            'revisionCount' => $this->haloApuTicket?->revision_count,
-            'deliverableUrl' => $this->haloApuTicket?->deliverable_url,
-            'haloApuDbId' => $this->haloApuTicket ? (string) $this->haloApuTicket->id : null,
+            'haloapuTicketId' => $ticket?->haloapu_ticket_id,
+            'haloapuStatus' => $ticket?->haloapu_status,
+            'isResultAccepted' => $ticket ? (bool) $ticket->is_result_accepted : null,
+            'revisionCount' => $ticket?->revision_count,
+            'deliverableUrl' => $ticket?->deliverable_url,
+            'haloApuDbId' => $ticket ? (string) $ticket->id : null,
+            'requesterName' => $requesterName,
+            'requesterUnit' => $requesterUnit,
+            'requesterAvatar' => $requesterAvatar,
+            'assignedOperatorName' => $ticket?->assigned_operator_name ? trim((string) $ticket->assigned_operator_name) : null,
             'title' => $this->title,
             'status' => $this->status,
             'priority' => $this->priority,
@@ -64,7 +96,7 @@ class ContentItemResource extends JsonResource
             'pillar' => $this->pillar,
             'picName' => $this->pic_name,
             'picRole' => $this->pic_role,
-            'picAvatar' => $this->pic_avatar ?? '',
+            'picAvatar' => $picAvatar,
             'productionDeadline' => $this->production_deadline?->toDateString(),
             'publishDate' => $this->publish_date?->toDateString(),
             'publishTime' => $this->publish_time,

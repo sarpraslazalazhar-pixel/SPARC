@@ -216,6 +216,10 @@ export interface SparcContentItem {
     revisionCount?: number;
     deliverableUrl?: string | null;
     haloApuDbId?: string | null;
+    requesterName?: string | null;
+    requesterUnit?: string | null;
+    requesterAvatar?: string | null;
+    assignedOperatorName?: string | null;
     title: string;
     status: CanonicalWorkflowStatus;
     priority: PriorityLevel;

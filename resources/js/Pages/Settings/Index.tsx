@@ -850,6 +850,10 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                             label: 'Kotak Masuk & Moderasi Komentar Publik (Balas, Sembunyikan, Hapus)',
                                         },
                                         {
+                                            key: 'business_management',
+                                            label: 'Akses Business Portfolio / Business Manager (Aktifkan jika Halaman ada di Meta Business Suite)',
+                                        },
+                                        {
                                             key: 'ads_read',
                                             label: 'Meta Marketing API (Monitoring Iklan, Kampanye, Spend & Clicks)',
                                         },

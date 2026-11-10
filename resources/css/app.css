@@ -465,6 +465,44 @@ html.theme-transitioning *::after {
     background: var(--md-sys-color-outline);
 }
 
+/* Trello-style Horizontal Kanban Scrollbar */
+.sparc-kanban-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--md-sys-color-outline) transparent;
+    -webkit-overflow-scrolling: touch;
+}
+
+.sparc-kanban-scroll::-webkit-scrollbar {
+    height: 9px;
+}
+
+.sparc-kanban-scroll::-webkit-scrollbar-track {
+    background: var(--md-sys-color-surface-container);
+    border-radius: 9999px;
+}
+
+.sparc-kanban-scroll::-webkit-scrollbar-thumb {
+    background: var(--md-sys-color-outline);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.sparc-kanban-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--md-sys-color-primary);
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
 /* ==========================================================================
    Panze Bento Dashboard Surface, Capsule Pill & Pastel Task Card Tokens
    Full Light & Dark Mode Tonal Adaptation

@@ -123,6 +123,11 @@ class HaloApuWebhookController extends Controller
 
         if (! $ticket->content_item_id && $ticket->sync_status !== 'ignored') {
             $this->haloApuService->autoConvertToInbox($ticket, keepPendingSyncStatus: true);
+        } elseif ($ticket->content_item_id && ! empty($ticket->assigned_operator_name)) {
+            $linked = ContentItem::find($ticket->content_item_id);
+            if ($linked && in_array($linked->pic_name, ['', 'Belum Ditugaskan'], true)) {
+                $linked->update(['pic_name' => $ticket->assigned_operator_name]);
+            }
         }
 
         return $ticket;

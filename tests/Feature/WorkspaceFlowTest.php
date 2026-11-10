@@ -6,6 +6,7 @@ use App\Models\ContentItem;
 use App\Models\HaloApuTicket;
 use App\Models\InstagramConnection;
 use App\Models\User;
+use App\Services\InstagramGraphService;
 use App\Services\SparcExcelReportService;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -689,6 +690,48 @@ class WorkspaceFlowTest extends TestCase
         $this->assertSame('sparc_official_oauth', $conn->username);
         $this->assertSame('page_access_token_xyz', $conn->access_token);
         $this->assertSame('long_lived_user_token_60d', $conn->user_access_token);
+    }
+
+    public function test_instagram_discovery_falls_back_to_business_portfolio_and_connected_ig_account(): void
+    {
+        config([
+            'services.instagram.graph_version' => 'v21.0',
+        ]);
+
+        Http::fake([
+            'https://graph.facebook.com/v21.0/me/accounts*' => Http::response(['data' => []], 200),
+            'https://graph.facebook.com/v21.0/me/businesses*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'biz-100',
+                        'name' => 'HUMAS Portfolio',
+                        'owned_pages' => [
+                            'data' => [
+                                [
+                                    'id' => 'pg-555',
+                                    'name' => 'HUMAS Official Page',
+                                    'access_token' => 'biz_page_token_777',
+                                    'connected_instagram_account' => [
+                                        'id' => '17841400555666',
+                                        'username' => 'humas_portfolio_ig',
+                                        'name' => 'HUMAS IG',
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $service = new InstagramGraphService;
+        $res = $service->discoverInstagramAccounts('user_token_xyz');
+
+        $this->assertTrue($res['success']);
+        $this->assertCount(1, $res['accounts']);
+        $this->assertSame('17841400555666', $res['accounts'][0]['account_id']);
+        $this->assertSame('humas_portfolio_ig', $res['accounts'][0]['username']);
+        $this->assertSame('biz_page_token_777', $res['accounts'][0]['page_access_token']);
     }
 
     public function test_instagram_candidate_selection_and_disconnect(): void

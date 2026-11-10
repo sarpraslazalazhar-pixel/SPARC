@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
 
 class HaloApuIntegrationTest extends TestCase
@@ -299,5 +300,61 @@ class HaloApuIntegrationTest extends TestCase
         ]);
 
         Http::assertSent(fn ($req) => str_contains($req->url(), 'status') && $req['status'] === 'solve');
+    }
+
+    public function test_content_plan_exposes_haloapu_requester_and_assigned_pic(): void
+    {
+        $ticketData = [
+            'haloapuTicketId' => '417-901-526',
+            'rawTicketId' => 417901526,
+            'sourceType' => 'video_reels',
+            'subUnitName' => 'Humas',
+            'title' => 'Video Dokumentasi Kegiatan Sarpras',
+            'brief' => 'Liputan serah terima fasilitas.',
+            'requesterName' => 'sarpras',
+            'requesterUnit' => 'Humas',
+            'priority' => 'Normal',
+            'targetDate' => '2026-11-25',
+            'haloapuStatus' => 'open',
+            'revisionCount' => 0,
+            'isResultAccepted' => false,
+            'isSlaBreached' => false,
+        ];
+
+        $payload = [
+            'event' => 'ticket.created',
+            'ticket' => $ticketData,
+        ];
+
+        $this->withHeaders($this->signedWebhookHeaders('ticket.created', $payload))
+            ->postJson('/api/webhooks/haloapu', $payload)
+            ->assertOk();
+        $this->flushHeaders();
+        $item = ContentItem::where('ticket_id', '417-901-526')->firstOrFail();
+        $this->assertSame('Belum Ditugaskan', $item->pic_name);
+
+        $this->get('/content')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Content/Index')
+                ->where('contentItems.0.ticketId', '417-901-526')
+                ->where('contentItems.0.requesterName', 'sarpras')
+                ->where('contentItems.0.requesterUnit', 'Humas')
+                ->where('contentItems.0.picName', 'Belum Ditugaskan')
+            );
+
+        // Assign PIC via updateContent and verify sync back to HaloApuTicket
+        $this->patch(route('content.update', ['id' => $item->id]), [
+            'pic_name' => 'Dimas Pratama',
+        ])->assertRedirect(route('content.index'));
+
+        $this->assertDatabaseHas('content_items', [
+            'id' => $item->id,
+            'pic_name' => 'Dimas Pratama',
+        ]);
+        $this->assertDatabaseHas('haloapu_tickets', [
+            'haloapu_ticket_id' => '417-901-526',
+            'assigned_operator_name' => 'Dimas Pratama',
+        ]);
     }
 }

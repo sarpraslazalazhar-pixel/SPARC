@@ -1171,6 +1171,12 @@ class WorkspaceV3Controller extends Controller
 
         $item->update($validated);
 
+        if (! empty($validated['pic_name']) && $validated['pic_name'] !== 'Belum Ditugaskan' && $item->haloApuTicket) {
+            $item->haloApuTicket->update([
+                'assigned_operator_name' => $validated['pic_name'],
+            ]);
+        }
+
         self::flashToast($request, 'success', 'Konten diperbarui');
 
         return redirect()->route('content.index');

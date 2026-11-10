@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, router, useForm, usePage } from '@inertiajs/react';
 import {
     DndContext,
@@ -14,6 +14,8 @@ import {
     Check,
     CheckSquare,
     ChevronDown,
+    ChevronLeft,
+    ChevronRight,
     Copy,
     ExternalLink,
     FolderKanban,
@@ -79,6 +81,19 @@ const WORKFLOW_ORDER: CanonicalWorkflowStatus[] = [
     'ready_to_publish',
     'published',
 ];
+
+function resolvePicAvatar(item: SparcContentItem, team: SparcTeamMember[] = []): string {
+    if (item.picAvatar) {
+        return item.picAvatar;
+    }
+    const matched = team.find(
+        (m) => m.name.toLowerCase() === (item.picName || '').toLowerCase()
+    );
+    if (matched?.avatar) {
+        return matched.avatar;
+    }
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(item.picName || 'PIC')}&background=0F172A&color=fff&size=96&bold=true`;
+}
 
 export default function ContentPlanIndex({
     today = '2026-10-27',
@@ -156,6 +171,36 @@ export default function ContentPlanIndex({
         () => (activeDragId ? items.find((i) => i.id === activeDragId) ?? null : null),
         [activeDragId, items]
     );
+    const boardScrollRef = useRef<HTMLDivElement | null>(null);
+    const [boardOverflowing, setBoardOverflowing] = useState(false);
+
+    useEffect(() => {
+        const el = boardScrollRef.current;
+        if (!el || viewMode !== 'kanban') {
+            setBoardOverflowing(false);
+            return;
+        }
+        const checkOverflow = () => {
+            setBoardOverflowing(el.scrollWidth > el.clientWidth + 4);
+        };
+        checkOverflow();
+        const ro = new ResizeObserver(checkOverflow);
+        ro.observe(el);
+        window.addEventListener('resize', checkOverflow);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener('resize', checkOverflow);
+        };
+    }, [viewMode, filteredItems.length]);
+
+    const scrollBoardBy = (dx: number) => {
+        boardScrollRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+    };
+
+    const scrollToColumn = (statusKey: CanonicalWorkflowStatus) => {
+        const col = document.getElementById(`content-col-${statusKey}`);
+        col?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+    };
 
     const activeDetailItem = useMemo(
         () => (activeDetailId ? items.find((i) => i.id === activeDetailId) ?? null : null),
@@ -196,9 +241,11 @@ export default function ContentPlanIndex({
                 const inTitle = item.title.toLowerCase().includes(q);
                 const inCode = item.contentId.toLowerCase().includes(q);
                 const inPic = item.picName.toLowerCase().includes(q);
+                const inRequester = item.requesterName?.toLowerCase().includes(q) ?? false;
+                const inRequesterUnit = item.requesterUnit?.toLowerCase().includes(q) ?? false;
                 const inTicket = item.ticketId?.toLowerCase().includes(q) ?? false;
                 const inActivity = item.activityTitle?.toLowerCase().includes(q) ?? false;
-                if (!inTitle && !inCode && !inPic && !inTicket && !inActivity) {
+                if (!inTitle && !inCode && !inPic && !inRequester && !inRequesterUnit && !inTicket && !inActivity) {
                     return false;
                 }
             }
@@ -457,6 +504,61 @@ export default function ContentPlanIndex({
                     </div>
                 )}
 
+                {/* Row 3.75: Pemohon HaloAPU & Yang Dipertugaskan (PIC) */}
+                {(item.requesterName || item.haloapuTicketId || item.ticketId) && (
+                    <div className="rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]/70 px-2.5 py-2 space-y-1.5 text-[10px]">
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                            <span className="text-[var(--md-sys-color-on-surface-muted)] font-medium shrink-0">
+                                Diajukan:
+                            </span>
+                            <div className="inline-flex items-center gap-1.5 min-w-0">
+                                {item.requesterAvatar && (
+                                    <img
+                                        src={item.requesterAvatar}
+                                        alt={item.requesterName || 'Pemohon'}
+                                        className="w-4 h-4 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                    />
+                                )}
+                                <span
+                                    title={
+                                        item.requesterName
+                                            ? `${item.requesterName}${item.requesterUnit ? ` (${item.requesterUnit})` : ''}`
+                                            : 'Pemohon HaloAPU'
+                                    }
+                                    className="font-semibold text-[var(--md-sys-color-on-surface)] truncate"
+                                >
+                                    {item.requesterName || 'Pemohon HaloAPU'}
+                                    {item.requesterUnit ? ` • ${item.requesterUnit}` : ''}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 min-w-0 pt-1 border-t border-[var(--md-sys-color-outline-variant)]/50">
+                            <span className="text-[var(--md-sys-color-on-surface-muted)] font-medium shrink-0">
+                                Dipertugaskan:
+                            </span>
+                            {item.picName && item.picName !== 'Belum Ditugaskan' ? (
+                                <div
+                                    title={`Dipertugaskan ke: ${item.picName}`}
+                                    className="inline-flex items-center gap-1.5 min-w-0"
+                                >
+                                    <span className="font-bold text-[var(--md-sys-color-primary)] truncate">
+                                        {item.picName}
+                                    </span>
+                                    <img
+                                        src={resolvePicAvatar(item, team)}
+                                        alt={item.picName}
+                                        className="w-4 h-4 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                    />
+                                </div>
+                            ) : (
+                                <span className="font-semibold text-amber-700 dark:text-amber-300 bg-amber-500/15 px-1.5 py-0.5 rounded text-[9px]">
+                                    Belum ditugaskan
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {/* Row 4: Quiet Operational Footer (Subtasks, Deadline, PIC) */}
                 <div className="pt-2 border-t border-[var(--md-sys-color-outline-variant)]/70 flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -494,19 +596,29 @@ export default function ContentPlanIndex({
                         )}
                     </div>
 
-                    <div
-                        title={`PIC: ${item.picName}`}
-                        className="inline-flex items-center gap-1.5 shrink-0"
-                    >
-                        <span className="text-[10px] font-medium text-[var(--md-sys-color-on-surface-variant)] max-w-[68px] truncate">
-                            {item.picName.split(' ')[0]}
-                        </span>
-                        <img
-                            src={item.picAvatar}
-                            alt={item.picName}
-                            className="w-5 h-5 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
-                        />
-                    </div>
+                    {!(item.requesterName || item.haloapuTicketId || item.ticketId) && (
+                        <div
+                            title={`Dipertugaskan (PIC): ${item.picName}`}
+                            className="inline-flex items-center gap-1.5 shrink-0"
+                        >
+                            {item.picName && item.picName !== 'Belum Ditugaskan' ? (
+                                <>
+                                    <span className="text-[10px] font-medium text-[var(--md-sys-color-on-surface-variant)] max-w-[68px] truncate">
+                                        {item.picName.split(' ')[0]}
+                                    </span>
+                                    <img
+                                        src={resolvePicAvatar(item, team)}
+                                        alt={item.picName}
+                                        className="w-5 h-5 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
+                                    />
+                                </>
+                            ) : (
+                                <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                                    Belum ada PIC
+                                </span>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {/* Mobile Quick Move: native select avoids hard long-press drag between columns */}
@@ -617,7 +729,7 @@ export default function ContentPlanIndex({
         >
             <Head title="Content Planner — SPARC" />
 
-            <div className="space-y-5">
+            <div className="space-y-5 min-w-0">
                 {/* Operational Summary Strip */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <button
@@ -919,7 +1031,7 @@ export default function ContentPlanIndex({
                                         <th className="py-3 px-3">Prioritas</th>
                                         <th className="py-3 px-3">Kanal & Format</th>
                                         <th className="py-3 px-3">Pilar</th>
-                                        <th className="py-3 px-3">PIC</th>
+                                        <th className="py-3 px-3">Dipertugaskan / Pemohon</th>
                                         <th className="py-3 px-3">Tenggat Produksi</th>
                                         <th className="py-3 px-3">Jadwal Tayang</th>
                                         <th className="py-3 px-3">Hasil Video / Review</th>
@@ -1060,15 +1172,40 @@ export default function ContentPlanIndex({
                                                 </td>
 
                                                 <td className="py-3 px-3 whitespace-nowrap">
-                                                    <div className="inline-flex items-center gap-2">
-                                                        <img
-                                                            src={item.picAvatar}
-                                                            alt={item.picName}
-                                                            className="w-5 h-5 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
-                                                        />
-                                                        <span className="font-medium text-[var(--md-sys-color-on-surface)]">
-                                                            {item.picName}
-                                                        </span>
+                                                    <div className="space-y-1">
+                                                        <div className="inline-flex items-center gap-2">
+                                                            {item.picName && item.picName !== 'Belum Ditugaskan' ? (
+                                                                <>
+                                                                    <img
+                                                                        src={resolvePicAvatar(item, team)}
+                                                                        alt={item.picName}
+                                                                        className="w-5 h-5 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
+                                                                    />
+                                                                    <span className="font-medium text-[var(--md-sys-color-on-surface)]">
+                                                                        {item.picName}
+                                                                    </span>
+                                                                </>
+                                                            ) : (
+                                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                                                    Belum ditugaskan
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {(item.requesterName || item.haloapuTicketId || item.ticketId) && (
+                                                            <div className="flex items-center gap-1.5 text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                                {item.requesterAvatar && (
+                                                                    <img
+                                                                        src={item.requesterAvatar}
+                                                                        alt={item.requesterName || 'Pemohon'}
+                                                                        className="w-3.5 h-3.5 rounded-full object-cover border border-[var(--md-sys-color-outline-variant)]"
+                                                                    />
+                                                                )}
+                                                                <span className="truncate max-w-[160px]">
+                                                                    Ajukan: {item.requesterName || 'HaloAPU'}
+                                                                    {item.requesterUnit ? ` (${item.requesterUnit})` : ''}
+                                                                </span>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </td>
 
@@ -1172,66 +1309,121 @@ export default function ContentPlanIndex({
                     </div>
                     )
                 ) : (
-                    <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCorners}
-                        onDragStart={handleDragStart}
-                        onDragEnd={handleDragEnd}
-                    >
-                        <div className="flex gap-3.5 overflow-x-auto pb-3 snap-x snap-mandatory overscroll-x-contain min-w-[300px] items-start md:grid md:grid-cols-3 xl:grid-cols-6 md:gap-3.5 md:snap-none xl:min-w-[1220px]">
-                            {WORKFLOW_ORDER.map((statusKey) => {
-                                const meta = WORKFLOW_STATUS_META[statusKey];
-                                const StatusIcon = meta.icon;
-                                const colItems = filteredItems.filter(
-                                    (item) => normalizeWorkflowStatus(item.status) === statusKey
-                                );
-                                return (
-                                    <DroppableColumn
-                                        key={statusKey}
-                                        id={`content-col-${statusKey}`}
-                                        className="w-full shrink-0 snap-start basis-full md:w-auto md:basis-auto bg-[var(--md-sys-color-surface-container-low)] dark:bg-[var(--md-sys-color-surface-container-lowest)]/85 p-3 rounded-2xl border border-[var(--md-sys-color-outline-variant)]/85 space-y-2.5"
+                    <div className="space-y-2.5 min-w-0">
+                        {/* Trello-style Stage Quick-Jump & Horizontal Scroll Bar (for mobile & smaller windows) */}
+                        {boardOverflowing && (
+                            <div className="flex items-center justify-between gap-2 bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] px-2.5 py-2 rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">
+                                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0 flex-1 py-0.5">
+                                    {WORKFLOW_ORDER.map((statusKey) => {
+                                        const meta = WORKFLOW_STATUS_META[statusKey];
+                                        const count = filteredItems.filter(
+                                            (item) => normalizeWorkflowStatus(item.status) === statusKey
+                                        ).length;
+                                        return (
+                                            <button
+                                                key={statusKey}
+                                                type="button"
+                                                onClick={() => scrollToColumn(statusKey)}
+                                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-[var(--md-sys-color-surface-container-low)] hover:bg-[var(--md-sys-color-surface-container-high)] border border-[var(--md-sys-color-outline-variant)]/80 text-[var(--md-sys-color-on-surface)] shrink-0 cursor-pointer transition-colors"
+                                            >
+                                                <span className="truncate max-w-[120px]">{meta.label}</span>
+                                                <span
+                                                    style={meta.styleVars}
+                                                    className="sparc-code-id px-1.5 py-0.5 leading-none rounded-full border text-[10px] font-bold"
+                                                >
+                                                    {count}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                <div className="hidden sm:flex items-center gap-1 shrink-0 pl-1 border-l border-[var(--md-sys-color-outline-variant)]">
+                                    <button
+                                        type="button"
+                                        onClick={() => scrollBoardBy(-300)}
+                                        aria-label="Geser papan ke kiri"
+                                        title="Geser ke kiri"
+                                        className="p-1.5 rounded-lg text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] cursor-pointer transition-colors"
                                     >
-                                        <div className="flex items-center justify-between gap-2 px-1">
-                                            <div className="inline-flex items-center gap-1.5 min-w-0">
-                                                <StatusIcon className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-variant)] shrink-0" />
-                                                <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate">
-                                                    {meta.label}
+                                        <ChevronLeft className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => scrollBoardBy(300)}
+                                        aria-label="Geser papan ke kanan"
+                                        title="Geser ke kanan"
+                                        className="p-1.5 rounded-lg text-[var(--md-sys-color-on-surface-variant)] hover:text-[var(--md-sys-color-on-surface)] hover:bg-[var(--md-sys-color-surface-container-high)] cursor-pointer transition-colors"
+                                    >
+                                        <ChevronRight className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <DndContext
+                            sensors={sensors}
+                            collisionDetection={closestCorners}
+                            onDragStart={handleDragStart}
+                            onDragEnd={handleDragEnd}
+                        >
+                            <div
+                                ref={boardScrollRef}
+                                className="sparc-kanban-scroll flex flex-nowrap gap-3.5 overflow-x-auto pb-4 items-start snap-x snap-proximity md:snap-none overscroll-x-contain"
+                            >
+                                {WORKFLOW_ORDER.map((statusKey) => {
+                                    const meta = WORKFLOW_STATUS_META[statusKey];
+                                    const StatusIcon = meta.icon;
+                                    const colItems = filteredItems.filter(
+                                        (item) => normalizeWorkflowStatus(item.status) === statusKey
+                                    );
+                                    return (
+                                        <DroppableColumn
+                                            key={statusKey}
+                                            id={`content-col-${statusKey}`}
+                                            className="w-[272px] sm:w-[288px] shrink-0 snap-start 2xl:w-auto 2xl:flex-1 2xl:min-w-[228px] bg-[var(--md-sys-color-surface-container-low)] dark:bg-[var(--md-sys-color-surface-container-lowest)]/85 p-3 rounded-2xl border border-[var(--md-sys-color-outline-variant)]/85 space-y-2.5"
+                                        >
+                                            <div className="flex items-center justify-between gap-2 px-1">
+                                                <div className="inline-flex items-center gap-1.5 min-w-0">
+                                                    <StatusIcon className="w-3.5 h-3.5 text-[var(--md-sys-color-on-surface-variant)] shrink-0" />
+                                                    <span className="text-xs font-bold text-[var(--md-sys-color-on-surface)] truncate">
+                                                        {meta.label}
+                                                    </span>
+                                                </div>
+                                                <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-on-surface-muted)]">
+                                                    {colItems.length}
                                                 </span>
                                             </div>
-                                            <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-on-surface-muted)]">
-                                                {colItems.length}
-                                            </span>
-                                        </div>
-                                        <SortableContext
-                                            items={colItems.map((i) => i.id)}
-                                            strategy={verticalListSortingStrategy}
-                                        >
-                                            <div className="space-y-2.5 min-h-[340px]">
-                                                {colItems.map((item) => (
-                                                    <SortableCardItem
-                                                        key={item.id}
-                                                        id={item.id}
-                                                        className="rounded-2xl"
-                                                        onClick={() => setActiveDetailId(item.id)}
-                                                    >
-                                                        {renderKanbanCard(item)}
-                                                    </SortableCardItem>
-                                                ))}
-                                                {colItems.length === 0 && (
-                                                    <div className="h-24 flex items-center justify-center border border-dashed border-[var(--md-sys-color-outline-variant)] rounded-xl text-[var(--md-sys-color-on-surface-muted)] text-[11px]">
-                                                        Tarik kartu ke tahap ini
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </SortableContext>
-                                    </DroppableColumn>
-                                );
-                            })}
-                        </div>
-                        <DragOverlay dropAnimation={null}>
-                            {activeDragItem ? renderKanbanCard(activeDragItem, true) : null}
-                        </DragOverlay>
-                    </DndContext>
+                                            <SortableContext
+                                                items={colItems.map((i) => i.id)}
+                                                strategy={verticalListSortingStrategy}
+                                            >
+                                                <div className="space-y-2.5 min-h-[340px]">
+                                                    {colItems.map((item) => (
+                                                        <SortableCardItem
+                                                            key={item.id}
+                                                            id={item.id}
+                                                            className="rounded-2xl"
+                                                            onClick={() => setActiveDetailId(item.id)}
+                                                        >
+                                                            {renderKanbanCard(item)}
+                                                        </SortableCardItem>
+                                                    ))}
+                                                    {colItems.length === 0 && (
+                                                        <div className="h-24 flex items-center justify-center border border-dashed border-[var(--md-sys-color-outline-variant)] rounded-xl text-[var(--md-sys-color-on-surface-muted)] text-[11px]">
+                                                            Tarik kartu ke tahap ini
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </SortableContext>
+                                        </DroppableColumn>
+                                    );
+                                })}
+                            </div>
+                            <DragOverlay dropAnimation={null}>
+                                {activeDragItem ? renderKanbanCard(activeDragItem, true) : null}
+                            </DragOverlay>
+                        </DndContext>
+                    </div>
                 )}
             </div>
 

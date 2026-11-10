@@ -678,8 +678,15 @@ class InstagramGraphService
     public function discoverInstagramAccounts(string $userAccessToken): array
     {
         try {
+            $igFields = 'id,username,name,followers_count,media_count,profile_picture_url,biography';
+            $pageFields = sprintf(
+                'id,name,access_token,instagram_business_account{%s},connected_instagram_account{%s}',
+                $igFields,
+                $igFields
+            );
+
             $response = Http::timeout(15)->get(sprintf('%s/me/accounts', $this->baseUrl), [
-                'fields' => 'id,name,access_token,instagram_business_account{id,username,name,followers_count,media_count,profile_picture_url,biography}',
+                'fields' => $pageFields,
                 'limit' => 100,
                 'access_token' => $userAccessToken,
             ]);
@@ -697,20 +704,63 @@ class InstagramGraphService
 
             /** @var array<int, array<string, mixed>> $pages */
             $pages = $response->json('data') ?? [];
+
+            // Fallback: check Meta Business Portfolio owned/client pages when /me/accounts returns none with IG
+            $hasAnyIgOnPersonal = collect($pages)->contains(
+                fn (array $p): bool => ! empty($p['instagram_business_account']['id']) || ! empty($p['connected_instagram_account']['id'])
+            );
+
+            if (! $hasAnyIgOnPersonal) {
+                try {
+                    $bizResp = Http::timeout(12)->get(sprintf('%s/me/businesses', $this->baseUrl), [
+                        'fields' => sprintf('id,name,owned_pages{%s},client_pages{%s}', $pageFields, $pageFields),
+                        'limit' => 50,
+                        'access_token' => $userAccessToken,
+                    ]);
+                    if ($bizResp->successful()) {
+                        foreach ((array) ($bizResp->json('data') ?? []) as $biz) {
+                            foreach (['owned_pages', 'client_pages'] as $edge) {
+                                foreach ((array) ($biz[$edge]['data'] ?? []) as $bp) {
+                                    if (is_array($bp) && ! empty($bp['id'])) {
+                                        $pages[] = $bp;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable) {
+                    // Ignore if business_management scope is not granted
+                }
+            }
+
             $accounts = [];
+            $seenIgIds = [];
+            $discoveredPageNames = [];
 
             foreach ($pages as $page) {
-                if (empty($page['instagram_business_account']['id'])) {
+                $pageName = (string) ($page['name'] ?? '');
+                if ($pageName !== '' && ! in_array($pageName, $discoveredPageNames, true)) {
+                    $discoveredPageNames[] = $pageName;
+                }
+
+                $ig = ! empty($page['instagram_business_account']['id'])
+                    ? $page['instagram_business_account']
+                    : ($page['connected_instagram_account'] ?? null);
+
+                if (empty($ig['id'])) {
                     continue;
                 }
 
                 /** @var array<string, mixed> $ig */
-                $ig = $page['instagram_business_account'];
                 $igId = (string) $ig['id'];
+                if (in_array($igId, $seenIgIds, true)) {
+                    continue;
+                }
+                $seenIgIds[] = $igId;
+
                 $username = (string) ($ig['username'] ?? '');
                 $name = (string) ($ig['name'] ?? $page['name'] ?? '');
                 $pageId = (string) ($page['id'] ?? '');
-                $pageName = (string) ($page['name'] ?? '');
                 $pageAccessToken = (string) ($page['access_token'] ?? $userAccessToken);
 
                 if (empty($username)) {
@@ -745,10 +795,17 @@ class InstagramGraphService
             }
 
             if (empty($accounts)) {
+                $diagnostic = ! empty($discoveredPageNames)
+                    ? sprintf(
+                        'Halaman Facebook ditemukan (%s), tetapi belum ada akun Instagram Bisnis/Kreator yang tertaut. Buka Pengaturan Halaman Facebook → Akun Tertaut → Instagram dan pastikan sudah terhubung.',
+                        implode(', ', array_slice($discoveredPageNames, 0, 5))
+                    )
+                    : 'Meta mengembalikan 0 Halaman Facebook untuk akun ini. Pastikan saat login Facebook klik "Edit Akses" lalu centang Halaman & IG-nya, aktifkan izin business_management (bila Halaman di Business Portfolio), dan akun Facebook berstatus Admin Halaman.';
+
                 return [
                     'success' => false,
                     'accounts' => [],
-                    'error' => 'Tidak ada Halaman Facebook dengan akun Instagram Bisnis/Kreator yang ditemukan pada akun Facebook ini. Pastikan akun IG sudah ditautkan ke Facebook Page dan dicentang saat login.',
+                    'error' => $diagnostic,
                 ];
             }
 

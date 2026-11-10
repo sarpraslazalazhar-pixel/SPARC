@@ -145,7 +145,8 @@ class HaloApuClientService
                 continue;
             }
 
-            HaloApuTicket::updateOrCreate(
+            /** @var HaloApuTicket $ticket */
+            $ticket = HaloApuTicket::updateOrCreate(
                 ['haloapu_ticket_id' => $hatId],
                 [
                     'raw_ticket_id' => (int) ($t['rawTicketId'] ?? 0),
@@ -164,8 +165,8 @@ class HaloApuClientService
                     'revision_count' => (int) ($t['revisionCount'] ?? 0),
                     'is_result_accepted' => (bool) ($t['isResultAccepted'] ?? false),
                     'is_sla_breached' => (bool) ($t['isSlaBreached'] ?? false),
-                    'sla_response_deadline' => $t['slaResponseDeadline'] ? Carbon::parse($t['slaResponseDeadline']) : null,
-                    'sla_resolution_deadline' => $t['slaResolutionDeadline'] ? Carbon::parse($t['slaResolutionDeadline']) : null,
+                    'sla_response_deadline' => ! empty($t['slaResponseDeadline']) ? Carbon::parse($t['slaResponseDeadline']) : null,
+                    'sla_resolution_deadline' => ! empty($t['slaResolutionDeadline']) ? Carbon::parse($t['slaResolutionDeadline']) : null,
                     'form_snapshot' => $t['formSnapshot'] ?? [],
                     'attachments_payload' => $t['attachments'] ?? [],
                     'logs_payload' => $t['logs'] ?? [],
@@ -175,6 +176,11 @@ class HaloApuClientService
             );
             if (! $ticket->content_item_id && $ticket->sync_status !== 'ignored') {
                 $this->autoConvertToInbox($ticket, keepPendingSyncStatus: true);
+            } elseif ($ticket->content_item_id && ! empty($ticket->assigned_operator_name)) {
+                $linked = ContentItem::find($ticket->content_item_id);
+                if ($linked && in_array($linked->pic_name, ['', 'Belum Ditugaskan'], true)) {
+                    $linked->update(['pic_name' => $ticket->assigned_operator_name]);
+                }
             }
             $savedCount++;
         }
@@ -240,7 +246,7 @@ class HaloApuClientService
             'platform' => 'instagram',
             'format' => $format,
             'pillar' => 'edukasi',
-            'pic_name' => $ticket->assigned_operator_name ?: 'Aldwin (Writer)',
+            'pic_name' => $ticket->assigned_operator_name ?: 'Belum Ditugaskan',
             'pic_role' => 'creator',
             'pic_avatar' => '',
             'priority' => $priority,
