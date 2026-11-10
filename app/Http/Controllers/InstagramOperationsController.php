@@ -783,7 +783,7 @@ class InstagramOperationsController extends Controller
 
                 if (! $hasRealIgPosts || $request->has('sync')) {
                     try {
-                        $service->syncAndAutoImportRecentMedia(30, true);
+                        $service->syncAndAutoImportRecentMedia(500, true);
                     } catch (\Throwable) {
                         // ignore network failure
                     }
@@ -839,7 +839,7 @@ class InstagramOperationsController extends Controller
                 ->orderByDesc('publish_date')
                 ->orderByDesc('publish_time')
                 ->orderByDesc('id')
-                ->limit(36)
+                ->limit(500)
                 ->get();
 
             foreach ($publishedItems as $item) {
@@ -1033,7 +1033,7 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
-        $res = $service->syncAndAutoImportRecentMedia(30, true);
+        $res = $service->syncAndAutoImportRecentMedia(1000, true);
         $service->syncAccountProfileAndInsights();
 
         if (! ($res['success'] ?? false)) {

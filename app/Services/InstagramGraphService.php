@@ -1225,58 +1225,184 @@ class InstagramGraphService
         }
 
         $parsedMap = [];
+        $rateLimited = false;
 
-        try {
-            $responses = Http::batch(function (Batch $batch) use ($uniqueIds): array {
-                $reqs = [];
-                foreach ($uniqueIds as $mId) {
-                    $reqs[] = $batch->as((string) $mId)->timeout(10)->get(
-                        sprintf('%s/%s/insights', $this->baseUrl, $mId),
-                        [
-                            'metric' => 'reach,views,saved,shares',
-                            'access_token' => $this->accessToken,
-                        ]
-                    );
+        foreach (array_chunk($uniqueIds, 50) as $chunk) {
+            if ($rateLimited) {
+                foreach ($chunk as $mId) {
+                    $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
                 }
 
-                return $reqs;
-            })->concurrency(10)->send();
+                continue;
+            }
 
-            foreach ($uniqueIds as $mId) {
-                $resp = $responses[$mId] ?? null;
-                if ($resp instanceof Response && $resp->successful()) {
-                    /** @var array<int, array<string, mixed>> $rows */
-                    $rows = $resp->json('data') ?? [];
-                    $parsedMap[$mId] = $this->parseMediaInsightsRows($rows);
-                } elseif ($resp instanceof Response && $resp->status() === 400) {
-                    // Graceful fallback if `shares` or `views` was rejected on legacy media object
-                    try {
-                        $fallback = Http::timeout(8)->get(sprintf('%s/%s/insights', $this->baseUrl, $mId), [
-                            'metric' => 'reach,saved',
-                            'access_token' => $this->accessToken,
-                        ]);
-                        if ($fallback->successful()) {
-                            /** @var array<int, array<string, mixed>> $rows */
-                            $rows = $fallback->json('data') ?? [];
-                            $parsedMap[$mId] = $this->parseMediaInsightsRows($rows);
+            try {
+                $responses = Http::batch(function (Batch $batch) use ($chunk): array {
+                    $reqs = [];
+                    foreach ($chunk as $mId) {
+                        $reqs[] = $batch->as((string) $mId)->timeout(10)->get(
+                            sprintf('%s/%s/insights', $this->baseUrl, $mId),
+                            [
+                                'metric' => 'reach,views,saved,shares',
+                                'access_token' => $this->accessToken,
+                            ]
+                        );
+                    }
+
+                    return $reqs;
+                })->concurrency(15)->send();
+
+                foreach ($chunk as $mId) {
+                    $resp = $responses[$mId] ?? null;
+                    if ($resp instanceof Response && $resp->successful()) {
+                        /** @var array<int, array<string, mixed>> $rows */
+                        $rows = $resp->json('data') ?? [];
+                        $parsedMap[$mId] = $this->parseMediaInsightsRows($rows);
+
+                        continue;
+                    }
+
+                    if ($resp instanceof Response) {
+                        $errCode = (int) ($resp->json('error.code') ?? 0);
+                        if ($resp->status() === 429 || in_array($errCode, [4, 17, 32, 613], true)) {
+                            $rateLimited = true;
+                            $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
 
                             continue;
                         }
-                    } catch (\Throwable) {
-                        // ignore
+
+                        if ($resp->status() === 400) {
+                            // Graceful fallback if `shares` or `views` was rejected on legacy media object
+                            try {
+                                $fallback = Http::timeout(8)->get(sprintf('%s/%s/insights', $this->baseUrl, $mId), [
+                                    'metric' => 'reach,saved',
+                                    'access_token' => $this->accessToken,
+                                ]);
+                                if ($fallback->successful()) {
+                                    /** @var array<int, array<string, mixed>> $rows */
+                                    $rows = $fallback->json('data') ?? [];
+                                    $parsedMap[$mId] = $this->parseMediaInsightsRows($rows);
+
+                                    continue;
+                                }
+                            } catch (\Throwable) {
+                                // ignore
+                            }
+                        }
                     }
-                    $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
-                } else {
+
                     $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
                 }
-            }
-        } catch (\Throwable) {
-            foreach ($uniqueIds as $mId) {
-                $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
+            } catch (\Throwable) {
+                foreach ($chunk as $mId) {
+                    $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
+                }
             }
         }
 
         return $parsedMap;
+    }
+
+    /**
+     * Fetch paginated media items from Meta Graph API following `paging.next` cursors.
+     *
+     * @return array{success: bool, data: array<int, array<string, mixed>>, response?: Response|null, error?: string}
+     */
+    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500): array
+    {
+        $targetMax = max(1, min(2500, $maxItems));
+        $pageSize = min(100, $targetMax);
+        $collected = [];
+        $seenIds = [];
+        $lastResponse = null;
+        $maxPages = 25;
+
+        $firstResponse = Http::timeout(15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+            'fields' => $fields,
+            'limit' => $pageSize,
+            'access_token' => $this->accessToken,
+        ]);
+        $lastResponse = $firstResponse;
+
+        if (! $firstResponse->successful()) {
+            $errorMsg = $firstResponse->json('error.message')
+                ?? sprintf('HTTP %d: Gagal mengambil daftar postingan dari Meta Graph API.', $firstResponse->status());
+
+            return [
+                'success' => false,
+                'data' => [],
+                'response' => $firstResponse,
+                'error' => $errorMsg,
+            ];
+        }
+
+        foreach ((array) ($firstResponse->json('data') ?? []) as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $id = (string) ($row['id'] ?? '');
+            if ($id !== '' && isset($seenIds[$id])) {
+                continue;
+            }
+            if ($id !== '') {
+                $seenIds[$id] = true;
+            }
+            $collected[] = $row;
+        }
+
+        $nextUrl = (string) ($firstResponse->json('paging.next') ?? '');
+        $visitedUrls = [];
+        $pageCount = 1;
+
+        while ($nextUrl !== '' && count($collected) < $targetMax && $pageCount < $maxPages && ! isset($visitedUrls[$nextUrl])) {
+            $visitedUrls[$nextUrl] = true;
+            $pageCount++;
+
+            try {
+                $pageResponse = Http::timeout(15)->get($nextUrl);
+                if (! $pageResponse->successful()) {
+                    break;
+                }
+                $lastResponse = $pageResponse;
+                $rows = (array) ($pageResponse->json('data') ?? []);
+                if (empty($rows)) {
+                    break;
+                }
+
+                $addedInPage = 0;
+                foreach ($rows as $row) {
+                    if (! is_array($row)) {
+                        continue;
+                    }
+                    $id = (string) ($row['id'] ?? '');
+                    if ($id !== '' && isset($seenIds[$id])) {
+                        continue;
+                    }
+                    if ($id !== '') {
+                        $seenIds[$id] = true;
+                    }
+                    $collected[] = $row;
+                    $addedInPage++;
+                    if (count($collected) >= $targetMax) {
+                        break;
+                    }
+                }
+
+                if ($addedInPage === 0) {
+                    break;
+                }
+
+                $nextUrl = (string) ($pageResponse->json('paging.next') ?? '');
+            } catch (\Throwable) {
+                break;
+            }
+        }
+
+        return [
+            'success' => true,
+            'data' => array_slice($collected, 0, $targetMax),
+            'response' => $lastResponse,
+        ];
     }
 
     /**
@@ -1298,14 +1424,15 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $mediaResponse = Http::timeout(15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                'limit' => 50,
-                'access_token' => $this->accessToken,
-            ]);
+            $paginated = $this->fetchPaginatedMedia(
+                $actualIgId,
+                'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+                200
+            );
+            $mediaResponse = $paginated['response'] ?? null;
 
-            if (! $mediaResponse->successful()) {
-                $errorMsg = $mediaResponse->json('error.message') ?? 'Gagal mengambil data media dari Meta Graph API.';
+            if (! $paginated['success']) {
+                $errorMsg = $paginated['error'] ?? 'Gagal mengambil data media dari Meta Graph API.';
                 $this->captureApiTelemetry($mediaResponse, 'fetch_single_metric', $started, $errorMsg, false);
 
                 return [
@@ -1315,8 +1442,7 @@ class InstagramGraphService
             }
 
             /** @var array<int, array<string, mixed>> $mediaList */
-            $mediaList = $mediaResponse->json('data') ?? [];
-            $targetMedia = null;
+            $mediaList = $paginated['data'];
 
             if ($shortcode !== null) {
                 foreach ($mediaList as $m) {
@@ -1393,16 +1519,13 @@ class InstagramGraphService
 
         return Cache::remember($cacheKey, now()->addMinutes(5), function () use ($actualIgId, $limit): array {
             try {
-                $response = Http::timeout(10)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                    'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                    'limit' => $limit,
-                    'access_token' => $this->accessToken,
-                ]);
+                $paginated = $this->fetchPaginatedMedia(
+                    $actualIgId,
+                    'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+                    max(1, $limit)
+                );
 
-                /** @var array<int, array<string, mixed>> $data */
-                $data = $response->json('data') ?? [];
-
-                return $data;
+                return $paginated['success'] ? $paginated['data'] : [];
             } catch (\Throwable) {
                 return [];
             }
@@ -1417,7 +1540,7 @@ class InstagramGraphService
     public function syncAllContentMetrics(?iterable $items = null, bool $autoImportNew = true): array
     {
         if ($items === null && $autoImportNew) {
-            return $this->syncAndAutoImportRecentMedia(100, true);
+            return $this->syncAndAutoImportRecentMedia(500, true);
         }
         if (! $this->isConfigured()) {
             return [
@@ -1434,15 +1557,15 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $mediaResponse = Http::timeout(15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                'limit' => 100,
-                'access_token' => $this->accessToken,
-            ]);
+            $paginated = $this->fetchPaginatedMedia(
+                $actualIgId,
+                'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+                500
+            );
+            $mediaResponse = $paginated['response'] ?? null;
 
-            if (! $mediaResponse->successful()) {
-                $errorMsg = $mediaResponse->json('error.message')
-                    ?? sprintf('HTTP %d: Gagal mengambil daftar postingan dari Meta Graph API.', $mediaResponse->status());
+            if (! $paginated['success']) {
+                $errorMsg = $paginated['error'] ?? 'Gagal mengambil daftar postingan dari Meta Graph API.';
                 $this->captureApiTelemetry($mediaResponse, 'sync_metrics', $started, $errorMsg, false);
 
                 return [
@@ -1456,7 +1579,7 @@ class InstagramGraphService
             }
 
             /** @var array<int, array<string, mixed>> $mediaList */
-            $mediaList = $mediaResponse->json('data') ?? [];
+            $mediaList = $paginated['data'];
         } catch (\Throwable $e) {
             return [
                 'success' => false,
@@ -1644,16 +1767,20 @@ class InstagramGraphService
         $actualIgId = $this->resolveActualInstagramId();
         $started = microtime(true);
 
-        try {
-            $mediaResponse = Http::timeout(10)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                'limit' => max(1, min(100, $limit)),
-                'access_token' => $this->accessToken,
-            ]);
+        if ($limit > 50 && function_exists('set_time_limit')) {
+            @set_time_limit(120);
+        }
 
-            if (! $mediaResponse->successful()) {
-                $errorMsg = $mediaResponse->json('error.message')
-                    ?? sprintf('HTTP %d: Gagal mengambil daftar postingan dari Meta Graph API.', $mediaResponse->status());
+        try {
+            $paginated = $this->fetchPaginatedMedia(
+                $actualIgId,
+                'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
+                max(1, $limit)
+            );
+            $mediaResponse = $paginated['response'] ?? null;
+
+            if (! $paginated['success']) {
+                $errorMsg = $paginated['error'] ?? 'Gagal mengambil daftar postingan dari Meta Graph API.';
                 $this->captureApiTelemetry($mediaResponse, 'auto_import_sync', $started, $errorMsg, false);
 
                 return [
@@ -1668,7 +1795,7 @@ class InstagramGraphService
             }
 
             /** @var array<int, array<string, mixed>> $mediaList */
-            $mediaList = $mediaResponse->json('data') ?? [];
+            $mediaList = $paginated['data'];
         } catch (\Throwable $e) {
             return [
                 'success' => false,
@@ -1681,12 +1808,6 @@ class InstagramGraphService
             ];
         }
 
-        $mediaIds = array_values(array_filter(array_map(
-            static fn (array $m): string => (string) ($m['id'] ?? ''),
-            $mediaList
-        )));
-        $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds);
-
         $existingItems = ContentItem::query()
             ->where(function ($q): void {
                 $q->whereNotNull('published_url')->where('published_url', '!=', '')
@@ -1694,6 +1815,47 @@ class InstagramGraphService
             })
             ->get();
 
+        $existingByMediaId = [];
+        foreach ($existingItems as $ex) {
+            if (! empty($ex->ig_media_id)) {
+                $existingByMediaId[(string) $ex->ig_media_id] = $ex;
+            }
+        }
+
+        $mediaIds = array_values(array_filter(array_map(
+            static fn (array $m): string => (string) ($m['id'] ?? ''),
+            $mediaList
+        )));
+
+        // For large catalogs (>150 posts), fetch insights for newest 100 + any unsynced posts (capped at 250 per sync)
+        if (count($mediaIds) > 150) {
+            $priorityIds = array_slice($mediaIds, 0, 100);
+            foreach ($mediaIds as $idx => $mId) {
+                if ($idx < 100) {
+                    continue;
+                }
+                $existingMatch = $existingByMediaId[$mId] ?? null;
+                if (! $existingMatch || $existingMatch->metrics_synced_at === null) {
+                    $priorityIds[] = $mId;
+                }
+                if (count($priorityIds) >= 250) {
+                    break;
+                }
+            }
+            $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds);
+        } else {
+            $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds);
+        }
+
+        $thumbTargets = [];
+        foreach ($mediaList as $media) {
+            $mId = (string) ($media['id'] ?? '');
+            $rawThumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
+            if ($mId !== '' && $rawThumb !== '') {
+                $thumbTargets['media_'.$mId] = $rawThumb;
+            }
+        }
+        $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets);
         $syncedCount = 0;
         $importedCount = 0;
         $failedCount = 0;
@@ -1734,19 +1896,22 @@ class InstagramGraphService
 
                 $rawMediaUrl = $media['media_url'] ?? $matchedItem->ig_media_url;
                 $rawThumbUrl = $media['thumbnail_url'] ?? $media['media_url'] ?? $matchedItem->ig_thumbnail_url;
-                $cachedThumb = $this->cacheThumbnailUrl($rawThumbUrl, 'media_'.($mediaId ?: 'thumb'));
+                $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
+                    ? $cachedThumbs['media_'.$mediaId]
+                    : $rawThumbUrl;
 
+                $hasInsight = isset($insightsByMedia[$mediaId]);
                 $matchedItem->update([
                     'ig_media_id' => $mediaId ?: $matchedItem->ig_media_id,
                     'ig_media_url' => $rawMediaUrl,
                     'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
-                    'reach' => $parsed['reach'] ?? $matchedItem->reach,
-                    'views' => $views,
+                    'reach' => $hasInsight ? ($parsed['reach'] ?? $matchedItem->reach) : $matchedItem->reach,
+                    'views' => $hasInsight ? $views : (int) $matchedItem->views,
                     'likes' => $likes,
                     'comments_count' => $comments,
-                    'shares' => $shares,
-                    'saves' => $parsed['saves'] ?? $matchedItem->saves,
-                    'metrics_synced_at' => now(),
+                    'shares' => $hasInsight ? $shares : (int) $matchedItem->shares,
+                    'saves' => $hasInsight ? ($parsed['saves'] ?? $matchedItem->saves) : $matchedItem->saves,
+                    'metrics_synced_at' => $hasInsight ? now() : $matchedItem->metrics_synced_at,
                 ]);
 
                 if ($hasChanged) {
@@ -1789,8 +1954,9 @@ class InstagramGraphService
                 $format = $mediaType === 'VIDEO' ? 'reels' : ($mediaType === 'CAROUSEL_ALBUM' ? 'carousel' : 'feed');
                 $rawMediaUrl = $media['media_url'] ?? null;
                 $rawThumbUrl = $media['thumbnail_url'] ?? $rawMediaUrl;
-                $cachedThumb = $this->cacheThumbnailUrl($rawThumbUrl, 'media_'.($mediaId ?: 'thumb'));
-
+                $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
+                    ? $cachedThumbs['media_'.$mediaId]
+                    : $rawThumbUrl;
                 $newItem = ContentItem::create([
                     'title' => $title,
                     'status' => 'published',
@@ -2536,6 +2702,89 @@ class InstagramGraphService
         }
 
         return $remoteUrl;
+    }
+
+    /**
+     * Batch-cache up to 120 uncached Meta CDN thumbnails concurrently to prevent sequential timeouts on large syncs.
+     *
+     * @param  array<string, string>  $urlByPrefix
+     * @return array<string, string>
+     */
+    protected function cacheThumbnailsBatch(array $urlByPrefix): array
+    {
+        $result = [];
+        $toFetch = [];
+
+        foreach ($urlByPrefix as $prefix => $remoteUrl) {
+            if ($remoteUrl === '' || ! filter_var($remoteUrl, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+            if (Str::contains($remoteUrl, '/storage/ig_cache/')) {
+                $result[$prefix] = $remoteUrl;
+
+                continue;
+            }
+
+            try {
+                $filename = sprintf('ig_cache/%s_%s.jpg', $prefix, substr(md5($remoteUrl), 0, 16));
+                if (Storage::disk('public')->exists($filename)) {
+                    $result[$prefix] = Storage::disk('public')->url($filename);
+
+                    continue;
+                }
+                $toFetch[$prefix] = ['url' => $remoteUrl, 'filename' => $filename];
+            } catch (\Throwable) {
+                $result[$prefix] = $remoteUrl;
+            }
+        }
+
+        if (empty($toFetch) || (app()->runningUnitTests() && ! Http::hasFakes())) {
+            foreach ($toFetch as $prefix => $info) {
+                $result[$prefix] = $info['url'];
+            }
+
+            return $result;
+        }
+
+        $fetchSlice = array_slice($toFetch, 0, 120, true);
+        $remainder = array_slice($toFetch, 120, null, true);
+        foreach ($remainder as $prefix => $info) {
+            $result[$prefix] = $info['url'];
+        }
+
+        foreach (array_chunk($fetchSlice, 40, true) as $chunk) {
+            try {
+                $responses = Http::batch(function (Batch $batch) use ($chunk): array {
+                    $reqs = [];
+                    foreach ($chunk as $prefix => $info) {
+                        $reqs[] = $batch->as((string) $prefix)->timeout(4)->get($info['url']);
+                    }
+
+                    return $reqs;
+                })->concurrency(15)->send();
+
+                foreach ($chunk as $prefix => $info) {
+                    $resp = $responses[$prefix] ?? null;
+                    if ($resp instanceof Response && $resp->successful() && ! empty($resp->body())) {
+                        try {
+                            Storage::disk('public')->put($info['filename'], $resp->body());
+                            $result[$prefix] = Storage::disk('public')->url($info['filename']);
+
+                            continue;
+                        } catch (\Throwable) {
+                            // fallback below
+                        }
+                    }
+                    $result[$prefix] = $info['url'];
+                }
+            } catch (\Throwable) {
+                foreach ($chunk as $prefix => $info) {
+                    $result[$prefix] = $info['url'];
+                }
+            }
+        }
+
+        return $result;
     }
 
     /**

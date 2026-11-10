@@ -69,7 +69,7 @@ class AuthenticatedSessionController extends Controller
             $igService = new InstagramGraphService;
             if ($igService->isConfigured()) {
                 dispatch(function () use ($igService): void {
-                    $igService->syncAndAutoImportRecentMedia(25);
+                    $igService->syncAndAutoImportRecentMedia(50);
                 })->afterResponse();
             }
         } catch (\Throwable) {

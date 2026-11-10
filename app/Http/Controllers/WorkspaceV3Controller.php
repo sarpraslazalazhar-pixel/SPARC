@@ -964,7 +964,7 @@ class WorkspaceV3Controller extends Controller
 
                     if (Cache::add('sparc_ig_periodic_sync_30m', true, now()->addMinutes(30))) {
                         $service->refreshTokenIfExpiring(14);
-                        $service->syncAndAutoImportRecentMedia(25);
+                        $service->syncAndAutoImportRecentMedia(50);
                         $service->syncRecentComments(20);
                         $service->syncAccountProfileAndInsights();
                     }
@@ -1680,7 +1680,7 @@ class WorkspaceV3Controller extends Controller
             return back();
         }
 
-        $result = $service->syncAndAutoImportRecentMedia(30, true);
+        $result = $service->syncAndAutoImportRecentMedia(1000, true);
 
         if (! ($result['success'] ?? false)) {
             self::flashToast(

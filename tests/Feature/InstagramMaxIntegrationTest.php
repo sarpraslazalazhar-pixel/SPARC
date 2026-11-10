@@ -711,4 +711,82 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertCount(1, $conn->stories_data);
         $this->assertSame(840, $conn->stories_data[0]['metrics']['reach']);
     }
+
+    public function test_sync_all_instagram_media_follows_paging_next_cursor_beyond_single_page(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media?after=cursor_page_2*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1802003',
+                        'caption' => 'Postingan Halaman Kedua #1',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/p2-1.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Page2Post1/',
+                        'timestamp' => '2026-10-10T08:00:00+0000',
+                        'like_count' => 110,
+                        'comments_count' => 9,
+                    ],
+                    [
+                        'id' => '1802004',
+                        'caption' => 'Postingan Halaman Kedua #2',
+                        'media_type' => 'VIDEO',
+                        'media_url' => 'https://cdn.example.com/p2-2.mp4',
+                        'thumbnail_url' => 'https://cdn.example.com/p2-2.jpg',
+                        'permalink' => 'https://www.instagram.com/reel/Page2Post2/',
+                        'timestamp' => '2026-10-09T08:00:00+0000',
+                        'like_count' => 220,
+                        'comments_count' => 18,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1802001',
+                        'caption' => 'Postingan Halaman Pertama #1',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/p1-1.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Page1Post1/',
+                        'timestamp' => '2026-10-20T08:00:00+0000',
+                        'like_count' => 95,
+                        'comments_count' => 4,
+                    ],
+                    [
+                        'id' => '1802002',
+                        'caption' => 'Postingan Halaman Pertama #2',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/p1-2.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Page1Post2/',
+                        'timestamp' => '2026-10-19T08:00:00+0000',
+                        'like_count' => 80,
+                        'comments_count' => 2,
+                    ],
+                ],
+                'paging' => [
+                    'next' => 'https://graph.facebook.com/v21.0/17841400111222/media?after=cursor_page_2&limit=100',
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/*/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 1200]]],
+                    ['name' => 'views', 'values' => [['value' => 1500]]],
+                    ['name' => 'saved', 'values' => [['value' => 25]]],
+                    ['name' => 'shares', 'values' => [['value' => 10]]],
+                ],
+            ], 200),
+        ]);
+
+        $this->post('/content/instagram/sync-all')->assertRedirect();
+
+        $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802001']);
+        $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802002']);
+        $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802003']);
+        $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802004']);
+        $this->assertSame(4, ContentItem::whereNotNull('ig_media_id')->count());
+    }
 }
