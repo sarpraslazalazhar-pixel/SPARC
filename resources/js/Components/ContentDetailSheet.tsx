@@ -67,7 +67,7 @@ function resolvePicAvatar(item: SparcContentItem, team: SparcTeamMember[] = []):
 }
 
 export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
-    item,
+    item: rawItem,
     today = '2026-10-27',
     team = [],
     onClose,
@@ -75,7 +75,34 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
     const { error: toastError } = useToast();
+    const [loadedDetail, setLoadedDetail] = useState<SparcContentItem | null>(null);
+    const item = loadedDetail && rawItem && loadedDetail.id === rawItem.id ? loadedDetail : rawItem;
 
+    useEffect(() => {
+        if (!rawItem || rawItem.hasFullDetail !== false) {
+            setLoadedDetail(null);
+
+            return;
+        }
+        let cancelled = false;
+        fetch(`/content/${encodeURIComponent(rawItem.id)}/detail`, {
+            headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin',
+        })
+            .then((res) => (res.ok ? (res.json() as Promise<SparcContentItem>) : null))
+            .then((detail) => {
+                if (!cancelled && detail && detail.id === rawItem.id) {
+                    setLoadedDetail(detail);
+                }
+            })
+            .catch(() => {
+                // Keep lightweight item view on network error
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [rawItem?.id, rawItem?.hasFullDetail]);
     const [activeTab, setActiveTab] = useState<
         'overview' | 'tasks' | 'discussion' | 'ig_comments' | 'history' | 'performa'
     >('overview');
@@ -194,8 +221,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
             });
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [item?.id]);
-
+    }, [item?.id, item?.hasFullDetail]);
     useEffect(() => {
         if (item) {
             setPerfForm((prev) => ({

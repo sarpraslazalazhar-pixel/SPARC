@@ -374,17 +374,12 @@ class InstagramOperationsController extends Controller
      */
     public function libraryIndex(Request $request): Response
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
-        $items = array_values(array_filter(
-            $state['contentItems'],
-            static fn (array $item): bool => ! empty($item['igMediaId'])
-        ));
-        usort($items, static fn (array $a, array $b): int => strcmp((string) ($b['publishDate'] ?? ''), (string) ($a['publishDate'] ?? '')));
+        WorkspaceV3Controller::resolveAuthContextData($request);
 
         return Inertia::render('InstagramLibrary/Index', [
             'today' => now()->toDateString(),
-            'contentItems' => $items,
-            'team' => $state['team'],
+            'contentItems' => WorkspaceV3Controller::loadInstagramLibraryItems(),
+            'team' => WorkspaceV3Controller::loadRealTeam(),
         ]);
     }
 
@@ -393,7 +388,9 @@ class InstagramOperationsController extends Controller
      */
     public function commentsIndex(Request $request): Response
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
+        $igSettings = WorkspaceV3Controller::resolveInstagramSettingsPayload($request);
+        $team = WorkspaceV3Controller::loadRealTeam();
         $statusFilter = trim((string) $request->query('status', 'all')) ?: 'all';
         $searchQuery = trim((string) $request->query('q', ''));
         $contentFilter = trim((string) $request->query('content_item_id', ''));
@@ -539,8 +536,8 @@ class InstagramOperationsController extends Controller
                 'content_item_id' => $contentFilter,
                 'media_id' => $mediaFilter,
             ],
-            'team' => $state['team'],
-            'instagramSettings' => $state['settings']['instagram'] ?? [],
+            'team' => $team,
+            'instagramSettings' => $igSettings,
         ]);
     }
 
@@ -792,9 +789,8 @@ class InstagramOperationsController extends Controller
      */
     public function gridIndex(Request $request): Response
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
-        $igSettings = $state['settings']['instagram'] ?? [];
-
+        WorkspaceV3Controller::resolveAuthContextData($request);
+        $igSettings = WorkspaceV3Controller::resolveLightweightInstagramStatus($request);
         $plannedSlots = [];
         $livePosts = [];
 

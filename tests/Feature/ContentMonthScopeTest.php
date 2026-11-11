@@ -158,7 +158,73 @@ class ContentMonthScopeTest extends TestCase
 
         $this->getJson('/poll/updates')->assertOk();
         $this->get('/grid')->assertOk();
-
         Http::assertNothingSent();
+    }
+
+    public function test_instagram_library_and_workspace_stay_within_low_memory_with_1500_posts_and_load_detail_on_demand(): void
+    {
+        $rows = [];
+        $nowStr = now()->toDateTimeString();
+        for ($i = 1; $i <= 1500; $i++) {
+            $rows[] = [
+                'content_id' => sprintf('SPARC-2026-%04d', $i),
+                'title' => "Postingan IG Massal #{$i}",
+                'status' => 'published',
+                'priority' => 'normal',
+                'platform' => 'instagram',
+                'format' => $i % 3 === 0 ? 'reels' : 'feed',
+                'pillar' => 'kelembagaan',
+                'pic_name' => 'Instagram Auto-Sync',
+                'pic_role' => 'publisher',
+                'pic_avatar' => '',
+                'production_deadline' => '2026-09-15',
+                'publish_date' => '2026-09-15',
+                'publish_time' => '10:00',
+                'caption' => str_repeat("Caption panjang publikasi kegiatan #{$i}. ", 15),
+                'published_url' => "https://www.instagram.com/p/MassPost{$i}/",
+                'ig_media_id' => (string) (9000000 + $i),
+                'reach' => 500 + $i,
+                'views' => 700 + $i,
+                'likes' => 50,
+                'comments_count' => 5,
+                'shares' => 2,
+                'saves' => 3,
+                'created_at' => $nowStr,
+                'updated_at' => $nowStr,
+            ];
+        }
+        foreach (array_chunk($rows, 300) as $chunk) {
+            ContentItem::insert($chunk);
+        }
+
+        $beforeMem = memory_get_usage(false);
+        $this->get('/instagram/library')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page): AssertableInertia => $page
+                ->component('InstagramLibrary/Index')
+                ->has('contentItems', 1500)
+                ->where('contentItems.0.hasFullDetail', false)
+            );
+        $libDeltaMb = (memory_get_usage(false) - $beforeMem) / (1024 * 1024);
+        $this->assertLessThan(64, $libDeltaMb, sprintf('Memory delta too high on /instagram/library: %.2f MB', $libDeltaMb));
+
+        $this->get('/content')->assertOk();
+        $this->get('/')->assertOk();
+        $this->get('/report')->assertOk();
+        $this->get('/grid')->assertOk();
+
+        $target = ContentItem::where('ig_media_id', '9000001')->firstOrFail();
+        $target->history()->create([
+            'from_status' => 'inbox',
+            'to_status' => 'published',
+            'actor' => 'System',
+            'note' => 'Detail riwayat lengkap',
+        ]);
+
+        $this->getJson(route('content.detail', ['id' => $target->id]))
+            ->assertOk()
+            ->assertJsonPath('id', (string) $target->id)
+            ->assertJsonPath('hasFullDetail', true)
+            ->assertJsonPath('history.0.note', 'Detail riwayat lengkap');
     }
 }

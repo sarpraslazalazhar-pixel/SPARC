@@ -3,9 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Http\Controllers\WorkspaceV3Controller;
-use App\Models\InstagramComment;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Inertia\Middleware;
 
@@ -58,12 +56,12 @@ class HandleInertiaRequests extends Middleware
      */
     protected function resolveAuthContext(Request $request): array
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $auth = WorkspaceV3Controller::resolveAuthContextData($request);
 
         return [
-            'user' => $state['currentUser'],
-            'can' => $state['can'],
-            'personas' => $state['personas'],
+            'user' => $auth['currentUser'],
+            'can' => $auth['can'],
+            'personas' => $auth['personas'],
         ];
     }
 
@@ -74,9 +72,9 @@ class HandleInertiaRequests extends Middleware
      */
     protected function resolveNotificationsContext(Request $request): array
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
         /** @var array<int, array<string, mixed>> $notifications */
-        $notifications = $state['notifications'];
+        $notifications = $request->hasSession() ? (array) $request->session()->get('sparc_v3.notifications', []) : [];
         $unreadCount = count(array_filter(
             $notifications,
             fn (array $n): bool => empty($n['readAt'])
@@ -96,28 +94,7 @@ class HandleInertiaRequests extends Middleware
      */
     protected function resolveInstagramStatus(Request $request): array
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
-        $ig = $state['settings']['instagram'] ?? [];
-
-        return [
-            'connected' => ! empty($ig['connected']),
-            'username' => (string) ($ig['username'] ?? ''),
-            'name' => (string) ($ig['name'] ?? ''),
-            'biography' => (string) ($ig['biography'] ?? ''),
-            'website' => (string) ($ig['website'] ?? ''),
-            'profilePictureUrl' => $ig['profilePictureUrl'] ?? null,
-            'followersCount' => $ig['followersCount'] ?? null,
-            'mediaCount' => $ig['mediaCount'] ?? null,
-            'lastSyncedAt' => $ig['lastSyncedAt'] ?? null,
-            'capabilities' => $ig['capabilities'] ?? [
-                'basic' => false,
-                'insights' => false,
-                'publish' => false,
-                'comments' => false,
-            ],
-            'bestPostingHours' => $ig['bestPostingHours'] ?? ['11:30 WIB', '16:30 WIB', '19:30 WIB'],
-            'accountInsights' => $ig['accountInsights'] ?? [],
-        ];
+        return WorkspaceV3Controller::resolveLightweightInstagramStatus($request);
     }
 
     /**
@@ -127,38 +104,7 @@ class HandleInertiaRequests extends Middleware
      */
     protected function resolveNavigationBadges(Request $request): array
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
-        /** @var array<int, array<string, mixed>> $items */
-        $items = $state['contentItems'];
-        /** @var array<int, array<string, mixed>> $pubs */
-        $pubs = $state['publications'];
-
-        $readyQueue = count(array_filter($pubs, fn (array $p): bool => empty($p['publishedActualAt'])));
-        $reviewQueue = count(array_filter($items, fn (array $i): bool => ($i['status'] ?? '') === 'review_approval'));
-        $pendingIncoming = count(array_filter(
-            WorkspaceV3Controller::defaultIncomingTickets($request),
-            fn (array $t): bool => ($t['syncStatus'] ?? '') === 'pending'
-        ));
-
-        $unrepliedComments = 0;
-        try {
-            if (Schema::hasTable('instagram_comments')) {
-                $unrepliedComments = InstagramComment::query()
-                    ->whereNull('parent_ig_comment_id')
-                    ->where('is_replied', false)
-                    ->where('is_hidden', false)
-                    ->count();
-            }
-        } catch (\Throwable) {
-            $unrepliedComments = 0;
-        }
-
-        return [
-            'incoming' => $pendingIncoming,
-            'readyToPublish' => $readyQueue,
-            'reviewApproval' => $reviewQueue,
-            'unrepliedComments' => $unrepliedComments,
-        ];
+        return WorkspaceV3Controller::resolveLightweightNavigationBadges($request);
     }
 
     /**

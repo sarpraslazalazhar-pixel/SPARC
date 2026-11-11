@@ -131,6 +131,7 @@ class ContentItemResource extends JsonResource
             'isAdBoosted' => (bool) $this->is_ad_boosted,
             'adSpend' => $this->ad_spend !== null ? (float) $this->ad_spend : null,
             'gridPosition' => $this->grid_position !== null ? (int) $this->grid_position : null,
+            'hasFullDetail' => $this->getAttribute('_sparc_has_full_detail') ?? true,
             'igComments' => $igComments,
             'tasks' => ($this->relationLoaded('tasks') ? $this->tasks : $this->tasks()->get())->map(fn ($t) => [
                 'id' => (string) $t->id,

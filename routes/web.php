@@ -28,7 +28,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/dashboard', [WorkspaceV3Controller::class, 'dashboard'])->name('dashboard.alias');
 
     Route::get('/incoming', function (Request $request) {
-        WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
 
         return Inertia::render('Incoming/Index', [
             'tickets' => WorkspaceV3Controller::defaultIncomingTickets($request),
@@ -52,6 +52,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/content', [WorkspaceV3Controller::class, 'contentPlan'])->name('content.index');
     Route::post('/content', [WorkspaceV3Controller::class, 'storeContent'])->name('content.store');
     Route::post('/content/bulk', [WorkspaceV3Controller::class, 'bulkUpdateContent'])->name('content.bulk');
+    Route::get('/content/{id}/detail', [WorkspaceV3Controller::class, 'showContentDetail'])->name('content.detail');
     Route::patch('/content/{id}', [WorkspaceV3Controller::class, 'updateContent'])->name('content.update');
     Route::patch('/content/{id}/status', [WorkspaceV3Controller::class, 'updateContentStatus'])->name('content.status');
     Route::post('/content/{id}/duplicate', [WorkspaceV3Controller::class, 'duplicateContent'])->name('content.duplicate');
@@ -104,7 +105,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/report/metrics/import-csv', [WorkspaceV3Controller::class, 'importReportCsv'])->name('report.metrics.csv');
 
     Route::get('/analytics', function (Request $request) {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::hydrateWorkspace($request, ['includeRelations' => false]);
 
         return Inertia::render('Analytics/Index', [
             'today' => WorkspaceV3Controller::TODAY,
@@ -121,7 +122,7 @@ Route::middleware('auth')->group(function () {
     // 4. CREATIVE RESOURCES — Studio, Grid, Resource Library & Visual Assets
     // =====================================================================
     Route::get('/studio', function (Request $request) {
-        WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
 
         return Inertia::render('Studio/Index', [
             'sessionProjects' => $request->session()->get('sparc.studio_projects', []),
@@ -131,7 +132,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/studio/projects', [WorkspaceActionController::class, 'storeStudioProject'])->name('studio.store');
 
     Route::get('/studio/{id}', function (Request $request, string $id) {
-        WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
         /** @var array<int, array<string, mixed>> $sessionProjects */
         $sessionProjects = $request->session()->get('sparc.studio_projects', []);
         $matched = collect($sessionProjects)->firstWhere('id', $id);
@@ -182,7 +183,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/settings/instagram/disconnect', [WorkspaceV3Controller::class, 'disconnectInstagram'])->name('settings.instagram.disconnect');
 
     Route::get('/trash', function (Request $request) {
-        WorkspaceV3Controller::hydrateWorkspace($request);
+        WorkspaceV3Controller::resolveAuthContextData($request);
 
         return Inertia::render('Trash/Index', [
             'sessionTrash' => $request->session()->get('sparc.trash_items', []),

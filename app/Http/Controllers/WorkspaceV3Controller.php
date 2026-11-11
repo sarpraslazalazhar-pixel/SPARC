@@ -8,6 +8,7 @@ use App\Models\ContentTask;
 use App\Models\HaloApuConnection;
 use App\Models\HaloApuSyncLog;
 use App\Models\HaloApuTicket;
+use App\Models\InstagramComment;
 use App\Models\InstagramConnection;
 use App\Models\InstagramSchedule;
 use App\Models\User;
@@ -40,18 +41,28 @@ class WorkspaceV3Controller extends Controller
      *
      * @return array<string, mixed>
      */
-    public static function hydrateWorkspace(Request $request): array
+    public static function resolveAuthContextData(Request $request): array
     {
-        if ($request->isMethodSafe() && $request->attributes->has('_sparc_hydrated_workspace')) {
-            /** @var array<string, mixed> $cachedState */
-            $cachedState = $request->attributes->get('_sparc_hydrated_workspace');
+        if ($request->isMethodSafe() && $request->attributes->has('_sparc_auth_context')) {
+            /** @var array<string, mixed> $cachedAuth */
+            $cachedAuth = $request->attributes->get('_sparc_auth_context');
 
-            return $cachedState;
+            return $cachedAuth;
         }
 
         if (! $request->hasSession()) {
-            return self::defaultSeed();
+            $seed = self::defaultSeed();
+
+            return [
+                'currentUser' => self::rolePersonas()['admin'],
+                'activeRole' => 'admin',
+                'can' => self::permissionsForRole('admin'),
+                'personas' => array_values(self::rolePersonas()),
+                'session' => null,
+                'seedNotifications' => $seed['notifications'] ?? [],
+            ];
         }
+
         $session = $request->session();
 
         if (! $session->has('sparc_v3.initialized') || $session->get('sparc_v3.seed_version') !== 2) {
@@ -92,6 +103,294 @@ class WorkspaceV3Controller extends Controller
             $activeRole = (string) $session->get('sparc_v3.active_role', 'admin');
             $currentUser = $personas[$activeRole] ?? $personas['admin'];
         }
+
+        $result = [
+            'currentUser' => $currentUser,
+            'activeRole' => $activeRole,
+            'can' => self::permissionsForRole($activeRole),
+            'personas' => array_values($personas),
+        ];
+
+        if ($request->isMethodSafe()) {
+            $request->attributes->set('_sparc_auth_context', $result);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Lightweight Instagram connection summary for shared Inertia props (avoids loading sync_logs/ads_data/content_items).
+     *
+     * @return array<string, mixed>
+     */
+    public static function resolveLightweightInstagramStatus(Request $request): array
+    {
+        if ($request->isMethodSafe() && $request->attributes->has('_sparc_light_ig_status')) {
+            /** @var array<string, mixed> $cachedIg */
+            $cachedIg = $request->attributes->get('_sparc_light_ig_status');
+
+            return $cachedIg;
+        }
+
+        $sessionIg = $request->hasSession() ? $request->session()->get('sparc_v3.settings.instagram', []) : [];
+        $conn = null;
+        if (Schema::hasTable('instagram_connections')) {
+            try {
+                $conn = InstagramConnection::query()
+                    ->select([
+                        'id', 'connected', 'username', 'name', 'biography', 'website',
+                        'profile_picture_url', 'followers_count', 'media_count',
+                        'last_synced_at', 'granted_scopes', 'requested_scopes', 'account_insights',
+                    ])
+                    ->first();
+            } catch (\Throwable) {
+                $conn = null;
+            }
+        }
+
+        $connected = ! empty($conn?->connected) || ! empty($sessionIg['connected']);
+        $grantedScopes = is_array($conn?->granted_scopes) && ! empty($conn->granted_scopes)
+            ? array_values($conn->granted_scopes)
+            : [];
+        $requestedScopes = is_array($conn?->requested_scopes) && ! empty($conn->requested_scopes)
+            ? array_values($conn->requested_scopes)
+            : [];
+        if (empty($requestedScopes) && $connected && empty($grantedScopes)) {
+            $requestedScopes = (new InstagramGraphService)->resolveRequestedScopes();
+        }
+        $effectiveScopes = ! empty($grantedScopes) ? $grantedScopes : ($connected ? $requestedScopes : []);
+        $accountInsights = is_array($conn?->account_insights) ? $conn->account_insights : [];
+        $bestPostingHours = is_array($accountInsights['best_posting_hours'] ?? null) && ! empty($accountInsights['best_posting_hours'])
+            ? $accountInsights['best_posting_hours']
+            : ['11:30 WIB', '16:30 WIB', '19:30 WIB'];
+
+        $status = [
+            'connected' => $connected,
+            'username' => (string) ($conn?->username ?: ($sessionIg['username'] ?? '')),
+            'name' => (string) ($conn?->name ?: ($sessionIg['name'] ?? '')),
+            'biography' => (string) ($conn?->biography ?? ''),
+            'website' => (string) ($conn?->website ?? ''),
+            'profilePictureUrl' => $conn?->profile_picture_url,
+            'followersCount' => $conn?->followers_count,
+            'mediaCount' => $conn?->media_count,
+            'lastSyncedAt' => $conn?->last_synced_at?->format('d M Y, H:i').' WIB',
+            'capabilities' => InstagramGraphService::mapCapabilitiesFromScopes($effectiveScopes),
+            'bestPostingHours' => $bestPostingHours,
+            'accountInsights' => $accountInsights,
+        ];
+
+        if ($request->isMethodSafe()) {
+            $request->attributes->set('_sparc_light_ig_status', $status);
+        }
+
+        return $status;
+    }
+
+    /**
+     * Lightweight sidebar badge counts using aggregate SQL COUNT(*) queries instead of hydrating thousands of models.
+     *
+     * @return array{incoming: int, readyToPublish: int, reviewApproval: int, unrepliedComments: int}
+     */
+    public static function resolveLightweightNavigationBadges(Request $request): array
+    {
+        if ($request->isMethodSafe() && $request->attributes->has('_sparc_light_badges')) {
+            /** @var array{incoming: int, readyToPublish: int, reviewApproval: int, unrepliedComments: int} $cachedBadges */
+            $cachedBadges = $request->attributes->get('_sparc_light_badges');
+
+            return $cachedBadges;
+        }
+
+        $reviewQueue = 0;
+        $readyQueue = 0;
+        if (Schema::hasTable('content_items')) {
+            try {
+                $reviewQueue = ContentItem::query()->where('status', 'review_approval')->count();
+                $readyQueue = ContentItem::query()->where('status', 'ready_to_publish')->count();
+            } catch (\Throwable) {
+                $reviewQueue = 0;
+                $readyQueue = 0;
+            }
+        }
+
+        if ($request->hasSession()) {
+            /** @var array<int, array<string, mixed>> $sessionItems */
+            $sessionItems = (array) $request->session()->get('sparc_v3.content_items', []);
+            foreach ($sessionItems as $sItem) {
+                if (($sItem['status'] ?? '') === 'review_approval') {
+                    $reviewQueue++;
+                }
+            }
+            /** @var array<int, array<string, mixed>> $sessionPubs */
+            $sessionPubs = (array) $request->session()->get('sparc_v3.publications', []);
+            foreach ($sessionPubs as $sPub) {
+                if (empty($sPub['publishedActualAt'])) {
+                    $readyQueue++;
+                }
+            }
+        }
+
+        $pendingIncoming = 0;
+        if (Schema::hasTable('haloapu_tickets')) {
+            try {
+                /** @var array<string, string> $overrides */
+                $overrides = $request->hasSession() ? (array) $request->session()->get('sparc.ticket_overrides', []) : [];
+                if (empty($overrides)) {
+                    $pendingIncoming = HaloApuTicket::query()->where('sync_status', 'pending')->count();
+                } else {
+                    $tickets = HaloApuTicket::query()->select(['id', 'haloapu_ticket_id', 'sync_status'])->limit(50)->get();
+                    foreach ($tickets as $t) {
+                        $effective = $overrides[(string) $t->id] ?? ($overrides[(string) $t->haloapu_ticket_id] ?? $t->sync_status);
+                        if ($effective === 'pending') {
+                            $pendingIncoming++;
+                        }
+                    }
+                }
+            } catch (\Throwable) {
+                $pendingIncoming = 0;
+            }
+        }
+
+        $unrepliedComments = 0;
+        if (Schema::hasTable('instagram_comments')) {
+            try {
+                $unrepliedComments = InstagramComment::query()
+                    ->whereNull('parent_ig_comment_id')
+                    ->where('is_replied', false)
+                    ->where('is_hidden', false)
+                    ->count();
+            } catch (\Throwable) {
+                $unrepliedComments = 0;
+            }
+        }
+
+        $badges = [
+            'incoming' => $pendingIncoming,
+            'readyToPublish' => $readyQueue,
+            'reviewApproval' => $reviewQueue,
+            'unrepliedComments' => $unrepliedComments,
+        ];
+
+        if ($request->isMethodSafe()) {
+            $request->attributes->set('_sparc_light_badges', $badges);
+        }
+
+        return $badges;
+    }
+
+    /**
+     * Load all pulled Instagram posts as ultra-lightweight plain arrays without hydrating relations (prevents 256MB OOM).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function loadInstagramLibraryItems(): array
+    {
+        if (! Schema::hasTable('content_items')) {
+            return [];
+        }
+
+        $rows = ContentItem::query()
+            ->whereNotNull('ig_media_id')
+            ->select([
+                'id', 'content_id', 'title', 'status', 'priority',
+                'platform', 'format', 'pillar', 'pic_name', 'pic_role', 'pic_avatar',
+                'production_deadline', 'publish_date', 'publish_time', 'caption',
+                'published_url', 'ig_media_id', 'ig_thumbnail_url',
+                'reach', 'views', 'likes', 'comments_count', 'shares', 'saves',
+            ])
+            ->orderByDesc('publish_date')
+            ->orderByDesc('id')
+            ->toBase()
+            ->get();
+
+        $items = [];
+        foreach ($rows as $row) {
+            $pubDate = $row->publish_date ? substr((string) $row->publish_date, 0, 10) : '';
+            $entry = [
+                'id' => (string) $row->id,
+                'contentId' => (string) $row->content_id,
+                'title' => (string) $row->title,
+                'status' => (string) $row->status,
+                'priority' => (string) ($row->priority ?? 'normal'),
+                'platform' => (string) ($row->platform ?? 'instagram'),
+                'format' => (string) ($row->format ?? 'feed'),
+                'pillar' => (string) ($row->pillar ?? 'kelembagaan'),
+                'picName' => (string) ($row->pic_name ?? 'Instagram Auto-Sync'),
+                'picAvatar' => (string) ($row->pic_avatar ?? ''),
+                'productionDeadline' => $row->production_deadline ? substr((string) $row->production_deadline, 0, 10) : $pubDate,
+                'publishDate' => $pubDate,
+                'views' => (int) ($row->views ?? 0),
+                'likes' => (int) ($row->likes ?? 0),
+                'commentsCount' => (int) ($row->comments_count ?? 0),
+                'shares' => (int) ($row->shares ?? 0),
+                'hasFullDetail' => false,
+            ];
+            if ($row->publish_time) {
+                $entry['publishTime'] = $row->publish_time;
+            }
+            if ($row->caption) {
+                $entry['caption'] = Str::limit((string) $row->caption, 140);
+            }
+            if ($row->published_url) {
+                $entry['publishedUrl'] = $row->published_url;
+            }
+            if ($row->ig_media_id) {
+                $entry['igMediaId'] = $row->ig_media_id;
+            }
+            if ($row->ig_thumbnail_url) {
+                $entry['igThumbnailUrl'] = $row->ig_thumbnail_url;
+            }
+            if ($row->reach !== null) {
+                $entry['reach'] = (int) $row->reach;
+            }
+            if ($row->saves !== null) {
+                $entry['saves'] = (int) $row->saves;
+            }
+            $items[] = $entry;
+        }
+        unset($rows);
+
+        return $items;
+    }
+
+    /**
+     * Ensure the SPARC v3 operational workspace state is initialized in session.
+     *
+     * @param  array{includePublications?: bool, includeRelations?: bool, liteRelations?: bool, month?: string|null, currentMonth?: string|null}  $options
+     * @return array<string, mixed>
+     */
+    public static function hydrateWorkspace(Request $request, array $options = []): array
+    {
+        $includePublications = (bool) ($options['includePublications'] ?? true);
+        $includeRelations = (bool) ($options['includeRelations'] ?? true);
+        $liteRelations = (bool) ($options['liteRelations'] ?? false);
+        $scopeMonth = isset($options['month']) && is_string($options['month']) ? $options['month'] : null;
+        $scopeCurrentMonth = isset($options['currentMonth']) && is_string($options['currentMonth']) ? $options['currentMonth'] : null;
+        $cacheAttrKey = sprintf(
+            '_sparc_hydrated_workspace_%d_%d_%d_%s_%s',
+            $includePublications ? 1 : 0,
+            $includeRelations ? 1 : 0,
+            $liteRelations ? 1 : 0,
+            $scopeMonth ?? 'all',
+            $scopeCurrentMonth ?? 'none'
+        );
+
+        if ($request->isMethodSafe() && $request->attributes->has($cacheAttrKey)) {
+            /** @var array<string, mixed> $cachedState */
+            $cachedState = $request->attributes->get($cacheAttrKey);
+
+            return $cachedState;
+        }
+
+        if (! $request->hasSession()) {
+            return self::defaultSeed();
+        }
+        $session = $request->session();
+
+        $authCtx = self::resolveAuthContextData($request);
+        $currentUser = $authCtx['currentUser'];
+        $activeRole = $authCtx['activeRole'];
+        $personas = self::rolePersonas();
+
         /** @var array<int, array<string, mixed>> $contentItems */
         $contentItems = $session->get('sparc_v3.content_items', []);
 
@@ -102,10 +401,17 @@ class WorkspaceV3Controller extends Controller
         /** @var array<int, string> $legacyDeleted */
         $legacyDeleted = $session->get('sparc.deleted_planner_ids', []);
 
+        $existingSessionItemIds = [];
+        foreach ($contentItems as $c) {
+            if (isset($c['id'])) {
+                $existingSessionItemIds[(string) $c['id']] = true;
+            }
+        }
+
         foreach ($legacyItems as $idx => $legacy) {
             $legacyId = (string) ($legacy['id'] ?? 'legacy-'.$idx);
-            $alreadyMerged = collect($contentItems)->contains(fn (array $c): bool => ($c['id'] ?? '') === $legacyId);
-            if (! $alreadyMerged) {
+            if (! isset($existingSessionItemIds[$legacyId])) {
+                $existingSessionItemIds[$legacyId] = true;
                 array_unshift($contentItems, [
                     'id' => $legacyId,
                     'contentId' => sprintf('SPARC-2026-%04d', count($contentItems) + 1),
@@ -179,151 +485,510 @@ class WorkspaceV3Controller extends Controller
                     }
                 }
 
-                $relations = [
-                    'tasks',
-                    'comments' => static fn ($q) => $q->latest('id')->limit(20),
-                    'history' => static fn ($q) => $q->reorder('id', 'desc')->limit(15),
-                    'haloApuTicket',
-                ];
-                if (Schema::hasTable('instagram_comments')) {
-                    $relations['igComments'] = static fn ($q) => $q->limit(20);
-                }
+                if (! $includeRelations || $liteRelations) {
+                    $rowsQuery = ContentItem::query()
+                        ->select([
+                            'id', 'content_id', 'ticket_id', 'title', 'status', 'priority',
+                            'platform', 'format', 'pillar', 'pic_name', 'pic_role', 'pic_avatar',
+                            'production_deadline', 'publish_date', 'publish_time', 'activity_title', 'campaign_title',
+                            'brief', 'caption', 'published_url', 'ig_media_id', 'ig_media_url', 'ig_thumbnail_url',
+                            'ref_design_url', 'result_design_url', 'revision_note', 'performance_notes',
+                            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves',
+                            'reels_watch_time', 'reels_avg_watch_time', 'is_ad_boosted', 'ad_spend',
+                            'metrics_synced_at', 'grid_position', 'created_by',
+                        ]);
 
-                $dbItems = ContentItem::with($relations)
-                    ->orderByDesc('publish_date')
-                    ->orderByDesc('id')
-                    ->get();
-
-                $resolvedDbItems = ContentItemResource::collection($dbItems)->resolve();
-                $existingContentById = [];
-                $existingContentByCode = [];
-                foreach ($contentItems as $c) {
-                    if (isset($c['id']) && $c['id'] !== '') {
-                        $existingContentById[(string) $c['id']] = true;
-                    }
-                    if (! empty($c['contentId'])) {
-                        $existingContentByCode[(string) $c['contentId']] = true;
-                    }
-                }
-                foreach ($resolvedDbItems as $dbArr) {
-                    $dbIdKey = (string) ($dbArr['id'] ?? '');
-                    $dbCodeKey = (string) ($dbArr['contentId'] ?? '');
-                    if (($dbIdKey !== '' && isset($existingContentById[$dbIdKey])) || ($dbCodeKey !== '' && isset($existingContentByCode[$dbCodeKey]))) {
-                        continue;
-                    }
-                    $contentItems[] = $dbArr;
-                    if ($dbIdKey !== '') {
-                        $existingContentById[$dbIdKey] = true;
-                    }
-                    if ($dbCodeKey !== '') {
-                        $existingContentByCode[$dbCodeKey] = true;
-                    }
-                }
-
-                $pubIdxByContentItemId = [];
-                $pubIdxByCodePlatform = [];
-                foreach ($publications as $pIdx => $existingPub) {
-                    if (! empty($existingPub['contentItemId'])) {
-                        $pubIdxByContentItemId[(string) $existingPub['contentItemId']] = $pIdx;
-                    }
-                    if (! empty($existingPub['contentId'])) {
-                        $cpKey = strtolower((string) $existingPub['contentId']).'|'.strtolower((string) ($existingPub['platform'] ?? ''));
-                        $pubIdxByCodePlatform[$cpKey] = $pIdx;
-                    }
-                }
-
-                foreach ($dbItems as $dbItem) {
-                    if (! in_array($dbItem->status, ['ready_to_publish', 'published'], true)) {
-                        continue;
+                    if ($scopeMonth !== null && $scopeCurrentMonth !== null) {
+                        $monthStart = $scopeMonth.'-01';
+                        $nextMonthStart = Carbon::createFromFormat('Y-m', $scopeMonth)->addMonthNoOverflow()->format('Y-m-01');
+                        $rowsQuery->where(function ($q) use ($monthStart, $nextMonthStart, $scopeMonth, $scopeCurrentMonth): void {
+                            $q->where(function ($qm) use ($monthStart, $nextMonthStart): void {
+                                $qm->where('publish_date', '>=', $monthStart)
+                                    ->where('publish_date', '<', $nextMonthStart);
+                            });
+                            if ($scopeMonth === $scopeCurrentMonth) {
+                                $q->orWhereNull('publish_date')
+                                    ->orWhere(function ($qCarry) use ($monthStart): void {
+                                        $qCarry->where('publish_date', '<', $monthStart)
+                                            ->where('status', '!=', 'published');
+                                    });
+                            }
+                        });
                     }
 
-                    $matchedPubIdx = null;
-                    $dbItemIdStr = (string) $dbItem->id;
-                    if (isset($pubIdxByContentItemId[$dbItemIdStr])) {
-                        $matchedPubIdx = $pubIdxByContentItemId[$dbItemIdStr];
-                    } elseif (! empty($dbItem->content_id)) {
-                        $cpKey = strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform);
-                        if (isset($pubIdxByCodePlatform[$cpKey])) {
-                            $matchedPubIdx = $pubIdxByCodePlatform[$cpKey];
-                        }
-                    }
-                    $hasApiMetrics = $dbItem->metrics_synced_at !== null
-                        || $dbItem->reach !== null
-                        || (int) $dbItem->views > 0
-                        || (int) $dbItem->likes > 0
-                        || (int) $dbItem->comments_count > 0
-                        || (int) $dbItem->shares > 0
-                        || $dbItem->saves !== null;
+                    $rows = $rowsQuery
+                        ->orderByDesc('publish_date')
+                        ->orderByDesc('id')
+                        ->toBase()
+                        ->get();
 
-                    $effectiveReach = $dbItem->reach !== null
-                        ? (int) $dbItem->reach
-                        : ((int) $dbItem->views > 0
-                            ? (int) $dbItem->views
-                            : (($dbItem->likes !== null || $dbItem->comments_count !== null) && ((int) $dbItem->likes > 0 || (int) $dbItem->comments_count > 0)
-                                ? ((int) $dbItem->likes + (int) $dbItem->comments_count)
-                                : null));
-
-                    $schedStr = ($dbItem->publish_date?->toDateString() ?? now()->toDateString()).' '.($dbItem->publish_time ?: '10:00');
-
-                    if ($matchedPubIdx !== null) {
-                        if ($dbItem->status === 'published' && empty($publications[$matchedPubIdx]['publishedUrl']) && ! empty($dbItem->published_url)) {
-                            $publications[$matchedPubIdx]['publishedUrl'] = $dbItem->published_url;
-                        }
-                        $existingMetricSource = (string) ($publications[$matchedPubIdx]['metrics']['source'] ?? 'api');
-                        if ($dbItem->status === 'published' && $hasApiMetrics && $dbItem->metrics_synced_at !== null && $existingMetricSource === 'api') {
-                            $publications[$matchedPubIdx]['metrics'] = [
-                                'reach' => $effectiveReach,
-                                'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
-                                'views' => (int) $dbItem->views,
-                                'likes' => (int) $dbItem->likes,
-                                'comments' => (int) $dbItem->comments_count,
-                                'shares' => (int) $dbItem->shares,
-                                'saves' => $dbItem->saves !== null ? (int) $dbItem->saves : null,
-                                'clicks' => $publications[$matchedPubIdx]['metrics']['clicks'] ?? null,
-                                'source' => 'api',
-                                'recordedAt' => $dbItem->metrics_synced_at->format('Y-m-d H:i'),
+                    $tasksByItemId = [];
+                    if ($liteRelations && Schema::hasTable('content_tasks')) {
+                        $taskRows = ContentTask::query()
+                            ->select(['id', 'content_item_id', 'title', 'task_type', 'status', 'assigned_to', 'due_date'])
+                            ->toBase()
+                            ->get();
+                        foreach ($taskRows as $t) {
+                            $tasksByItemId[(string) $t->content_item_id][] = [
+                                'id' => (string) $t->id,
+                                'title' => (string) $t->title,
+                                'taskType' => (string) $t->task_type,
+                                'status' => (string) $t->status,
+                                'assignedTo' => (string) $t->assigned_to,
+                                'dueDate' => $t->due_date ? substr((string) $t->due_date, 0, 10) : '',
                             ];
                         }
-
-                        continue;
                     }
 
-                    $synId = 'pub-db-'.$dbItem->id;
-                    $isLive = $dbItem->status === 'published';
-                    $newPubIdx = count($publications);
-                    $publications[] = [
-                        'id' => $synId,
-                        'contentItemId' => (string) $dbItem->id,
-                        'contentId' => (string) $dbItem->content_id,
-                        'title' => (string) $dbItem->title,
-                        'platform' => (string) $dbItem->platform,
-                        'format' => (string) $dbItem->format,
-                        'caption' => (string) ($dbItem->caption ?? ''),
-                        'mediaPreviewUrl' => $dbItem->result_design_url ?: $dbItem->ig_thumbnail_url ?: $dbItem->ig_media_url,
-                        'scheduledAt' => $schedStr,
-                        'publishedActualAt' => $isLive ? $schedStr : null,
-                        'publishedUrl' => $dbItem->published_url,
-                        'picName' => (string) ($dbItem->pic_name ?: 'Publisher HUMAS'),
-                        'checklist' => $isLive
-                            ? []
-                            : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $dbItem->platform)),
-                        'metrics' => ($isLive && $hasApiMetrics) ? [
-                            'reach' => $effectiveReach,
-                            'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
-                            'views' => (int) $dbItem->views,
-                            'likes' => (int) $dbItem->likes,
-                            'comments' => (int) $dbItem->comments_count,
-                            'shares' => (int) $dbItem->shares,
-                            'saves' => $dbItem->saves !== null ? (int) $dbItem->saves : null,
-                            'clicks' => null,
-                            'source' => $dbItem->metrics_synced_at !== null ? 'api' : 'manual',
-                            'recordedAt' => $dbItem->metrics_synced_at?->format('Y-m-d H:i') ?? $schedStr,
-                        ] : null,
+                    $ticketsByItemId = [];
+                    if (Schema::hasTable('haloapu_tickets')) {
+                        $ticketRows = HaloApuTicket::query()
+                            ->whereNotNull('content_item_id')
+                            ->select([
+                                'id', 'content_item_id', 'haloapu_ticket_id', 'haloapu_status',
+                                'is_result_accepted', 'revision_count', 'deliverable_url',
+                                'requester_name', 'requester_unit', 'requester_avatar', 'assigned_operator_name',
+                            ])
+                            ->toBase()
+                            ->get();
+                        foreach ($ticketRows as $tk) {
+                            $ticketsByItemId[(string) $tk->content_item_id] = $tk;
+                        }
+                    }
+
+                    $haloBaseUrl = 'http://127.0.0.1:8001';
+                    if (! empty($ticketsByItemId) && Schema::hasTable('haloapu_connections')) {
+                        $haloBaseUrl = rtrim((string) (HaloApuConnection::current()->base_url ?: 'http://127.0.0.1:8001'), '/');
+                    }
+
+                    $existingContentById = [];
+                    $existingContentByCode = [];
+                    foreach ($contentItems as $c) {
+                        if (isset($c['id']) && $c['id'] !== '') {
+                            $existingContentById[(string) $c['id']] = true;
+                        }
+                        if (! empty($c['contentId'])) {
+                            $existingContentByCode[(string) $c['contentId']] = true;
+                        }
+                    }
+
+                    $pubIdxByContentItemId = [];
+                    $pubIdxByCodePlatform = [];
+                    if ($includePublications) {
+                        foreach ($publications as $pIdx => $existingPub) {
+                            if (! empty($existingPub['contentItemId'])) {
+                                $pubIdxByContentItemId[(string) $existingPub['contentItemId']] = $pIdx;
+                            }
+                            if (! empty($existingPub['contentId'])) {
+                                $cpKey = strtolower((string) $existingPub['contentId']).'|'.strtolower((string) ($existingPub['platform'] ?? ''));
+                                $pubIdxByCodePlatform[$cpKey] = $pIdx;
+                            }
+                        }
+                    }
+
+                    foreach ($rows as $row) {
+                        $idStr = (string) $row->id;
+                        $codeStr = (string) ($row->content_id ?? '');
+                        $ticket = $ticketsByItemId[$idStr] ?? null;
+                        $pubDate = $row->publish_date ? substr((string) $row->publish_date, 0, 10) : null;
+                        $prodDeadline = $row->production_deadline ? substr((string) $row->production_deadline, 0, 10) : null;
+
+                        if (($idStr === '' || ! isset($existingContentById[$idStr])) && ($codeStr === '' || ! isset($existingContentByCode[$codeStr]))) {
+                            $requesterName = $ticket?->requester_name ? trim((string) $ticket->requester_name) : null;
+                            $requesterUnit = $ticket?->requester_unit ? trim((string) $ticket->requester_unit) : null;
+                            $requesterAvatar = null;
+                            if ($ticket && $requesterName) {
+                                $rawAvatar = trim((string) ($ticket->requester_avatar ?? ''));
+                                if ($rawAvatar !== '') {
+                                    if (! str_starts_with($rawAvatar, 'http')) {
+                                        $requesterAvatar = $haloBaseUrl.'/'.ltrim($rawAvatar, '/');
+                                    } elseif (str_contains($rawAvatar, ':8000/storage/avatars/')) {
+                                        $requesterAvatar = str_replace(':8000/storage/avatars/', ':8001/storage/avatars/', $rawAvatar);
+                                    } else {
+                                        $requesterAvatar = $rawAvatar;
+                                    }
+                                } else {
+                                    $requesterAvatar = 'https://ui-avatars.com/api/?name='.urlencode($requesterName).'&background=1546D8&color=fff&size=96&bold=true';
+                                }
+                            }
+
+                            $picAvatar = trim((string) ($row->pic_avatar ?? ''));
+                            $isLiveRow = $row->status === 'published';
+                            $entry = [
+                                'id' => $idStr,
+                                'contentId' => $codeStr,
+                                'title' => (string) $row->title,
+                                'status' => (string) $row->status,
+                                'priority' => (string) $row->priority,
+                                'platform' => (string) $row->platform,
+                                'format' => (string) $row->format,
+                                'pillar' => (string) $row->pillar,
+                                'picName' => (string) $row->pic_name,
+                                'picRole' => (string) $row->pic_role,
+                                'picAvatar' => $picAvatar,
+                                'productionDeadline' => $prodDeadline ?? '',
+                                'publishDate' => $pubDate ?? '',
+                                'views' => (int) ($row->views ?? 0),
+                                'likes' => (int) ($row->likes ?? 0),
+                                'commentsCount' => (int) ($row->comments_count ?? 0),
+                                'shares' => (int) ($row->shares ?? 0),
+                                'hasFullDetail' => false,
+                            ];
+                            if (! empty($tasksByItemId[$idStr])) {
+                                $entry['tasks'] = $tasksByItemId[$idStr];
+                            }
+                            if ($row->ticket_id !== null) {
+                                $entry['ticketId'] = $row->ticket_id;
+                            }
+                            if ($ticket) {
+                                $entry['haloapuTicketId'] = $ticket->haloapu_ticket_id;
+                                $entry['haloapuStatus'] = $ticket->haloapu_status;
+                                $entry['isResultAccepted'] = (bool) $ticket->is_result_accepted;
+                                $entry['revisionCount'] = $ticket->revision_count;
+                                $entry['deliverableUrl'] = $ticket->deliverable_url;
+                                $entry['haloApuDbId'] = (string) $ticket->id;
+                                $entry['requesterName'] = $requesterName;
+                                $entry['requesterUnit'] = $requesterUnit;
+                                $entry['requesterAvatar'] = $requesterAvatar;
+                                $entry['assignedOperatorName'] = $ticket->assigned_operator_name ? trim((string) $ticket->assigned_operator_name) : null;
+                            }
+                            if ($row->publish_time) {
+                                $entry['publishTime'] = $row->publish_time;
+                            }
+                            if ($row->activity_title) {
+                                $entry['activityTitle'] = $row->activity_title;
+                            }
+                            if ($row->campaign_title) {
+                                $entry['campaignTitle'] = $row->campaign_title;
+                            }
+                            if ($row->brief) {
+                                $entry['brief'] = $isLiveRow ? Str::limit((string) $row->brief, 140) : $row->brief;
+                            }
+                            if ($row->caption) {
+                                $entry['caption'] = $isLiveRow ? Str::limit((string) $row->caption, 140) : $row->caption;
+                            }
+                            if ($row->published_url) {
+                                $entry['publishedUrl'] = $row->published_url;
+                            }
+                            if ($row->ig_media_id) {
+                                $entry['igMediaId'] = $row->ig_media_id;
+                            }
+                            if ($row->ig_media_url) {
+                                $entry['igMediaUrl'] = $row->ig_media_url;
+                            }
+                            if ($row->ig_thumbnail_url) {
+                                $entry['igThumbnailUrl'] = $row->ig_thumbnail_url;
+                            }
+                            if ($row->ref_design_url) {
+                                $entry['refDesignUrl'] = $row->ref_design_url;
+                            }
+                            if ($row->result_design_url) {
+                                $entry['resultDesignUrl'] = $row->result_design_url;
+                            }
+                            if ($row->revision_note) {
+                                $entry['revisionNote'] = $row->revision_note;
+                            }
+                            if ($row->performance_notes) {
+                                $entry['performanceNotes'] = $row->performance_notes;
+                            }
+                            if ($row->reach !== null) {
+                                $entry['reach'] = (int) $row->reach;
+                            }
+                            if ($row->saves !== null) {
+                                $entry['saves'] = (int) $row->saves;
+                            }
+                            if ($row->reels_watch_time !== null) {
+                                $entry['reelsWatchTime'] = (int) $row->reels_watch_time;
+                            }
+                            if ($row->reels_avg_watch_time !== null) {
+                                $entry['reelsAvgWatchTime'] = (float) $row->reels_avg_watch_time;
+                            }
+                            if ($row->is_ad_boosted) {
+                                $entry['isAdBoosted'] = true;
+                            }
+                            if ($row->ad_spend !== null) {
+                                $entry['adSpend'] = (float) $row->ad_spend;
+                            }
+                            if ($row->grid_position !== null) {
+                                $entry['gridPosition'] = (int) $row->grid_position;
+                            }
+                            if ($row->created_by) {
+                                $entry['createdBy'] = (string) $row->created_by;
+                            }
+                            $contentItems[] = $entry;
+                            if ($idStr !== '') {
+                                $existingContentById[$idStr] = true;
+                            }
+                            if ($codeStr !== '') {
+                                $existingContentByCode[$codeStr] = true;
+                            }
+                        }
+
+                        if (! $includePublications || ! in_array($row->status, ['ready_to_publish', 'published'], true)) {
+                            continue;
+                        }
+
+                        $matchedPubIdx = null;
+                        if (isset($pubIdxByContentItemId[$idStr])) {
+                            $matchedPubIdx = $pubIdxByContentItemId[$idStr];
+                        } elseif ($codeStr !== '') {
+                            $cpKey = strtolower($codeStr).'|'.strtolower((string) $row->platform);
+                            if (isset($pubIdxByCodePlatform[$cpKey])) {
+                                $matchedPubIdx = $pubIdxByCodePlatform[$cpKey];
+                            }
+                        }
+
+                        $hasApiMetrics = $row->metrics_synced_at !== null
+                            || $row->reach !== null
+                            || (int) $row->views > 0
+                            || (int) $row->likes > 0
+                            || (int) $row->comments_count > 0
+                            || (int) $row->shares > 0
+                            || $row->saves !== null;
+
+                        $effectiveReach = $row->reach !== null
+                            ? (int) $row->reach
+                            : ((int) $row->views > 0
+                                ? (int) $row->views
+                                : (($row->likes !== null || $row->comments_count !== null) && ((int) $row->likes > 0 || (int) $row->comments_count > 0)
+                                    ? ((int) $row->likes + (int) $row->comments_count)
+                                    : null));
+
+                        $schedStr = ($pubDate ?? now()->toDateString()).' '.($row->publish_time ?: '10:00');
+                        $recordedAtStr = $row->metrics_synced_at
+                            ? Carbon::parse((string) $row->metrics_synced_at)->format('Y-m-d H:i')
+                            : $schedStr;
+
+                        if ($matchedPubIdx !== null) {
+                            if ($row->status === 'published' && empty($publications[$matchedPubIdx]['publishedUrl']) && ! empty($row->published_url)) {
+                                $publications[$matchedPubIdx]['publishedUrl'] = $row->published_url;
+                            }
+                            $existingMetricSource = (string) ($publications[$matchedPubIdx]['metrics']['source'] ?? 'api');
+                            if ($row->status === 'published' && $hasApiMetrics && $row->metrics_synced_at !== null && $existingMetricSource === 'api') {
+                                $publications[$matchedPubIdx]['metrics'] = [
+                                    'reach' => $effectiveReach,
+                                    'impressions' => (int) $row->views > 0 ? (int) $row->views : $effectiveReach,
+                                    'views' => (int) $row->views,
+                                    'likes' => (int) $row->likes,
+                                    'comments' => (int) $row->comments_count,
+                                    'shares' => (int) $row->shares,
+                                    'saves' => $row->saves !== null ? (int) $row->saves : null,
+                                    'clicks' => $publications[$matchedPubIdx]['metrics']['clicks'] ?? null,
+                                    'source' => 'api',
+                                    'recordedAt' => $recordedAtStr,
+                                ];
+                            }
+
+                            continue;
+                        }
+
+                        $synId = 'pub-db-'.$idStr;
+                        $isLive = $row->status === 'published';
+                        $newPubIdx = count($publications);
+                        $publications[] = [
+                            'id' => $synId,
+                            'contentItemId' => $idStr,
+                            'contentId' => $codeStr,
+                            'title' => (string) $row->title,
+                            'platform' => (string) $row->platform,
+                            'format' => (string) $row->format,
+                            'caption' => $row->caption ? Str::limit((string) $row->caption, 140) : '',
+                            'mediaPreviewUrl' => $row->result_design_url ?: $row->ig_thumbnail_url ?: $row->ig_media_url,
+                            'scheduledAt' => $schedStr,
+                            'publishedActualAt' => $isLive ? $schedStr : null,
+                            'publishedUrl' => $row->published_url,
+                            'picName' => (string) ($row->pic_name ?: 'Publisher HUMAS'),
+                            'checklist' => $isLive
+                                ? []
+                                : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $row->platform)),
+                            'metrics' => ($isLive && $hasApiMetrics) ? [
+                                'reach' => $effectiveReach,
+                                'impressions' => (int) $row->views > 0 ? (int) $row->views : $effectiveReach,
+                                'views' => (int) $row->views,
+                                'likes' => (int) $row->likes,
+                                'comments' => (int) $row->comments_count,
+                                'shares' => (int) $row->shares,
+                                'saves' => $row->saves !== null ? (int) $row->saves : null,
+                                'clicks' => null,
+                                'source' => $row->metrics_synced_at !== null ? 'api' : 'manual',
+                                'recordedAt' => $recordedAtStr,
+                            ] : null,
+                        ];
+                        $pubIdxByContentItemId[$idStr] = $newPubIdx;
+                        if ($codeStr !== '') {
+                            $pubIdxByCodePlatform[strtolower($codeStr).'|'.strtolower((string) $row->platform)] = $newPubIdx;
+                        }
+                    }
+                    unset($rows, $tasksByItemId, $ticketsByItemId);
+                } else {
+                    $relations = [
+                        'tasks',
+                        'comments' => static fn ($q) => $q->latest('id')->limit(20),
+                        'history' => static fn ($q) => $q->reorder('id', 'desc')->limit(15),
+                        'haloApuTicket',
                     ];
-                    $pubIdxByContentItemId[(string) $dbItem->id] = $newPubIdx;
-                    if (! empty($dbItem->content_id)) {
-                        $pubIdxByCodePlatform[strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform)] = $newPubIdx;
+                    if (Schema::hasTable('instagram_comments')) {
+                        $relations['igComments'] = static fn ($q) => $q->limit(20);
                     }
+                    $dbQuery = ContentItem::with($relations);
+
+                    if ($scopeMonth !== null && $scopeCurrentMonth !== null) {
+                        $monthStart = $scopeMonth.'-01';
+                        $nextMonthStart = Carbon::createFromFormat('Y-m', $scopeMonth)->addMonthNoOverflow()->format('Y-m-01');
+                        $dbQuery->where(function ($q) use ($monthStart, $nextMonthStart, $scopeMonth, $scopeCurrentMonth): void {
+                            $q->where(function ($qm) use ($monthStart, $nextMonthStart): void {
+                                $qm->where('publish_date', '>=', $monthStart)
+                                    ->where('publish_date', '<', $nextMonthStart);
+                            });
+                            if ($scopeMonth === $scopeCurrentMonth) {
+                                $q->orWhereNull('publish_date')
+                                    ->orWhere(function ($qCarry) use ($monthStart): void {
+                                        $qCarry->where('publish_date', '<', $monthStart)
+                                            ->where('status', '!=', 'published');
+                                    });
+                            }
+                        });
+                    }
+
+                    $dbItems = $dbQuery
+                        ->orderByDesc('publish_date')
+                        ->orderByDesc('id')
+                        ->get();
+
+                    $resolvedDbItems = ContentItemResource::collection($dbItems)->resolve();
+                    $existingContentById = [];
+                    $existingContentByCode = [];
+                    foreach ($contentItems as $c) {
+                        if (isset($c['id']) && $c['id'] !== '') {
+                            $existingContentById[(string) $c['id']] = true;
+                        }
+                        if (! empty($c['contentId'])) {
+                            $existingContentByCode[(string) $c['contentId']] = true;
+                        }
+                    }
+                    foreach ($resolvedDbItems as $dbArr) {
+                        $dbIdKey = (string) ($dbArr['id'] ?? '');
+                        $dbCodeKey = (string) ($dbArr['contentId'] ?? '');
+                        if (($dbIdKey !== '' && isset($existingContentById[$dbIdKey])) || ($dbCodeKey !== '' && isset($existingContentByCode[$dbCodeKey]))) {
+                            continue;
+                        }
+                        $contentItems[] = $dbArr;
+                        if ($dbIdKey !== '') {
+                            $existingContentById[$dbIdKey] = true;
+                        }
+                        if ($dbCodeKey !== '') {
+                            $existingContentByCode[$dbCodeKey] = true;
+                        }
+                    }
+
+                    if ($includePublications) {
+                        $pubIdxByContentItemId = [];
+                        $pubIdxByCodePlatform = [];
+                        foreach ($publications as $pIdx => $existingPub) {
+                            if (! empty($existingPub['contentItemId'])) {
+                                $pubIdxByContentItemId[(string) $existingPub['contentItemId']] = $pIdx;
+                            }
+                            if (! empty($existingPub['contentId'])) {
+                                $cpKey = strtolower((string) $existingPub['contentId']).'|'.strtolower((string) ($existingPub['platform'] ?? ''));
+                                $pubIdxByCodePlatform[$cpKey] = $pIdx;
+                            }
+                        }
+
+                        foreach ($dbItems as $dbItem) {
+                            if (! in_array($dbItem->status, ['ready_to_publish', 'published'], true)) {
+                                continue;
+                            }
+
+                            $matchedPubIdx = null;
+                            $dbItemIdStr = (string) $dbItem->id;
+                            if (isset($pubIdxByContentItemId[$dbItemIdStr])) {
+                                $matchedPubIdx = $pubIdxByContentItemId[$dbItemIdStr];
+                            } elseif (! empty($dbItem->content_id)) {
+                                $cpKey = strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform);
+                                if (isset($pubIdxByCodePlatform[$cpKey])) {
+                                    $matchedPubIdx = $pubIdxByCodePlatform[$cpKey];
+                                }
+                            }
+                            $hasApiMetrics = $dbItem->metrics_synced_at !== null
+                                || $dbItem->reach !== null
+                                || (int) $dbItem->views > 0
+                                || (int) $dbItem->likes > 0
+                                || (int) $dbItem->comments_count > 0
+                                || (int) $dbItem->shares > 0
+                                || $dbItem->saves !== null;
+
+                            $effectiveReach = $dbItem->reach !== null
+                                ? (int) $dbItem->reach
+                                : ((int) $dbItem->views > 0
+                                    ? (int) $dbItem->views
+                                    : (($dbItem->likes !== null || $dbItem->comments_count !== null) && ((int) $dbItem->likes > 0 || (int) $dbItem->comments_count > 0)
+                                        ? ((int) $dbItem->likes + (int) $dbItem->comments_count)
+                                        : null));
+
+                            $schedStr = ($dbItem->publish_date?->toDateString() ?? now()->toDateString()).' '.($dbItem->publish_time ?: '10:00');
+
+                            if ($matchedPubIdx !== null) {
+                                if ($dbItem->status === 'published' && empty($publications[$matchedPubIdx]['publishedUrl']) && ! empty($dbItem->published_url)) {
+                                    $publications[$matchedPubIdx]['publishedUrl'] = $dbItem->published_url;
+                                }
+                                $existingMetricSource = (string) ($publications[$matchedPubIdx]['metrics']['source'] ?? 'api');
+                                if ($dbItem->status === 'published' && $hasApiMetrics && $dbItem->metrics_synced_at !== null && $existingMetricSource === 'api') {
+                                    $publications[$matchedPubIdx]['metrics'] = [
+                                        'reach' => $effectiveReach,
+                                        'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
+                                        'views' => (int) $dbItem->views,
+                                        'likes' => (int) $dbItem->likes,
+                                        'comments' => (int) $dbItem->comments_count,
+                                        'shares' => (int) $dbItem->shares,
+                                        'saves' => $dbItem->saves !== null ? (int) $dbItem->saves : null,
+                                        'clicks' => $publications[$matchedPubIdx]['metrics']['clicks'] ?? null,
+                                        'source' => 'api',
+                                        'recordedAt' => $dbItem->metrics_synced_at->format('Y-m-d H:i'),
+                                    ];
+                                }
+
+                                continue;
+                            }
+
+                            $synId = 'pub-db-'.$dbItem->id;
+                            $isLive = $dbItem->status === 'published';
+                            $newPubIdx = count($publications);
+                            $publications[] = [
+                                'id' => $synId,
+                                'contentItemId' => (string) $dbItem->id,
+                                'contentId' => (string) $dbItem->content_id,
+                                'title' => (string) $dbItem->title,
+                                'platform' => (string) $dbItem->platform,
+                                'format' => (string) $dbItem->format,
+                                'caption' => $dbItem->caption ? Str::limit((string) $dbItem->caption, 140) : '',
+                                'mediaPreviewUrl' => $dbItem->result_design_url ?: $dbItem->ig_thumbnail_url ?: $dbItem->ig_media_url,
+                                'scheduledAt' => $schedStr,
+                                'publishedActualAt' => $isLive ? $schedStr : null,
+                                'publishedUrl' => $dbItem->published_url,
+                                'picName' => (string) ($dbItem->pic_name ?: 'Publisher HUMAS'),
+                                'checklist' => $isLive
+                                    ? []
+                                    : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $dbItem->platform)),
+                                'metrics' => ($isLive && $hasApiMetrics) ? [
+                                    'reach' => $effectiveReach,
+                                    'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
+                                    'views' => (int) $dbItem->views,
+                                    'likes' => (int) $dbItem->likes,
+                                    'comments' => (int) $dbItem->comments_count,
+                                    'shares' => (int) $dbItem->shares,
+                                    'saves' => $dbItem->saves !== null ? (int) $dbItem->saves : null,
+                                    'clicks' => null,
+                                    'source' => $dbItem->metrics_synced_at !== null ? 'api' : 'manual',
+                                    'recordedAt' => $dbItem->metrics_synced_at?->format('Y-m-d H:i') ?? $schedStr,
+                                ] : null,
+                            ];
+                            $pubIdxByContentItemId[(string) $dbItem->id] = $newPubIdx;
+                            if (! empty($dbItem->content_id)) {
+                                $pubIdxByCodePlatform[strtolower((string) $dbItem->content_id).'|'.strtolower((string) $dbItem->platform)] = $newPubIdx;
+                            }
+                        }
+                    }
+                    unset($dbItems, $resolvedDbItems);
                 }
             } catch (\Throwable) {
                 // Ignore DB errors during early bootstrap
@@ -357,8 +1022,8 @@ class WorkspaceV3Controller extends Controller
             'notifications' => $session->get('sparc_v3.notifications', []),
         ];
 
-        if ($request->isMethodSafe()) {
-            $request->attributes->set('_sparc_hydrated_workspace', $state);
+        if ($request->isMethodSafe() && count($contentItems) <= 200) {
+            $request->attributes->set($cacheAttrKey, $state);
         }
 
         return $state;
@@ -514,7 +1179,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function dashboard(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['liteRelations' => true]);
         /** @var array<int, array<string, mixed>> $publications */
         $publications = $state['publications'];
 
@@ -717,11 +1382,15 @@ class WorkspaceV3Controller extends Controller
      */
     public function contentPlan(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
-        $items = $state['contentItems'];
-        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
         $currentMonth = now()->format('Y-m');
         $month = self::resolveRequestedMonth($request);
+        $state = self::hydrateWorkspace($request, [
+            'includePublications' => false,
+            'month' => $month,
+            'currentMonth' => $currentMonth,
+        ]);
+        $items = $state['contentItems'];
+        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
         $items = self::scopeItemsToMonth($items, $month, $currentMonth);
 
         return Inertia::render('Content/Index', [
@@ -747,11 +1416,15 @@ class WorkspaceV3Controller extends Controller
      */
     public function productionBoard(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
-        $items = $state['contentItems'];
-        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
         $currentMonth = now()->format('Y-m');
         $month = self::resolveRequestedMonth($request);
+        $state = self::hydrateWorkspace($request, [
+            'includePublications' => false,
+            'month' => $month,
+            'currentMonth' => $currentMonth,
+        ]);
+        $items = $state['contentItems'];
+        usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
         $items = self::scopeItemsToMonth($items, $month, $currentMonth);
 
         return Inertia::render('Planner/Index', [
@@ -771,7 +1444,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function calendar(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
         $contentItems = $state['contentItems'];
         usort($contentItems, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
 
@@ -789,7 +1462,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function publishing(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
         $igSchedules = [];
 
         if (Schema::hasTable('instagram_schedules')) {
@@ -835,7 +1508,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function report(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
 
         return Inertia::render('Report/Index', [
             'today' => now()->toDateString(),
@@ -951,7 +1624,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function assets(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false]);
 
         return Inertia::render('Assets/Index', [
             'assets' => $state['assets'],
@@ -964,7 +1637,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function team(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
+        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false]);
 
         return Inertia::render('Team/Index', [
             'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
@@ -977,13 +1650,17 @@ class WorkspaceV3Controller extends Controller
      */
     public function settings(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request);
-        if (! $state['can']['manageSettings']) {
+        $auth = self::resolveAuthContextData($request);
+        if (! $auth['can']['manageSettings']) {
             abort(403, 'Hanya Administrator yang memiliki izin membuka Pengaturan Sistem.');
         }
 
+        $settings = $request->hasSession() ? $request->session()->get('sparc_v3.settings', []) : [];
+        $settings['instagram'] = self::resolveInstagramSettingsPayload($request);
+        $settings['haloApu'] = self::resolveHaloApuSettingsPayload();
+
         return Inertia::render('Settings/Index', [
-            'settings' => $state['settings'],
+            'settings' => $settings,
         ]);
     }
 
@@ -1144,6 +1821,31 @@ class WorkspaceV3Controller extends Controller
 
         return ContentItem::where('content_id', $id)->first()
             ?? ContentItem::where('ticket_id', $id)->first();
+    }
+
+    /**
+     * Return full details (caption, brief, tasks, comments, history, igComments) for one ContentItem (`GET /content/{id}/detail`).
+     */
+    public function showContentDetail(Request $request, string $id): JsonResponse
+    {
+        $item = $this->resolveContentItem($id);
+        if (! $item) {
+            return response()->json(['message' => 'Konten tidak ditemukan.'], 404);
+        }
+
+        $relations = [
+            'tasks',
+            'comments' => static fn ($q) => $q->latest('id')->limit(30),
+            'history' => static fn ($q) => $q->reorder('id', 'desc')->limit(25),
+            'haloApuTicket',
+        ];
+        if (Schema::hasTable('instagram_comments')) {
+            $relations['igComments'] = static fn ($q) => $q->limit(30);
+        }
+        $item->load($relations);
+        $item->setAttribute('_sparc_has_full_detail', true);
+
+        return response()->json((new ContentItemResource($item))->resolve($request));
     }
 
     public function storeContent(Request $request): RedirectResponse
