@@ -495,7 +495,9 @@ class WorkspaceV3Controller extends Controller
                 'picAvatar' => (string) ($row->pic_avatar ?? ''),
                 'productionDeadline' => $row->production_deadline ? substr((string) $row->production_deadline, 0, 10) : $pubDate,
                 'publishDate' => $pubDate,
-                'views' => (int) ($row->views ?? 0),
+                'views' => ($row->reach === null && (int) ($row->views ?? 0) === 0 && ((int) ($row->likes ?? 0) > 0 || (int) ($row->comments_count ?? 0) > 0))
+                    ? null
+                    : (int) ($row->views ?? 0),
                 'likes' => (int) ($row->likes ?? 0),
                 'commentsCount' => (int) ($row->comments_count ?? 0),
                 'shares' => (int) ($row->shares ?? 0),
@@ -1027,6 +1029,10 @@ class WorkspaceV3Controller extends Controller
                             || $row->saves !== null;
 
                         $effectiveReach = $row->reach !== null ? (int) $row->reach : null;
+                        $rawViews = (int) $row->views;
+                        $effectiveViews = ($row->reach === null && $rawViews === 0 && ((int) $row->likes > 0 || (int) $row->comments_count > 0))
+                            ? null
+                            : $rawViews;
                         $effectiveImpressions = (int) $row->views > 0 ? (int) $row->views : $effectiveReach;
 
                         $schedStr = ($pubDate ?? now()->toDateString()).' '.($row->publish_time ?: '10:00');
@@ -1043,7 +1049,7 @@ class WorkspaceV3Controller extends Controller
                                 $publications[$matchedPubIdx]['metrics'] = [
                                     'reach' => $effectiveReach,
                                     'impressions' => $effectiveImpressions,
-                                    'views' => (int) $row->views,
+                                    'views' => $effectiveViews,
                                     'likes' => (int) $row->likes,
                                     'comments' => (int) $row->comments_count,
                                     'shares' => (int) $row->shares,
@@ -1079,7 +1085,7 @@ class WorkspaceV3Controller extends Controller
                             'metrics' => ($isLive && $hasApiMetrics) ? [
                                 'reach' => $effectiveReach,
                                 'impressions' => $effectiveImpressions,
-                                'views' => (int) $row->views,
+                                'views' => $effectiveViews,
                                 'likes' => (int) $row->likes,
                                 'comments' => (int) $row->comments_count,
                                 'shares' => (int) $row->shares,
@@ -1193,6 +1199,10 @@ class WorkspaceV3Controller extends Controller
                                 || $dbItem->saves !== null;
 
                             $effectiveReach = $dbItem->reach !== null ? (int) $dbItem->reach : null;
+                            $rawViews = (int) $dbItem->views;
+                            $effectiveViews = ($dbItem->reach === null && $rawViews === 0 && ((int) $dbItem->likes > 0 || (int) $dbItem->comments_count > 0))
+                                ? null
+                                : $rawViews;
                             $effectiveImpressions = (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach;
 
                             $schedStr = ($dbItem->publish_date?->toDateString() ?? now()->toDateString()).' '.($dbItem->publish_time ?: '10:00');
@@ -1206,8 +1216,7 @@ class WorkspaceV3Controller extends Controller
                                     $publications[$matchedPubIdx]['metrics'] = [
                                         'reach' => $effectiveReach,
                                         'impressions' => $effectiveImpressions,
-                                        'views' => (int) $dbItem->views,
-                                        'likes' => (int) $dbItem->likes,
+                                        'views' => $effectiveViews,
                                         'comments' => (int) $dbItem->comments_count,
                                         'shares' => (int) $dbItem->shares,
                                         'saves' => $dbItem->saves !== null ? (int) $dbItem->saves : null,
@@ -1242,7 +1251,7 @@ class WorkspaceV3Controller extends Controller
                                 'metrics' => ($isLive && $hasApiMetrics) ? [
                                     'reach' => $effectiveReach,
                                     'impressions' => $effectiveImpressions,
-                                    'views' => (int) $dbItem->views,
+                                    'views' => $effectiveViews,
                                     'likes' => (int) $dbItem->likes,
                                     'comments' => (int) $dbItem->comments_count,
                                     'shares' => (int) $dbItem->shares,

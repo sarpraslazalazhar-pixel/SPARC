@@ -121,7 +121,9 @@ class ContentItemResource extends JsonResource
             'revisionNote' => $this->revision_note,
             'performanceNotes' => $this->performance_notes,
             'reach' => $this->reach !== null ? (int) $this->reach : null,
-            'views' => (int) $this->views,
+            'views' => ($this->reach === null && (int) $this->views === 0 && ((int) $this->likes > 0 || (int) $this->comments_count > 0))
+                ? null
+                : (int) $this->views,
             'likes' => (int) $this->likes,
             'commentsCount' => (int) $this->comments_count,
             'shares' => (int) $this->shares,

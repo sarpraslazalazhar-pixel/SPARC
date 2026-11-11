@@ -1776,6 +1776,14 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                         </div>
                                     </div>
                                 ) : null}
+                                {item.reach === null && (item.views === null || (item.views ?? 0) === 0) && ((item.likes ?? 0) > 0 || (item.commentsCount ?? 0) > 0) && (
+                                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                                        <span>
+                                            <strong>Postingan Pra-Bisnis (Meta):</strong> Postingan ini diunggah sebelum akun beralih ke Akun Bisnis. Meta Graph API secara resmi tidak mengumpulkan metrik views/reach untuk media sebelum konversi bisnis. Anda dapat memasukkan data tayangan manual di bawah jika memiliki catatan lama.
+                                        </span>
+                                    </div>
+                                )}
 
                                 {showRecentIg && (
                                     <div className="pt-2 border-t border-purple-500/20 space-y-2">

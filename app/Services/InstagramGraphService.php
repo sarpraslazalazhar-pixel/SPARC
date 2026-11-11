@@ -1578,7 +1578,7 @@ class InstagramGraphService
 
             /** @var array<int, array<string, mixed>> $mediaList */
             $mediaList = $paginated['data'];
-
+            $targetMedia = null;
             if ($shortcode !== null) {
                 foreach ($mediaList as $m) {
                     $permalink = (string) ($m['permalink'] ?? '');
@@ -2051,7 +2051,7 @@ class InstagramGraphService
             $newestFreshQuota = $afterCursor === null ? 25 : 0;
             foreach ($mediaIds as $idx => $mId) {
                 $existingMatch = $existingByMediaId[$mId] ?? null;
-                if (! $existingMatch || $existingMatch->metrics_synced_at === null || $idx < $newestFreshQuota) {
+                if (! $existingMatch || $existingMatch->metrics_synced_at === null || (int) $existingMatch->views === 0 || $idx < $newestFreshQuota) {
                     $priorityIds[] = $mId;
                 }
                 if (count($priorityIds) >= $insightsMax) {
