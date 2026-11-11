@@ -989,4 +989,94 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertSame(42000, $conn->ads_data['summary']['total_impressions']);
         $this->assertCount(1, $conn->ads_data['campaigns']);
     }
+
+    public function test_sync_instagram_batch_resumes_across_cursors_for_unlimited_pull(): void
+    {
+        $batchOnePosts = [];
+        for ($i = 1; $i <= 10; $i++) {
+            $batchOnePosts[] = [
+                'id' => (string) (1807000 + $i),
+                'caption' => "Batch Satu Post #{$i}",
+                'media_type' => 'IMAGE',
+                'media_url' => "https://cdn.example.com/b1-{$i}.jpg",
+                'permalink' => "https://www.instagram.com/p/Batch1Post{$i}/",
+                'timestamp' => '2026-10-20T08:00:00+0000',
+                'like_count' => 10 + $i,
+                'comments_count' => $i,
+            ];
+        }
+
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222/insights*online_followers*' => Http::response(['data' => []], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'total_value' => ['value' => 5000]],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*after=batch_cursor_2*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1807011',
+                        'caption' => 'Batch Dua Post #11',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/b2-11.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Batch2Post11/',
+                        'timestamp' => '2026-10-18T08:00:00+0000',
+                        'like_count' => 99,
+                        'comments_count' => 7,
+                    ],
+                    [
+                        'id' => '1807012',
+                        'caption' => 'Batch Dua Post #12',
+                        'media_type' => 'VIDEO',
+                        'media_url' => 'https://cdn.example.com/b2-12.mp4',
+                        'permalink' => 'https://www.instagram.com/reel/Batch2Post12/',
+                        'timestamp' => '2026-10-17T08:00:00+0000',
+                        'like_count' => 150,
+                        'comments_count' => 12,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*' => Http::response([
+                'data' => $batchOnePosts,
+                'paging' => [
+                    'next' => 'https://graph.facebook.com/v21.0/17841400111222/media?after=batch_cursor_2&limit=10',
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/*/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 900]]],
+                    ['name' => 'views', 'values' => [['value' => 1100]]],
+                ],
+            ], 200),
+        ]);
+
+        $b1 = $this->postJson(route('content.syncBatchInstagram'), ['batch_size' => 10]);
+        $b1->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('fetched_count', 10)
+            ->assertJsonPath('imported_count', 10)
+            ->assertJsonPath('next_cursor', 'batch_cursor_2')
+            ->assertJsonPath('has_more', true);
+
+        $b2 = $this->postJson(route('content.syncBatchInstagram'), [
+            'after' => 'batch_cursor_2',
+            'batch_size' => 10,
+        ]);
+        $b2->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('fetched_count', 2)
+            ->assertJsonPath('imported_count', 2)
+            ->assertJsonPath('next_cursor', null)
+            ->assertJsonPath('has_more', false);
+
+        $finish = $this->postJson(route('content.syncBatchInstagram'), ['finish' => true]);
+        $finish->assertOk()->assertJsonPath('finished', true);
+
+        $this->assertSame(12, ContentItem::whereNotNull('ig_media_id')->count());
+    }
 }

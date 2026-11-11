@@ -566,7 +566,7 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
-        $result = $service->syncRecentComments(200);
+        $result = $service->syncRecentComments(0);
 
         if (! ($result['success'] ?? false)) {
             WorkspaceV3Controller::flashToast(
@@ -838,6 +838,12 @@ class InstagramOperationsController extends Controller
             }
 
             $publishedItems = ContentItem::query()
+                ->select([
+                    'id', 'content_id', 'title', 'format',
+                    'ig_thumbnail_url', 'ig_media_url', 'result_design_url',
+                    'published_url', 'publish_date', 'reach', 'views',
+                    'likes', 'comments_count', 'saves', 'shares',
+                ])
                 ->where('platform', 'instagram')
                 ->where('status', 'published')
                 ->where(function ($q) {
@@ -849,7 +855,6 @@ class InstagramOperationsController extends Controller
                 ->orderByDesc('publish_date')
                 ->orderByDesc('publish_time')
                 ->orderByDesc('id')
-                ->limit(500)
                 ->get();
 
             foreach ($publishedItems as $item) {
@@ -1043,7 +1048,7 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
-        $res = $service->syncAndAutoImportRecentMedia(250, true);
+        $res = $service->syncAndAutoImportRecentMedia(0, true);
         $service->syncAccountProfileAndInsights();
 
         if (! ($res['success'] ?? false)) {

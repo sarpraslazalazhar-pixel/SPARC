@@ -54,6 +54,9 @@ if ($isAuthenticated && isset($_POST['command'])) {
     if (function_exists('set_time_limit')) {
         @set_time_limit(180);
     }
+    if (! defined('SPARC_UNLIMITED_BUDGET')) {
+        define('SPARC_UNLIMITED_BUDGET', true);
+    }
     $executedCmd = trim($_POST['command']);
 
     // Bootstrap Laravel
@@ -223,7 +226,7 @@ if ($isAuthenticated && isset($_POST['command'])) {
 
                 <form method="POST">
                     <input type="hidden" name="command" value="instagram:sync-metrics">
-                    <button type="submit" class="btn-success" style="width: 100%;">5. Sync Instagram via Runner (1000 Post)</button>
+                    <button type="submit" class="btn-success" style="width: 100%;">5. Sync Semua Konten Instagram (Tanpa Batas)</button>
                 </form>
 
                 <form method="POST">

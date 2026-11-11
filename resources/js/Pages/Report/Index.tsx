@@ -50,6 +50,7 @@ import { Tabs } from '@/Components/UI/Tabs';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import { copyToClipboard } from '@/lib/utils';
+import { runChunkedInstagramSync } from '@/lib/instagramSync';
 import type {
     SparcContentItem,
     SparcPublication,
@@ -117,6 +118,7 @@ export default function ReportIndex({
     const [csvModalOpen, setCsvModalOpen] = useState(false);
 
     const [isSyncingIg, setIsSyncingIg] = useState(false);
+    const [syncProgressCount, setSyncProgressCount] = useState(0);
     const [isSyncingIgProfile, setIsSyncingIgProfile] = useState(false);
 
     const igAccount = instagramSettings ?? props.instagramStatus;
@@ -133,16 +135,23 @@ export default function ReportIndex({
         );
     };
 
-    const handleSyncInstagram = () => {
+    const handleSyncInstagram = async () => {
         setIsSyncingIg(true);
-        router.post(
-            '/content/instagram/sync-all',
-            {},
-            {
-                preserveScroll: true,
-                onFinish: () => setIsSyncingIg(false),
-            }
+        setSyncProgressCount(0);
+        const res = await runChunkedInstagramSync({
+            onProgress: (p) => setSyncProgressCount(p.fetchedCount),
+        });
+        setIsSyncingIg(false);
+        if (!res.success) {
+            toastError('Sinkronisasi Gagal', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Sinkronisasi Instagram Selesai',
+            `${res.syncedCount.toLocaleString('id-ID')} konten diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
         );
+        router.reload();
     };
     const handleSyncAds = (overrideAccountId?: string, overridePreset?: string) => {
         setIsSyncingAds(true);
@@ -495,7 +504,7 @@ export default function ReportIndex({
                                 onClick={handleSyncInstagram}
                                 title="Sinkronisasi seluruh postingan Instagram dari Meta Graph API"
                             >
-                                Sync Metrik IG
+                                {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Sync Metrik IG'}
                             </Button>
                             <Button
                                 variant="secondary"

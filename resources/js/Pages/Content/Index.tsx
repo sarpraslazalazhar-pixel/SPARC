@@ -56,6 +56,7 @@ import {
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import { cn } from '@/lib/utils';
+import { runChunkedInstagramSync } from '@/lib/instagramSync';
 import type { InstitutionalActivity, SparcContentItem, SparcTeamMember } from '@/types/sparc';
 
 interface ContentPlanPageProps {
@@ -112,7 +113,7 @@ export default function ContentPlanIndex({
     const currentMonth = currentMonthProp ?? today.slice(0, 7);
     const can = props.auth?.can;
     const currentRole = props.auth?.user?.role ?? 'admin';
-    const { error: toastError } = useToast();
+    const { success: toastSuccess, error: toastError } = useToast();
 
     const [items, setItems] = useState<SparcContentItem[]>(contentItems);
     useEffect(() => {
@@ -138,17 +139,25 @@ export default function ContentPlanIndex({
     const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
     const [createModalOpen, setCreateModalOpen] = useState(false);
     const [isSyncingAll, setIsSyncingAll] = useState(false);
+    const [syncProgressCount, setSyncProgressCount] = useState(0);
 
-    const handleSyncAllInstagram = () => {
+    const handleSyncAllInstagram = async () => {
         setIsSyncingAll(true);
-        router.post(
-            '/content/instagram/sync-all',
-            {},
-            {
-                preserveScroll: true,
-                onFinish: () => setIsSyncingAll(false),
-            }
+        setSyncProgressCount(0);
+        const res = await runChunkedInstagramSync({
+            onProgress: (p) => setSyncProgressCount(p.fetchedCount),
+        });
+        setIsSyncingAll(false);
+        if (!res.success) {
+            toastError('Sinkronisasi Massal Gagal', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Sinkronisasi Massal Selesai',
+            `${res.syncedCount.toLocaleString('id-ID')} konten Instagram diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
         );
+        router.reload();
     };
     const [viewMode, setViewMode] = useState<'table' | 'kanban'>(
         filters.view === 'table' ? 'table' : 'kanban'
@@ -720,7 +729,7 @@ export default function ContentPlanIndex({
                                 onClick={handleSyncAllInstagram}
                                 title="Tarik pembaruan metrik dari Instagram untuk semua konten yang sudah tayang"
                             >
-                                Sync Metrik IG
+                                {isSyncingAll && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Sync Metrik IG'}
                             </Button>
                             <Button
                                 variant="primary"

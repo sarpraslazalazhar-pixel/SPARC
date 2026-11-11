@@ -38,6 +38,7 @@ import { Sheet } from '@/Components/UI/Sheet';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import { MD3_EASING, MD3_SPRING } from '@/lib/motion';
+import { runChunkedInstagramSync } from '@/lib/instagramSync';
 import type { SparcSystemSettings } from '@/types/sparc';
 
 export interface PlannedGridSlot {
@@ -87,7 +88,7 @@ export default function GridIndex({
 }: GridIndexProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
-    const { info, error: toastError } = useToast();
+    const { info, success: toastSuccess, error: toastError } = useToast();
     const sensors = useKanbanSensors();
 
     const [planned, setPlanned] = useState<PlannedGridSlot[]>(initialPlanned);
@@ -102,6 +103,8 @@ export default function GridIndex({
     const [editingSlot, setEditingSlot] = useState<PlannedGridSlot | null>(null);
     const [isReordering, setIsReordering] = useState(false);
     const [isSyncingIg, setIsSyncingIg] = useState(false);
+    const [syncProgressCount, setSyncProgressCount] = useState(0);
+    const [visibleLiveCount, setVisibleLiveCount] = useState(30);
     const [isDeletingSlot, setIsDeletingSlot] = useState(false);
 
     const slotForm = useForm<{
@@ -272,16 +275,23 @@ export default function GridIndex({
         persistOrder(reordered);
     };
 
-    const handleSyncLiveIg = () => {
+    const handleSyncLiveIg = async () => {
         setIsSyncingIg(true);
-        router.post(
-            '/grid/sync-live-feed',
-            {},
-            {
-                preserveScroll: true,
-                onFinish: () => setIsSyncingIg(false),
-            }
+        setSyncProgressCount(0);
+        const res = await runChunkedInstagramSync({
+            onProgress: (p) => setSyncProgressCount(p.fetchedCount),
+        });
+        setIsSyncingIg(false);
+        if (!res.success) {
+            toastError('Gagal Menarik Feed IG', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Feed Instagram Berhasil Disinkronkan!',
+            `${res.syncedCount.toLocaleString('id-ID')} postingan diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru asli diimpor ke Visual Grid).`
         );
+        router.reload();
     };
 
     const getPlannedBadge = (status: PlannedGridSlot['status']) => {
@@ -378,7 +388,7 @@ export default function GridIndex({
                             icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
                             onClick={handleSyncLiveIg}
                         >
-                            Sync Feed Asli IG
+                            {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Sync Feed Asli IG'}
                         </Button>
                     )}
                     {(can?.editContent || can?.manageAssets) && (
@@ -661,13 +671,14 @@ export default function GridIndex({
                                                 icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
                                                 onClick={handleSyncLiveIg}
                                             >
-                                                Tarik Kiriman dari Instagram Sekarang
+                                                {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Tarik Kiriman dari Instagram Sekarang'}
                                             </Button>
                                         )}
                                     </div>
                                 ) : (
+                                    <div className="space-y-4">
                                     <div className="grid grid-cols-3 gap-2.5 sm:gap-4">
-                                        {livePosts.map((post) => (
+                                        {livePosts.slice(0, visibleLiveCount).map((post) => (
                                             <div
                                                 key={post.id}
                                                 className="group relative aspect-square bg-[var(--md-sys-color-surface-container)] rounded-2xl overflow-hidden border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]"
@@ -676,6 +687,7 @@ export default function GridIndex({
                                                     <img
                                                         src={post.imageUrl}
                                                         alt={post.title}
+                                                        loading="lazy"
                                                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                                     />
                                                 ) : (
@@ -748,6 +760,19 @@ export default function GridIndex({
                                                 </div>
                                             </div>
                                         ))}
+                                    </div>
+                                    {livePosts.length > visibleLiveCount && (
+                                        <div className="flex justify-center pt-1">
+                                            <Button
+                                                type="button"
+                                                variant="secondary"
+                                                size="sm"
+                                                onClick={() => setVisibleLiveCount((c) => c + 30)}
+                                            >
+                                                Tampilkan 30 kiriman lagi (sisa {(livePosts.length - visibleLiveCount).toLocaleString('id-ID')})
+                                            </Button>
+                                        </div>
+                                    )}
                                     </div>
                                 )}
                             </div>

@@ -1748,7 +1748,7 @@ class WorkspaceV3Controller extends Controller
             return back();
         }
 
-        $result = $service->syncAndAutoImportRecentMedia(250, true);
+        $result = $service->syncAndAutoImportRecentMedia(0, true);
 
         if (! ($result['success'] ?? false)) {
             self::flashToast(
@@ -1761,24 +1761,112 @@ class WorkspaceV3Controller extends Controller
             return back();
         }
 
-        // Also synchronize to session publications array for the Performance Report table
+        $this->syncSessionPublicationsFromIgResult($request, $result['synced_items']);
+        self::flashToast(
+            $request,
+            'success',
+            'Sinkronisasi Massal Selesai',
+            sprintf(
+                '%d konten Instagram berhasil diperbarui (%d postingan baru diimpor).',
+                $result['synced_count'],
+                $result['imported_count'] ?? 0
+            )
+        );
+
+        return back();
+    }
+
+    /**
+     * Execute one resumable Instagram sync batch (`POST /content/instagram/sync-batch`) for unlimited cPanel-safe sync.
+     */
+    public function syncInstagramBatch(Request $request): JsonResponse
+    {
+        $authUser = $request->user();
+        $sessionRole = $request->hasSession() ? $request->session()->get('sparc_v3.active_role') : null;
+        $activeRole = ! empty($sessionRole)
+            ? (string) $sessionRole
+            : (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
+        $can = self::permissionsForRole($activeRole);
+        if (! ($can['editContent'] || $can['managePublishing'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan metrik konten.');
+        }
+
+        $validated = $request->validate([
+            'after' => ['nullable', 'string', 'max:1000'],
+            'batch_size' => ['nullable', 'integer', 'min:10', 'max:100'],
+            'finish' => ['nullable', 'boolean'],
+        ]);
+
+        $service = new InstagramGraphService;
+        if (! $service->isConfigured()) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Kredensial Instagram Graph API belum terhubung. Hubungkan akun Instagram di menu Pengaturan terlebih dahulu.',
+            ], 422);
+        }
+
+        if ($request->boolean('finish')) {
+            $service->syncAccountProfileAndInsights();
+
+            return response()->json([
+                'success' => true,
+                'finished' => true,
+            ]);
+        }
+
+        $after = isset($validated['after']) && trim((string) $validated['after']) !== ''
+            ? trim((string) $validated['after'])
+            : null;
+        $batchSize = (int) ($validated['batch_size'] ?? 100);
+
+        $result = $service->syncAndAutoImportRecentMedia($batchSize, true, $after);
+        if (! ($result['success'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'error' => $result['error'] ?? 'Terjadi kesalahan saat berkomunikasi dengan server Meta.',
+            ], 422);
+        }
+
+        $this->syncSessionPublicationsFromIgResult($request, $result['synced_items']);
+
+        return response()->json([
+            'success' => true,
+            'fetched_count' => (int) ($result['fetched_count'] ?? count($result['synced_items'])),
+            'synced_count' => (int) ($result['synced_count'] ?? 0),
+            'imported_count' => (int) ($result['imported_count'] ?? 0),
+            'next_cursor' => $result['next_cursor'] ?? null,
+            'has_more' => (bool) ($result['has_more'] ?? false),
+        ]);
+    }
+
+    /**
+     * Mirror synchronized Instagram metrics into session publications array for the Performance Report table.
+     *
+     * @param  array<int, array<string, mixed>>  $syncedItems
+     */
+    private function syncSessionPublicationsFromIgResult(Request $request, array $syncedItems): void
+    {
+        if (empty($syncedItems)) {
+            return;
+        }
+
         /** @var array<int, array<string, mixed>> $pubs */
         $pubs = $request->session()->get('sparc_v3.publications', []);
         $updatedPubs = false;
 
-        foreach ($result['synced_items'] as $synced) {
+        foreach ($syncedItems as $synced) {
             foreach ($pubs as $idx => $pub) {
                 if (
-                    strcasecmp((string) ($pub['contentId'] ?? ''), (string) $synced['content_id']) === 0
+                    strcasecmp((string) ($pub['contentId'] ?? ''), (string) ($synced['content_id'] ?? '')) === 0
                     && strtolower((string) ($pub['platform'] ?? '')) === 'instagram'
                 ) {
                     $pubs[$idx]['metrics'] = [
-                        'reach' => isset($synced['reach']) && $synced['reach'] !== null ? (int) $synced['reach'] : (int) $synced['views'],
-                        'impressions' => (int) $synced['views'],
-                        'views' => (int) $synced['views'],
-                        'likes' => (int) $synced['likes'],
-                        'comments' => (int) $synced['comments_count'],
-                        'shares' => (int) $synced['shares'],
+                        'reach' => isset($synced['reach']) && $synced['reach'] !== null ? (int) $synced['reach'] : (int) ($synced['views'] ?? 0),
+                        'impressions' => (int) ($synced['views'] ?? 0),
+                        'views' => (int) ($synced['views'] ?? 0),
+                        'likes' => (int) ($synced['likes'] ?? 0),
+                        'comments' => (int) ($synced['comments_count'] ?? 0),
+                        'shares' => (int) ($synced['shares'] ?? 0),
                         'saves' => isset($synced['saves']) && $synced['saves'] !== null ? (int) $synced['saves'] : null,
                         'clicks' => null,
                         'source' => 'api',
@@ -1792,19 +1880,6 @@ class WorkspaceV3Controller extends Controller
         if ($updatedPubs) {
             $request->session()->put('sparc_v3.publications', $pubs);
         }
-
-        self::flashToast(
-            $request,
-            'success',
-            'Sinkronisasi Massal Selesai',
-            sprintf(
-                '%d konten Instagram berhasil diperbarui (%d postingan baru diimpor).',
-                $result['synced_count'],
-                $result['imported_count'] ?? 0
-            )
-        );
-
-        return back();
     }
 
     /**

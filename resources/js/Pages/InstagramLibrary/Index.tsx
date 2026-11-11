@@ -15,6 +15,8 @@ import { InstagramIcon } from '@/Components/Icons';
 import { formatMonthLabel } from '@/Components/MonthNavigator';
 import { Button } from '@/Components/UI/Button';
 import { ContentIdBadge, FORMAT_GROUPS, PlatformChip } from '@/Components/UI/Semantics';
+import { useToast } from '@/Components/UI/Toast';
+import { runChunkedInstagramSync } from '@/lib/instagramSync';
 import type { SparcContentItem, SparcTeamMember } from '@/types/sparc';
 
 interface InstagramLibraryPageProps {
@@ -63,6 +65,7 @@ export default function InstagramLibraryIndex({
 }: InstagramLibraryPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
+    const { success: toastSuccess, error: toastError } = useToast();
 
     const [searchQuery, setSearchQuery] = useState('');
     const [monthFilter, setMonthFilter] = useState('all');
@@ -71,21 +74,29 @@ export default function InstagramLibraryIndex({
     const [visibleCount, setVisibleCount] = useState(PAGE_BATCH_SIZE);
     const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [syncProgressCount, setSyncProgressCount] = useState(0);
 
     useEffect(() => {
         setVisibleCount(PAGE_BATCH_SIZE);
     }, [searchQuery, monthFilter, formatFilter, sortBy]);
 
-    const handleSyncInstagram = () => {
+    const handleSyncInstagram = async () => {
         setIsSyncing(true);
-        router.post(
-            '/content/instagram/sync-all',
-            {},
-            {
-                preserveScroll: true,
-                onFinish: () => setIsSyncing(false),
-            }
+        setSyncProgressCount(0);
+        const res = await runChunkedInstagramSync({
+            onProgress: (p) => setSyncProgressCount(p.fetchedCount),
+        });
+        setIsSyncing(false);
+        if (!res.success) {
+            toastError('Sinkronisasi Gagal', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Sinkronisasi Instagram Selesai',
+            `${res.syncedCount.toLocaleString('id-ID')} postingan diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
         );
+        router.reload();
     };
 
     const monthOptions = useMemo(() => {
@@ -183,7 +194,7 @@ export default function InstagramLibraryIndex({
                         icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />}
                         onClick={handleSyncInstagram}
                     >
-                        Sync Instagram
+                        {isSyncing && syncProgressCount > 0 ? `Menarik (${syncProgressCount})...` : 'Sync Instagram'}
                     </Button>
                 )
             }

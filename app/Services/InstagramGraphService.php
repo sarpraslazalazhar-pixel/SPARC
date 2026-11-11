@@ -142,9 +142,16 @@ class InstagramGraphService
     /**
      * Determine whether the soft wall-clock execution budget for a web request has elapsed.
      */
+    protected function isUnlimitedBudget(): bool
+    {
+        return app()->runningUnitTests()
+            || app()->runningInConsole()
+            || defined('SPARC_UNLIMITED_BUDGET');
+    }
+
     protected function isTimeBudgetExceeded(float $startedAt, float $maxSeconds = 20.0): bool
     {
-        if (app()->runningUnitTests()) {
+        if ($this->isUnlimitedBudget()) {
             return false;
         }
 
@@ -1305,7 +1312,7 @@ class InstagramGraphService
                     }
 
                     return $reqs;
-                })->concurrency(15)->send();
+                })->concurrency(8)->send();
 
                 foreach ($chunk as $mId) {
                     $resp = $responses[$mId] ?? null;
@@ -1338,23 +1345,31 @@ class InstagramGraphService
 
     /**
      * Fetch paginated media items from Meta Graph API following `paging.next` cursors.
+     * Pass `$maxItems <= 0` to fetch all available media pages without artificial count caps.
      *
-     * @return array{success: bool, data: array<int, array<string, mixed>>, response?: Response|null, error?: string}
+     * @return array{success: bool, data: array<int, array<string, mixed>>, response?: Response|null, next_cursor?: string|null, has_more?: bool, error?: string}
      */
-    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500, ?float $startedAt = null, float $budgetSeconds = 12.0): array
+    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500, ?float $startedAt = null, float $budgetSeconds = 12.0, ?string $afterCursor = null): array
     {
         $localStart = microtime(true);
-        $targetMax = max(1, min(2500, $maxItems));
+        $unlimited = $maxItems <= 0;
+        $targetMax = $unlimited ? 50000 : max(1, $maxItems);
         $pageSize = min(100, $targetMax);
         $collected = [];
         $seenIds = [];
         $lastResponse = null;
-        $maxPages = 30;
-        $firstResponse = $this->metaHttp()->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+        $maxPages = $unlimited ? 500 : max(1, (int) ceil($targetMax / max(1, $pageSize)) + 2);
+
+        $queryParams = [
             'fields' => $fields,
             'limit' => $pageSize,
             'access_token' => $this->accessToken,
-        ]);
+        ];
+        if ($afterCursor !== null && trim($afterCursor) !== '') {
+            $queryParams['after'] = trim($afterCursor);
+        }
+
+        $firstResponse = $this->metaHttp()->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), $queryParams);
         $lastResponse = $firstResponse;
 
         if (! $firstResponse->successful()) {
@@ -1365,6 +1380,8 @@ class InstagramGraphService
                 'success' => false,
                 'data' => [],
                 'response' => $firstResponse,
+                'next_cursor' => null,
+                'has_more' => false,
                 'error' => $errorMsg,
             ];
         }
@@ -1395,13 +1412,14 @@ class InstagramGraphService
             $pageCount++;
 
             try {
-                $pageResponse = $this->metaHttp(25, 15, true)->get($nextUrl);
+                $pageResponse = $this->metaHttp()->get($nextUrl);
                 if (! $pageResponse->successful()) {
                     break;
                 }
                 $lastResponse = $pageResponse;
                 $rows = (array) ($pageResponse->json('data') ?? []);
                 if (empty($rows)) {
+                    $nextUrl = '';
                     break;
                 }
 
@@ -1419,25 +1437,33 @@ class InstagramGraphService
                     }
                     $collected[] = $row;
                     $addedInPage++;
-                    if (count($collected) >= $targetMax) {
-                        break;
-                    }
-                }
-
-                if ($addedInPage === 0) {
-                    break;
                 }
 
                 $nextUrl = (string) ($pageResponse->json('paging.next') ?? '');
+                if ($addedInPage === 0) {
+                    break;
+                }
             } catch (\Throwable) {
                 break;
             }
         }
 
+        $nextCursor = null;
+        if ($nextUrl !== '') {
+            $parsedQuery = (string) parse_url($nextUrl, PHP_URL_QUERY);
+            parse_str($parsedQuery, $parsedParams);
+            $parsedAfter = $parsedParams['after'] ?? null;
+            $nextCursor = is_string($parsedAfter) && $parsedAfter !== ''
+                ? $parsedAfter
+                : (is_string($lastResponse->json('paging.cursors.after')) ? $lastResponse->json('paging.cursors.after') : null);
+        }
+
         return [
             'success' => true,
-            'data' => array_slice($collected, 0, $targetMax),
+            'data' => $collected,
             'response' => $lastResponse,
+            'next_cursor' => $nextCursor,
+            'has_more' => $nextUrl !== '' && $nextCursor !== null,
         ];
     }
 
@@ -1576,7 +1602,7 @@ class InstagramGraphService
     public function syncAllContentMetrics(?iterable $items = null, bool $autoImportNew = true): array
     {
         if ($items === null && $autoImportNew) {
-            return $this->syncAndAutoImportRecentMedia(500, true);
+            return $this->syncAndAutoImportRecentMedia(0, true);
         }
         if (! $this->isConfigured()) {
             return [
@@ -1596,7 +1622,7 @@ class InstagramGraphService
             $paginated = $this->fetchPaginatedMedia(
                 $actualIgId,
                 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                500
+                0
             );
             $mediaResponse = $paginated['response'] ?? null;
 
@@ -1760,41 +1786,51 @@ class InstagramGraphService
     }
 
     /**
-     * Synchronize existing content items and automatically import new posts from Meta Instagram Graph API using concurrent `Http::batch`.
+     * Synchronize existing content items and automatically import posts from Meta Instagram Graph API.
+     * Pass `$limit <= 0` to pull all posts without count cap; pass `$afterCursor` for resumable chunked batching.
      *
      * @return array{
      *     success: bool,
      *     synced_count: int,
      *     imported_count: int,
+     *     fetched_count: int,
      *     failed_count: int,
      *     skipped_count: int,
+     *     next_cursor: string|null,
+     *     has_more: bool,
      *     synced_items: array<int, array<string, mixed>>,
      *     error?: string,
      *     throttled?: bool
      * }
      */
-    public function syncAndAutoImportRecentMedia(int $limit = 25, bool $force = false): array
+    public function syncAndAutoImportRecentMedia(int $limit = 25, bool $force = false, ?string $afterCursor = null): array
     {
         if (! $this->isConfigured()) {
             return [
                 'success' => false,
                 'synced_count' => 0,
                 'imported_count' => 0,
+                'fetched_count' => 0,
                 'failed_count' => 0,
                 'skipped_count' => 0,
+                'next_cursor' => null,
+                'has_more' => false,
                 'synced_items' => [],
                 'error' => 'Kredensial Instagram Graph API belum terhubung.',
             ];
         }
 
         $throttleKey = 'sparc_ig_auto_import_throttle_'.$this->accountId;
-        if (! $force && Cache::has($throttleKey)) {
+        if (! $force && $afterCursor === null && Cache::has($throttleKey)) {
             return [
                 'success' => true,
                 'synced_count' => 0,
                 'imported_count' => 0,
+                'fetched_count' => 0,
                 'failed_count' => 0,
                 'skipped_count' => 0,
+                'next_cursor' => null,
+                'has_more' => false,
                 'synced_items' => [],
                 'throttled' => true,
             ];
@@ -1803,14 +1839,16 @@ class InstagramGraphService
         $actualIgId = $this->resolveActualInstagramId();
         $started = microtime(true);
         $this->prepareWebExecutionBudget();
+        $isChunkMode = $afterCursor !== null || ($limit > 0 && $limit <= 100);
 
         try {
             $paginated = $this->fetchPaginatedMedia(
                 $actualIgId,
                 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                max(1, $limit),
+                $limit <= 0 ? 0 : max(1, $limit),
                 $started,
-                10.0
+                10.0,
+                $afterCursor
             );
             $mediaResponse = $paginated['response'] ?? null;
 
@@ -1822,8 +1860,11 @@ class InstagramGraphService
                     'success' => false,
                     'synced_count' => 0,
                     'imported_count' => 0,
+                    'fetched_count' => 0,
                     'failed_count' => 0,
                     'skipped_count' => 0,
+                    'next_cursor' => null,
+                    'has_more' => false,
                     'synced_items' => [],
                     'error' => $errorMsg,
                 ];
@@ -1831,24 +1872,56 @@ class InstagramGraphService
 
             /** @var array<int, array<string, mixed>> $mediaList */
             $mediaList = $paginated['data'];
+            $nextCursor = $paginated['next_cursor'] ?? null;
+            $hasMore = (bool) ($paginated['has_more'] ?? false);
         } catch (\Throwable $e) {
             return [
                 'success' => false,
                 'synced_count' => 0,
                 'imported_count' => 0,
+                'fetched_count' => 0,
                 'failed_count' => 0,
                 'skipped_count' => 0,
+                'next_cursor' => null,
+                'has_more' => false,
                 'synced_items' => [],
                 'error' => $e->getMessage(),
             ];
         }
 
-        $existingItems = ContentItem::query()
-            ->where(function ($q): void {
-                $q->whereNotNull('published_url')->where('published_url', '!=', '')
-                    ->orWhereNotNull('ig_media_id');
-            })
-            ->get();
+        $mediaIds = array_values(array_filter(array_map(
+            static fn (array $m): string => (string) ($m['id'] ?? ''),
+            $mediaList
+        )));
+
+        $slimColumns = [
+            'id', 'content_id', 'title', 'status', 'published_url',
+            'ig_media_id', 'ig_media_url', 'ig_thumbnail_url',
+            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves', 'metrics_synced_at',
+        ];
+        if (count($mediaIds) <= 500) {
+            $existingItems = empty($mediaIds)
+                ? collect()
+                : ContentItem::query()
+                    ->select($slimColumns)
+                    ->where(function ($q) use ($mediaIds): void {
+                        $q->whereIn('ig_media_id', $mediaIds)
+                            ->orWhere(function ($q2): void {
+                                $q2->whereNull('ig_media_id')
+                                    ->whereNotNull('published_url')
+                                    ->where('published_url', '!=', '');
+                            });
+                    })
+                    ->get();
+        } else {
+            $existingItems = ContentItem::query()
+                ->select($slimColumns)
+                ->where(function ($q): void {
+                    $q->whereNotNull('published_url')->where('published_url', '!=', '')
+                        ->orWhereNotNull('ig_media_id');
+                })
+                ->get();
+        }
 
         $existingByMediaId = [];
         $existingByPermalink = [];
@@ -1866,15 +1939,10 @@ class InstagramGraphService
                 }
             }
         }
-
-        $mediaIds = array_values(array_filter(array_map(
-            static fn (array $m): string => (string) ($m['id'] ?? ''),
-            $mediaList
-        )));
-
-        // Fetch /insights for newest 30 posts + unsynced posts (capped at 80 per web sync)
-        if (count($mediaIds) > 80) {
-            $priorityIds = array_slice($mediaIds, 0, 30);
+        // Fetch /insights for newest posts + unsynced posts (chunk mode up to 100; CLI/Runner up to 300; single web POST up to 80)
+        $insightsMax = $this->isUnlimitedBudget() ? 300 : ($isChunkMode ? 100 : 80);
+        if (count($mediaIds) > $insightsMax) {
+            $priorityIds = array_slice($mediaIds, 0, min(30, $insightsMax));
             foreach ($mediaIds as $idx => $mId) {
                 if ($idx < 30) {
                     continue;
@@ -1883,7 +1951,7 @@ class InstagramGraphService
                 if (! $existingMatch || $existingMatch->metrics_synced_at === null) {
                     $priorityIds[] = $mId;
                 }
-                if (count($priorityIds) >= 80) {
+                if (count($priorityIds) >= $insightsMax) {
                     break;
                 }
             }
@@ -2012,6 +2080,7 @@ class InstagramGraphService
                     $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
                         ? $cachedThumbs['media_'.$mediaId]
                         : $rawThumbUrl;
+                    $hasInsight = isset($insightsByMedia[$mediaId]);
                     $newItem = ContentItem::create([
                         'title' => $title,
                         'status' => 'published',
@@ -2035,7 +2104,7 @@ class InstagramGraphService
                         'comments_count' => $comments,
                         'shares' => $shares,
                         'saves' => $parsed['saves'],
-                        'metrics_synced_at' => now(),
+                        'metrics_synced_at' => $hasInsight ? now() : null,
                     ]);
 
                     $newItem->history()->create([
@@ -2095,8 +2164,11 @@ class InstagramGraphService
             'success' => true,
             'synced_count' => $syncedCount,
             'imported_count' => $importedCount,
+            'fetched_count' => count($mediaList),
             'failed_count' => $failedCount,
             'skipped_count' => $skippedCount,
+            'next_cursor' => $nextCursor,
+            'has_more' => $hasMore,
             'synced_items' => $syncedItems,
         ];
     }
@@ -2436,14 +2508,14 @@ class InstagramGraphService
 
         try {
             $commentFields = 'id,text,username,from{id,username},timestamp,like_count,hidden,replies{id,text,username,from{id,username},timestamp,like_count}';
-            $useTwoPhase = $mediaLimit > 50;
+            $useTwoPhase = $mediaLimit <= 0 || $mediaLimit > 50;
 
             $paginated = $this->fetchPaginatedMedia(
                 $actualIgId,
                 $useTwoPhase
                     ? 'id,caption,permalink,media_url,thumbnail_url,comments_count'
                     : sprintf('id,caption,permalink,media_url,thumbnail_url,comments_count,comments.limit(100){%s}', $commentFields),
-                max(1, $mediaLimit),
+                $mediaLimit <= 0 ? 0 : max(1, $mediaLimit),
                 $started,
                 8.0
             );
@@ -2968,7 +3040,7 @@ class InstagramGraphService
                     }
 
                     return $reqs;
-                })->concurrency(15)->send();
+                })->concurrency(8)->send();
 
                 foreach ($chunk as $prefix => $info) {
                     $resp = $responses[$prefix] ?? null;
