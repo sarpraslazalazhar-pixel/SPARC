@@ -38,7 +38,7 @@ import { Sheet } from '@/Components/UI/Sheet';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import { MD3_EASING, MD3_SPRING } from '@/lib/motion';
-import { runChunkedInstagramSync } from '@/lib/instagramSync';
+import { runChunkedInstagramSync, runQuickNewPostCheck, type InstagramSyncMode } from '@/lib/instagramSync';
 import type { SparcSystemSettings } from '@/types/sparc';
 
 export interface PlannedGridSlot {
@@ -107,9 +107,31 @@ export default function GridIndex({
     const [isSyncingIg, setIsSyncingIg] = useState(false);
     const [syncProgressCount, setSyncProgressCount] = useState(0);
     const [visibleLiveCount, setVisibleLiveCount] = useState(30);
+    const [isSyncingArchive, setIsSyncingArchive] = useState(false);
     const [isLoadingMoreLive, setIsLoadingMoreLive] = useState(false);
     const [isDeletingSlot, setIsDeletingSlot] = useState(false);
 
+
+    useEffect(() => {
+        if (!can?.managePublishing) {
+            return;
+        }
+        let cancelled = false;
+        void runQuickNewPostCheck().then((res) => {
+            if (!cancelled && res.importedCount > 0) {
+                toastSuccess(
+                    'Postingan Instagram Baru Ditemukan',
+                    `${res.importedCount.toLocaleString('id-ID')} postingan baru ditambahkan ke Visual Grid.`
+                );
+                router.reload({ only: ['livePosts', 'totalLiveCount'] });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     const slotForm = useForm<{
         slot_id: number | null;
         title: string;
@@ -278,13 +300,19 @@ export default function GridIndex({
         persistOrder(reordered);
     };
 
-    const handleSyncLiveIg = async () => {
-        setIsSyncingIg(true);
+    const handleSyncLiveIg = async (mode: InstagramSyncMode = 'smart') => {
+        if (mode === 'archive') {
+            setIsSyncingArchive(true);
+        } else {
+            setIsSyncingIg(true);
+        }
         setSyncProgressCount(0);
         const res = await runChunkedInstagramSync({
+            mode,
             onProgress: (p) => setSyncProgressCount(p.fetchedCount),
         });
         setIsSyncingIg(false);
+        setIsSyncingArchive(false);
         if (!res.success) {
             toastError('Gagal Menarik Feed IG', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
 
@@ -384,15 +412,27 @@ export default function GridIndex({
             actions={
                 <div className="flex flex-wrap items-center gap-2">
                     {can?.managePublishing && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            isLoading={isSyncingIg}
-                            icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
-                            onClick={handleSyncLiveIg}
-                        >
-                            {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Sync Feed Asli IG'}
-                        </Button>
+                        <>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isSyncingIg || isSyncingArchive}
+                                isLoading={isSyncingIg}
+                                icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
+                                onClick={() => handleSyncLiveIg('smart')}
+                            >
+                                {isSyncingIg && syncProgressCount > 0 ? `Cek Terbaru (${syncProgressCount})...` : 'Sync Konten Baru'}
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={isSyncingIg || isSyncingArchive}
+                                isLoading={isSyncingArchive}
+                                onClick={() => handleSyncLiveIg('archive')}
+                            >
+                                {isSyncingArchive ? `Arsip (${syncProgressCount})...` : 'Tarik Semua Arsip'}
+                            </Button>
+                        </>
                     )}
                     {(can?.editContent || can?.manageAssets) && (
                         <Button
@@ -672,7 +712,7 @@ export default function GridIndex({
                                                 size="sm"
                                                 isLoading={isSyncingIg}
                                                 icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIg ? 'animate-spin' : ''}`} />}
-                                                onClick={handleSyncLiveIg}
+                                                onClick={() => handleSyncLiveIg('smart')}
                                             >
                                                 {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Tarik Kiriman dari Instagram Sekarang'}
                                             </Button>

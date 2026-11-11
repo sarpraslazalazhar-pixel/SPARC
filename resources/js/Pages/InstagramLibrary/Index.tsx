@@ -17,8 +17,13 @@ import { InstagramIcon } from '@/Components/Icons';
 import { formatMonthLabel } from '@/Components/MonthNavigator';
 import { Button } from '@/Components/UI/Button';
 import { ContentIdBadge, FORMAT_GROUPS, PlatformChip } from '@/Components/UI/Semantics';
+import {
+    runChunkedInstagramSync,
+    runMissingInsightsBackfill,
+    runQuickNewPostCheck,
+    type InstagramSyncMode,
+} from '@/lib/instagramSync';
 import { useToast } from '@/Components/UI/Toast';
-import { runChunkedInstagramSync } from '@/lib/instagramSync';
 import type { SparcContentItem, SparcTeamMember } from '@/types/sparc';
 
 interface InstagramLibraryPageProps {
@@ -45,6 +50,12 @@ interface InstagramLibraryPageProps {
         month?: string;
         format?: string;
         sort?: string;
+    };
+    archiveSyncState?: {
+        savedCursor: string | null;
+        dbIgCount: number;
+        igMediaCount: number | null;
+        missingInsightsCount: number;
     };
     team?: SparcTeamMember[];
 }
@@ -90,6 +101,7 @@ export default function InstagramLibraryIndex({
     pagination: serverPagination,
     filters: serverFilters,
     team = [],
+    archiveSyncState,
 }: InstagramLibraryPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
@@ -107,6 +119,9 @@ export default function InstagramLibraryIndex({
     const [visibleCount, setVisibleCount] = useState(PAGE_BATCH_SIZE);
     const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isSyncingArchive, setIsSyncingArchive] = useState(false);
+    const [isBackfillingInsights, setIsBackfillingInsights] = useState(false);
+    const [insightsProgress, setInsightsProgress] = useState<{ updated: number; remaining: number } | null>(null);
     const [syncProgressCount, setSyncProgressCount] = useState(0);
 
     const visitWithQuery = (next: {
@@ -164,22 +179,72 @@ export default function InstagramLibraryIndex({
         return () => window.clearTimeout(timer);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [searchQuery]);
-    const handleSyncInstagram = async () => {
-        setIsSyncing(true);
+    useEffect(() => {
+        if (!(can?.editContent || can?.managePublishing)) {
+            return;
+        }
+        let cancelled = false;
+        void runQuickNewPostCheck().then((res) => {
+            if (!cancelled && res.importedCount > 0) {
+                toastSuccess(
+                    'Konten Instagram Baru Ditemukan',
+                    `${res.importedCount.toLocaleString('id-ID')} postingan baru otomatis ditambahkan ke SPARC.`
+                );
+                router.reload({ only: ['contentItems', 'kpi', 'pagination', 'monthOptions', 'archiveSyncState'] });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const handleSyncInstagram = async (mode: InstagramSyncMode = 'smart', resetCursor = false) => {
+        if (mode === 'archive') {
+            setIsSyncingArchive(true);
+        } else {
+            setIsSyncing(true);
+        }
         setSyncProgressCount(0);
         const res = await runChunkedInstagramSync({
+            mode,
+            resetCursor,
             onProgress: (p) => setSyncProgressCount(p.fetchedCount),
         });
         setIsSyncing(false);
+        setIsSyncingArchive(false);
         if (!res.success) {
-            toastError('Sinkronisasi Gagal', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+            toastError(
+                res.rateLimited ? 'Jeda Sementara Rate-Limit Meta' : 'Sinkronisasi Gagal',
+                res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.'
+            );
+            router.reload({ only: ['contentItems', 'kpi', 'pagination', 'monthOptions', 'archiveSyncState'] });
 
             return;
         }
         toastSuccess(
-            'Sinkronisasi Instagram Selesai',
+            mode === 'archive' ? 'Penarikan Arsip Instagram Selesai' : 'Sinkronisasi Konten Baru Selesai',
             `${res.syncedCount.toLocaleString('id-ID')} postingan diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
         );
+        router.reload();
+    };
+
+    const handleBackfillInsights = async () => {
+        setIsBackfillingInsights(true);
+        setInsightsProgress({ updated: 0, remaining: archiveSyncState?.missingInsightsCount ?? 0 });
+        const res = await runMissingInsightsBackfill({
+            onProgress: (updated, remaining) => setInsightsProgress({ updated, remaining }),
+        });
+        setIsBackfillingInsights(false);
+        if (!res.success) {
+            toastError('Lengkapi Insights Terhenti', res.error || 'Terjadi kesalahan saat mengambil insights.');
+        } else {
+            toastSuccess(
+                'Insights Arsip Diperbarui',
+                `${res.updatedCount.toLocaleString('id-ID')} postingan berhasil dilengkapi metrik Reach/Views.`
+            );
+        }
         router.reload();
     };
 
@@ -286,22 +351,90 @@ export default function InstagramLibraryIndex({
             subtitle="Seluruh postingan Instagram yang ditarik dari Meta beserta statistik performanya"
             actions={
                 (can?.editContent || can?.managePublishing) && (
-                    <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        isLoading={isSyncing}
-                        icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />}
-                        onClick={handleSyncInstagram}
-                    >
-                        {isSyncing && syncProgressCount > 0 ? `Menarik (${syncProgressCount})...` : 'Sync Instagram'}
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isSyncing || isSyncingArchive || isBackfillingInsights}
+                            isLoading={isSyncing}
+                            icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />}
+                            onClick={() => handleSyncInstagram('smart')}
+                        >
+                            {isSyncing && syncProgressCount > 0 ? `Cek Terbaru (${syncProgressCount})...` : 'Sync Konten Baru'}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isSyncing || isSyncingArchive || isBackfillingInsights}
+                            isLoading={isSyncingArchive}
+                            icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingArchive ? 'animate-spin' : ''}`} />}
+                            onClick={() => handleSyncInstagram('archive')}
+                        >
+                            {isSyncingArchive
+                                ? `Menarik Arsip (${syncProgressCount})...`
+                                : archiveSyncState?.savedCursor
+                                    ? 'Lanjutkan Arsip IG'
+                                    : 'Tarik Semua Arsip'}
+                        </Button>
+                    </div>
                 )
             }
         >
             <Head title="Konten Instagram — SPARC" />
 
             <div className="space-y-5 min-w-0">
+                {archiveSyncState && (archiveSyncState.savedCursor || (archiveSyncState.igMediaCount !== null && archiveSyncState.dbIgCount < archiveSyncState.igMediaCount) || archiveSyncState.missingInsightsCount > 0) && (
+                    <div className="p-3.5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-3 text-xs">
+                        <div className="space-y-0.5">
+                            <div className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                Status Sinkronisasi Arsip:{' '}
+                                <span className="sparc-code-id text-[var(--md-sys-color-primary)]">
+                                    {archiveSyncState.dbIgCount.toLocaleString('id-ID')}
+                                    {archiveSyncState.igMediaCount ? ` / ${archiveSyncState.igMediaCount.toLocaleString('id-ID')}` : ''}
+                                </span>{' '}
+                                postingan IG tersimpan di SPARC
+                            </div>
+                            <div className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                {archiveSyncState.savedCursor
+                                    ? 'Ada posisi arsip tersimpan — klik "Lanjutkan Arsip IG" untuk melanjutkan dari postingan berikutnya tanpa mengulang dari awal.'
+                                    : archiveSyncState.missingInsightsCount > 0
+                                        ? `${archiveSyncState.missingInsightsCount.toLocaleString('id-ID')} postingan arsip belum memiliki data Reach/Views (klik "Lengkapi Reach/Views" untuk menarik bertahap).`
+                                        : 'Klik "Tarik Semua Arsip" untuk mengambil sisa postingan lama secara cepat tanpa timeout.'}
+                            </div>
+                        </div>
+                        {(can?.editContent || can?.managePublishing) && (
+                            <div className="flex flex-wrap items-center gap-2">
+                                {archiveSyncState.savedCursor && (
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={isSyncing || isSyncingArchive}
+                                        onClick={() => handleSyncInstagram('archive', true)}
+                                    >
+                                        Mulai Arsip dari Awal
+                                    </Button>
+                                )}
+                                {archiveSyncState.missingInsightsCount > 0 && (
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        disabled={isSyncing || isSyncingArchive || isBackfillingInsights}
+                                        isLoading={isBackfillingInsights}
+                                        onClick={handleBackfillInsights}
+                                    >
+                                        {isBackfillingInsights && insightsProgress
+                                            ? `Insights +${insightsProgress.updated} (sisa ${insightsProgress.remaining})...`
+                                            : `Lengkapi Reach/Views (${archiveSyncState.missingInsightsCount.toLocaleString('id-ID')})`}
+                                    </Button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
                 {/* KPI Cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">

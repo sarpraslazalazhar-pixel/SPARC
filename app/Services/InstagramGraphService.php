@@ -1349,7 +1349,7 @@ class InstagramGraphService
      *
      * @return array{success: bool, data: array<int, array<string, mixed>>, response?: Response|null, next_cursor?: string|null, has_more?: bool, error?: string}
      */
-    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500, ?float $startedAt = null, float $budgetSeconds = 12.0, ?string $afterCursor = null): array
+    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500, ?float $startedAt = null, float $budgetSeconds = 12.0, ?string $afterCursor = null, bool $singlePageOnly = false): array
     {
         $localStart = microtime(true);
         $unlimited = $maxItems <= 0;
@@ -1358,7 +1358,7 @@ class InstagramGraphService
         $collected = [];
         $seenIds = [];
         $lastResponse = null;
-        $maxPages = $unlimited ? 500 : max(1, (int) ceil($targetMax / max(1, $pageSize)) + 2);
+        $maxPages = $singlePageOnly ? 1 : ($unlimited ? 500 : max(1, (int) ceil($targetMax / max(1, $pageSize)) + 2));
 
         $queryParams = [
             'fields' => $fields,
@@ -1373,6 +1373,8 @@ class InstagramGraphService
         $lastResponse = $firstResponse;
 
         if (! $firstResponse->successful()) {
+            $errCode = (int) ($firstResponse->json('error.code') ?? 0);
+            $isRateLimited = $firstResponse->status() === 429 || in_array($errCode, [4, 17, 32, 613], true);
             $errorMsg = $firstResponse->json('error.message')
                 ?? sprintf('HTTP %d: Gagal mengambil daftar postingan dari Meta Graph API.', $firstResponse->status());
 
@@ -1382,6 +1384,7 @@ class InstagramGraphService
                 'response' => $firstResponse,
                 'next_cursor' => null,
                 'has_more' => false,
+                'rate_limited' => $isRateLimited,
                 'error' => $errorMsg,
             ];
         }
@@ -1404,7 +1407,7 @@ class InstagramGraphService
         $visitedUrls = [];
         $pageCount = 1;
 
-        while ($nextUrl !== '' && count($collected) < $targetMax && $pageCount < $maxPages && ! isset($visitedUrls[$nextUrl])) {
+        while (! $singlePageOnly && $nextUrl !== '' && count($collected) < $targetMax && $pageCount < $maxPages && ! isset($visitedUrls[$nextUrl])) {
             if ($this->isTimeBudgetExceeded($startedAt ?? $localStart, $budgetSeconds)) {
                 break;
             }
@@ -1803,8 +1806,13 @@ class InstagramGraphService
      *     throttled?: bool
      * }
      */
-    public function syncAndAutoImportRecentMedia(int $limit = 25, bool $force = false, ?string $afterCursor = null): array
-    {
+    public function syncAndAutoImportRecentMedia(
+        int $limit = 25,
+        bool $force = false,
+        ?string $afterCursor = null,
+        bool $syncInsights = true,
+        bool $cacheThumbnails = true
+    ): array {
         if (! $this->isConfigured()) {
             return [
                 'success' => false,
@@ -1815,6 +1823,7 @@ class InstagramGraphService
                 'skipped_count' => 0,
                 'next_cursor' => null,
                 'has_more' => false,
+                'rate_limited' => false,
                 'synced_items' => [],
                 'error' => 'Kredensial Instagram Graph API belum terhubung.',
             ];
@@ -1831,6 +1840,7 @@ class InstagramGraphService
                 'skipped_count' => 0,
                 'next_cursor' => null,
                 'has_more' => false,
+                'rate_limited' => false,
                 'synced_items' => [],
                 'throttled' => true,
             ];
@@ -1848,7 +1858,8 @@ class InstagramGraphService
                 $limit <= 0 ? 0 : max(1, $limit),
                 $started,
                 10.0,
-                $afterCursor
+                $afterCursor,
+                $isChunkMode
             );
             $mediaResponse = $paginated['response'] ?? null;
 
@@ -1865,6 +1876,7 @@ class InstagramGraphService
                     'skipped_count' => 0,
                     'next_cursor' => null,
                     'has_more' => false,
+                    'rate_limited' => (bool) ($paginated['rate_limited'] ?? false),
                     'synced_items' => [],
                     'error' => $errorMsg,
                 ];
@@ -1939,36 +1951,38 @@ class InstagramGraphService
                 }
             }
         }
-        // Fetch /insights for newest posts + unsynced posts (chunk mode up to 100; CLI/Runner up to 300; single web POST up to 80)
-        $insightsMax = $this->isUnlimitedBudget() ? 300 : ($isChunkMode ? 100 : 80);
-        if (count($mediaIds) > $insightsMax) {
-            $priorityIds = array_slice($mediaIds, 0, min(30, $insightsMax));
+        $insightsByMedia = [];
+        if ($syncInsights && ! empty($mediaIds)) {
+            // Only call /insights for posts that haven't been synced yet + up to 25 newest posts on page 1
+            $insightsMax = $this->isUnlimitedBudget() ? 200 : ($isChunkMode ? 35 : 60);
+            $priorityIds = [];
+            $newestFreshQuota = $afterCursor === null ? 25 : 0;
             foreach ($mediaIds as $idx => $mId) {
-                if ($idx < 30) {
-                    continue;
-                }
                 $existingMatch = $existingByMediaId[$mId] ?? null;
-                if (! $existingMatch || $existingMatch->metrics_synced_at === null) {
+                if (! $existingMatch || $existingMatch->metrics_synced_at === null || $idx < $newestFreshQuota) {
                     $priorityIds[] = $mId;
                 }
                 if (count($priorityIds) >= $insightsMax) {
                     break;
                 }
             }
-            $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds, $started, 17.0);
-        } else {
-            $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds, $started, 17.0);
-        }
-
-        $thumbTargets = [];
-        foreach ($mediaList as $media) {
-            $mId = (string) ($media['id'] ?? '');
-            $rawThumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
-            if ($mId !== '' && $rawThumb !== '') {
-                $thumbTargets['media_'.$mId] = $rawThumb;
+            if (! empty($priorityIds)) {
+                $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds, $started, 16.0);
             }
         }
-        $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets, $started, 19.5);
+
+        $cachedThumbs = [];
+        if ($cacheThumbnails && $afterCursor === null) {
+            $thumbTargets = [];
+            foreach (array_slice($mediaList, 0, 15) as $media) {
+                $mId = (string) ($media['id'] ?? '');
+                $rawThumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
+                if ($mId !== '' && $rawThumb !== '') {
+                    $thumbTargets['media_'.$mId] = $rawThumb;
+                }
+            }
+            $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets, $started, 19.0);
+        }
         $syncedCount = 0;
         $importedCount = 0;
         $failedCount = 0;
@@ -2121,7 +2135,7 @@ class InstagramGraphService
                         'publish_date' => $publishedAt->toDateString(),
                         'publish_time' => $publishedAt->format('H:i'),
                         'caption' => $rawCaption ?: null,
-                        'published_url' => $permalink ?: sprintf('https://www.instagram.com/p/%s/', $shortcode),
+                        'published_url' => Str::limit($permalink ?: sprintf('https://www.instagram.com/p/%s/', $shortcode), 250, ''),
                         'ig_media_id' => $mediaId ?: null,
                         'ig_media_url' => $rawMediaUrl,
                         'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
@@ -2197,6 +2211,84 @@ class InstagramGraphService
             'next_cursor' => $nextCursor,
             'has_more' => $hasMore,
             'synced_items' => $syncedItems,
+        ];
+    }
+
+    /**
+     * Backfill `/insights` (`reach`, `views`, `saves`, `shares`) for archived IG posts where `metrics_synced_at IS NULL`.
+     *
+     * @return array{success: bool, updated_count: int, remaining_count: int, error?: string}
+     */
+    public function syncMissingInsightsBatch(int $batchSize = 30): array
+    {
+        if (! $this->isConfigured()) {
+            return [
+                'success' => false,
+                'updated_count' => 0,
+                'remaining_count' => 0,
+                'error' => 'Kredensial Instagram Graph API belum terhubung.',
+            ];
+        }
+
+        $started = microtime(true);
+        $this->prepareWebExecutionBudget();
+
+        $targets = ContentItem::query()
+            ->select(['id', 'ig_media_id', 'reach', 'views', 'shares', 'saves', 'metrics_synced_at'])
+            ->whereNotNull('ig_media_id')
+            ->where('ig_media_id', '!=', '')
+            ->whereNull('metrics_synced_at')
+            ->orderByDesc('publish_date')
+            ->orderByDesc('id')
+            ->limit(max(1, min(60, $batchSize)))
+            ->get();
+
+        if ($targets->isEmpty()) {
+            return [
+                'success' => true,
+                'updated_count' => 0,
+                'remaining_count' => 0,
+            ];
+        }
+
+        $mediaIds = $targets->pluck('ig_media_id')->filter()->values()->all();
+        $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds, $started, 18.0);
+
+        $updatedCount = 0;
+        DB::transaction(function () use ($targets, $insightsByMedia, &$updatedCount): void {
+            foreach ($targets as $item) {
+                $mId = (string) $item->ig_media_id;
+                $parsed = $insightsByMedia[$mId] ?? null;
+                $updates = ['metrics_synced_at' => now()];
+                if ($parsed !== null) {
+                    if ($parsed['reach'] !== null) {
+                        $updates['reach'] = $parsed['reach'];
+                    }
+                    if ($parsed['views'] > 0) {
+                        $updates['views'] = $parsed['views'];
+                    }
+                    if ($parsed['effective_shares'] > 0) {
+                        $updates['shares'] = $parsed['effective_shares'];
+                    }
+                    if ($parsed['saves'] !== null) {
+                        $updates['saves'] = $parsed['saves'];
+                    }
+                }
+                $item->update($updates);
+                $updatedCount++;
+            }
+        });
+
+        $remaining = ContentItem::query()
+            ->whereNotNull('ig_media_id')
+            ->where('ig_media_id', '!=', '')
+            ->whereNull('metrics_synced_at')
+            ->count();
+
+        return [
+            'success' => true,
+            'updated_count' => $updatedCount,
+            'remaining_count' => $remaining,
         ];
     }
 

@@ -2801,6 +2801,15 @@ class WorkspaceV3Controller extends Controller
     /**
      * Execute one resumable Instagram sync batch (`POST /content/instagram/sync-batch`) for unlimited cPanel-safe sync.
      */
+    public static function instagramArchiveCursorCacheKey(): string
+    {
+        $accountId = Schema::hasTable('instagram_connections')
+            ? (string) (InstagramConnection::current()->account_id ?: 'default')
+            : 'default';
+
+        return 'sparc_ig_archive_cursor_'.$accountId;
+    }
+
     public function syncInstagramBatch(Request $request): JsonResponse
     {
         $authUser = $request->user();
@@ -2817,6 +2826,10 @@ class WorkspaceV3Controller extends Controller
             'after' => ['nullable', 'string', 'max:1000'],
             'batch_size' => ['nullable', 'integer', 'min:10', 'max:100'],
             'finish' => ['nullable', 'boolean'],
+            'mode' => ['nullable', 'string', 'in:smart,archive'],
+            'sync_insights' => ['nullable', 'boolean'],
+            'resume' => ['nullable', 'boolean'],
+            'reset_cursor' => ['nullable', 'boolean'],
         ]);
 
         $service = new InstagramGraphService;
@@ -2836,29 +2849,102 @@ class WorkspaceV3Controller extends Controller
             ]);
         }
 
+        $mode = (string) ($validated['mode'] ?? 'smart');
+        $cursorKey = self::instagramArchiveCursorCacheKey();
+        if ($request->boolean('reset_cursor')) {
+            Cache::forget($cursorKey);
+        }
+
         $after = isset($validated['after']) && trim((string) $validated['after']) !== ''
             ? trim((string) $validated['after'])
             : null;
-        $batchSize = (int) ($validated['batch_size'] ?? 100);
 
-        $result = $service->syncAndAutoImportRecentMedia($batchSize, true, $after);
+        if ($after === null && $mode === 'archive' && $request->boolean('resume', true)) {
+            $cachedCursor = Cache::get($cursorKey);
+            if (is_string($cachedCursor) && $cachedCursor !== '') {
+                $after = $cachedCursor;
+            }
+        }
+
+        $batchSize = (int) ($validated['batch_size'] ?? ($mode === 'archive' ? 100 : 50));
+        $syncInsights = $request->has('sync_insights')
+            ? $request->boolean('sync_insights')
+            : ($mode !== 'archive');
+        $cacheThumbnails = $mode !== 'archive' && $after === null;
+
+        $result = $service->syncAndAutoImportRecentMedia(
+            $batchSize,
+            true,
+            $after,
+            $syncInsights,
+            $cacheThumbnails
+        );
+
         if (! ($result['success'] ?? false)) {
             return response()->json([
                 'success' => false,
+                'rate_limited' => (bool) ($result['rate_limited'] ?? false),
+                'saved_archive_cursor' => Cache::get($cursorKey),
                 'error' => $result['error'] ?? 'Terjadi kesalahan saat berkomunikasi dengan server Meta.',
-            ], 422);
+            ], ($result['rate_limited'] ?? false) ? 429 : 422);
         }
 
         $this->syncSessionPublicationsFromIgResult($request, $result['synced_items']);
 
+        $nextCursor = $result['next_cursor'] ?? null;
+        $hasMore = (bool) ($result['has_more'] ?? false);
+
+        if ($mode === 'archive') {
+            if ($hasMore && is_string($nextCursor) && $nextCursor !== '') {
+                Cache::forever($cursorKey, $nextCursor);
+            } else {
+                Cache::forget($cursorKey);
+            }
+        }
+
+        $fetchedCount = (int) ($result['fetched_count'] ?? count($result['synced_items']));
+        $importedCount = (int) ($result['imported_count'] ?? 0);
+
         return response()->json([
             'success' => true,
-            'fetched_count' => (int) ($result['fetched_count'] ?? count($result['synced_items'])),
+            'mode' => $mode,
+            'fetched_count' => $fetchedCount,
             'synced_count' => (int) ($result['synced_count'] ?? 0),
-            'imported_count' => (int) ($result['imported_count'] ?? 0),
-            'next_cursor' => $result['next_cursor'] ?? null,
-            'has_more' => (bool) ($result['has_more'] ?? false),
+            'imported_count' => $importedCount,
+            'all_existing' => $importedCount === 0 && $fetchedCount > 0,
+            'next_cursor' => $nextCursor,
+            'has_more' => $hasMore,
+            'saved_archive_cursor' => Cache::get($cursorKey),
         ]);
+    }
+
+    /**
+     * Backfill `/insights` for archived IG posts that were imported rapidly without insights (`POST /content/instagram/sync-insights-batch`).
+     */
+    public function syncInstagramInsightsBatch(Request $request): JsonResponse
+    {
+        $authUser = $request->user();
+        $sessionRole = $request->hasSession() ? $request->session()->get('sparc_v3.active_role') : null;
+        $activeRole = ! empty($sessionRole)
+            ? (string) $sessionRole
+            : (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
+        $can = self::permissionsForRole($activeRole);
+        if (! ($can['editContent'] || $can['managePublishing'])) {
+            abort(403, 'Peran Anda tidak diizinkan menyinkronkan metrik konten.');
+        }
+
+        $validated = $request->validate([
+            'batch_size' => ['nullable', 'integer', 'min:5', 'max:60'],
+        ]);
+
+        $service = new InstagramGraphService;
+        $res = $service->syncMissingInsightsBatch((int) ($validated['batch_size'] ?? 30));
+
+        if (! ($res['success'] ?? false)) {
+            return response()->json($res, 422);
+        }
+
+        return response()->json($res);
     }
 
     /**

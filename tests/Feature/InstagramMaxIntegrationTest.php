@@ -1079,4 +1079,122 @@ class InstagramMaxIntegrationTest extends TestCase
 
         $this->assertSame(12, ContentItem::whereNotNull('ig_media_id')->count());
     }
+
+    public function test_archive_sync_persists_cursor_skips_insights_and_handles_10000_content_ids(): void
+    {
+        $year = now()->year;
+        ContentItem::factory()->create([
+            'content_id' => sprintf('SPARC-%d-9999', $year),
+            'title' => 'Item Batas 9999',
+            'platform' => 'instagram',
+            'status' => 'published',
+        ]);
+        ContentItem::factory()->create([
+            'content_id' => sprintf('SPARC-%d-10000', $year),
+            'title' => 'Item Batas 10000',
+            'platform' => 'instagram',
+            'status' => 'published',
+        ]);
+
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*after=arc_cursor_5000*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1809002',
+                        'caption' => 'Arsip Lama #5001',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/arc2.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Arc5001/',
+                        'timestamp' => '2025-06-10T08:00:00+0000',
+                        'like_count' => 45,
+                        'comments_count' => 3,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1809001',
+                        'caption' => 'Konten Baru #1',
+                        'media_type' => 'IMAGE',
+                        'media_url' => 'https://cdn.example.com/arc1.jpg',
+                        'permalink' => 'https://www.instagram.com/p/Arc1/',
+                        'timestamp' => '2026-11-10T08:00:00+0000',
+                        'like_count' => 88,
+                        'comments_count' => 6,
+                    ],
+                ],
+                'paging' => [
+                    'next' => 'https://graph.facebook.com/v21.0/17841400111222/media?after=arc_cursor_5000&limit=100',
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/1809002/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 1450]]],
+                    ['name' => 'views', 'values' => [['value' => 1900]]],
+                    ['name' => 'saved', 'values' => [['value' => 22]]],
+                    ['name' => 'shares', 'values' => [['value' => 9]]],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/1809001/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 3200]]],
+                    ['name' => 'views', 'values' => [['value' => 4100]]],
+                ],
+            ], 200),
+        ]);
+
+        // 1. Archive batch 1 saves cursor & skips /insights
+        $b1 = $this->postJson(route('content.syncBatchInstagram'), [
+            'mode' => 'archive',
+            'batch_size' => 10,
+        ]);
+        $b1->assertOk()
+            ->assertJsonPath('imported_count', 1)
+            ->assertJsonPath('has_more', true)
+            ->assertJsonPath('saved_archive_cursor', 'arc_cursor_5000');
+
+        Http::assertNotSent(fn (HttpClientRequest $req): bool => str_contains($req->url(), '1809001/insights'));
+
+        // Verify content_id sequence cleanly stepped past 10000 -> 10001
+        $firstImported = ContentItem::where('ig_media_id', '1809001')->firstOrFail();
+        $this->assertSame(sprintf('SPARC-%d-10001', $year), $firstImported->content_id);
+        $this->assertNull($firstImported->metrics_synced_at);
+
+        // 2. Calling archive batch again without explicit `after` automatically resumes from saved cursor!
+        $b2 = $this->postJson(route('content.syncBatchInstagram'), [
+            'mode' => 'archive',
+            'batch_size' => 10,
+        ]);
+        $b2->assertOk()
+            ->assertJsonPath('imported_count', 1)
+            ->assertJsonPath('has_more', false)
+            ->assertJsonPath('saved_archive_cursor', null);
+
+        $secondImported = ContentItem::where('ig_media_id', '1809002')->firstOrFail();
+        $this->assertSame(sprintf('SPARC-%d-10002', $year), $secondImported->content_id);
+
+        // 3. Smart mode returns all_existing=true when page 1 only has existing posts
+        $smart = $this->postJson(route('content.syncBatchInstagram'), [
+            'mode' => 'smart',
+            'batch_size' => 10,
+        ]);
+        $smart->assertOk()
+            ->assertJsonPath('imported_count', 0)
+            ->assertJsonPath('all_existing', true);
+
+        // 4. Backfill missing insights fills reach/views for archived item
+        $backfill = $this->postJson(route('content.syncInsightsBatchInstagram'), ['batch_size' => 10]);
+        $backfill->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('updated_count', 1)
+            ->assertJsonPath('remaining_count', 0);
+
+        $this->assertSame(1450, (int) $secondImported->fresh()->reach);
+        $this->assertNotNull($secondImported->fresh()->metrics_synced_at);
+    }
 }

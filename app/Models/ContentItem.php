@@ -114,9 +114,15 @@ class ContentItem extends Model
                 $prefix = sprintf('SPARC-%d-', $year);
                 $maxCode = static::withTrashed()
                     ->where('content_id', 'like', $prefix.'%')
-                    ->max('content_id');
+                    ->orderByRaw('LENGTH(content_id) DESC, content_id DESC')
+                    ->value('content_id');
                 $next = (is_string($maxCode) ? (int) substr($maxCode, strlen($prefix)) : 0) + 1;
-                $item->content_id = sprintf('SPARC-%d-%04d', $year, $next);
+                do {
+                    $candidate = sprintf('SPARC-%d-%04d', $year, $next);
+                    $next++;
+                } while (static::withTrashed()->where('content_id', $candidate)->exists());
+
+                $item->content_id = $candidate;
             }
         });
     }

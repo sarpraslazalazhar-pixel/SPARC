@@ -62,6 +62,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/content/instagram/recent-media', [WorkspaceV3Controller::class, 'getRecentInstagramMedia'])->name('content.recentInstagramMedia');
     Route::post('/content/instagram/sync-all', [WorkspaceV3Controller::class, 'syncAllInstagramMetrics'])->name('content.syncAllInstagram');
     Route::post('/content/instagram/sync-batch', [WorkspaceV3Controller::class, 'syncInstagramBatch'])->name('content.syncBatchInstagram');
+    Route::post('/content/instagram/sync-insights-batch', [WorkspaceV3Controller::class, 'syncInstagramInsightsBatch'])->name('content.syncInsightsBatchInstagram');
 
     Route::post('/tasks', [WorkspaceV3Controller::class, 'storeTask'])->name('tasks.store');
     Route::patch('/tasks/{id}/status', [WorkspaceV3Controller::class, 'toggleTaskStatus'])->name('tasks.status');

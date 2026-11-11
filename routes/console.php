@@ -20,7 +20,7 @@ Artisan::command('instagram:sync-metrics', function (InstagramGraphService $serv
         return 0;
     }
 
-    $result = $service->syncAllContentMetrics();
+    $result = $service->syncAndAutoImportRecentMedia(100, true);
 
     if (! ($result['success'] ?? false)) {
         $this->error($result['error'] ?? 'Terjadi kesalahan saat sinkronisasi metrik Instagram.');
@@ -39,6 +39,30 @@ Artisan::command('instagram:sync-metrics', function (InstagramGraphService $serv
 
     return 0;
 })->purpose('Sinkronisasi metrik performa, komentar publik, dan Account Insights Instagram');
+
+Artisan::command('instagram:sync-archive', function (InstagramGraphService $service): int {
+    if (! $service->isConfigured()) {
+        $this->warn('Instagram Graph API belum dikonfigurasi, sinkronisasi arsip dilewati.');
+
+        return 0;
+    }
+
+    $result = $service->syncAndAutoImportRecentMedia(0, true, null, false, false);
+
+    if (! ($result['success'] ?? false)) {
+        $this->error($result['error'] ?? 'Terjadi kesalahan saat menarik arsip Instagram.');
+
+        return 1;
+    }
+
+    $this->info(sprintf(
+        'Arsip Instagram selesai: %d konten diperbarui (%d postingan baru diimpor).',
+        $result['synced_count'],
+        $result['imported_count'] ?? 0
+    ));
+
+    return 0;
+})->purpose('Tarik seluruh arsip postingan Instagram ke database secara cepat (tanpa menguras kuota insights)');
 
 Artisan::command('instagram:process-scheduled', function (InstagramGraphService $service): int {
     if (! Schema::hasTable('instagram_schedules')) {
