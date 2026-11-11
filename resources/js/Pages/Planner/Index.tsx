@@ -1202,6 +1202,23 @@ export default function PlannerIndex({
                             error={createForm.errors.publish_date}
                         />
                     </div>
+                    {createForm.data.platform === 'instagram' && (props.instagramStatus?.bestPostingHours?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="text-[var(--md-sys-color-on-surface-muted)] font-semibold">
+                                Rekomendasi Jam Tayang IG (WIB):
+                            </span>
+                            {props.instagramStatus?.bestPostingHours?.map((bh) => (
+                                <button
+                                    key={bh}
+                                    type="button"
+                                    onClick={() => createForm.setData('publish_time', bh.slice(0, 5))}
+                                    className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 font-bold hover:bg-purple-500/25 cursor-pointer"
+                                >
+                                    {bh}
+                                </button>
+                            ))}
+                        </div>
+                    )}
 
                     {activities.length > 0 && (
                         <Select

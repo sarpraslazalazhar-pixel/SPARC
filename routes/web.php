@@ -106,15 +106,44 @@ Route::middleware('auth')->group(function () {
     Route::post('/report/metrics/import-csv', [WorkspaceV3Controller::class, 'importReportCsv'])->name('report.metrics.csv');
 
     Route::get('/analytics', function (Request $request) {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 200]);
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+        $platformFilter = trim((string) $request->query('platform', 'all')) ?: 'all';
+        $formatFilter = trim((string) $request->query('format', 'all')) ?: 'all';
+        $cleanDateFrom = is_string($dateFrom) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) === 1 ? $dateFrom : null;
+        $cleanDateTo = is_string($dateTo) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo) === 1 ? $dateTo : null;
+
+        $state = WorkspaceV3Controller::hydrateWorkspace($request, [
+            'includeRelations' => false,
+            'publishedLimit' => 500,
+            'dateFrom' => $cleanDateFrom,
+            'dateTo' => $cleanDateTo,
+            'platformFilter' => $platformFilter,
+            'formatFilter' => $formatFilter,
+        ]);
 
         return Inertia::render('Analytics/Index', [
-            'today' => WorkspaceV3Controller::TODAY,
+            'today' => now()->toDateString(),
             'contentItems' => $state['contentItems'],
             'publications' => $state['publications'],
-            'team' => $state['team'],
+            'team' => WorkspaceV3Controller::buildRealTeamWorkloadFromDb($state['team']),
             'sessionMetrics' => $request->session()->get('sparc.analytics_posts', []),
             'instagramSettings' => $state['settings']['instagram'] ?? [],
+            'archiveSyncState' => WorkspaceV3Controller::buildInstagramArchiveSyncState(),
+            'reportSummary' => WorkspaceV3Controller::buildReportSummaryFromDb(
+                $cleanDateFrom,
+                $cleanDateTo,
+                $platformFilter,
+                $formatFilter,
+                $state['publications'],
+                $state['contentItems']
+            ),
+            'filters' => [
+                'platform' => $platformFilter,
+                'format' => $formatFilter,
+                'date_from' => $cleanDateFrom ?? '',
+                'date_to' => $cleanDateTo ?? '',
+            ],
         ]);
     })->name('analytics.index');
     Route::post('/analytics/metrics', [WorkspaceActionController::class, 'storeAnalyticsMetric'])->name('analytics.metrics.store');

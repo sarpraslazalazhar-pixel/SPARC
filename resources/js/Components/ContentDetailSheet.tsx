@@ -78,6 +78,10 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
     const [loadedDetail, setLoadedDetail] = useState<SparcContentItem | null>(null);
     const item = loadedDetail && rawItem && loadedDetail.id === rawItem.id ? loadedDetail : rawItem;
 
+    const rawFingerprint = rawItem
+        ? `${rawItem.id}:${rawItem.status}:${rawItem.views ?? 0}:${rawItem.likes ?? 0}:${rawItem.commentsCount ?? 0}:${rawItem.shares ?? 0}:${rawItem.reach ?? ''}:${rawItem.saves ?? ''}:${rawItem.publishedUrl ?? ''}:${rawItem.metricsSyncedAt ?? ''}`
+        : '';
+
     useEffect(() => {
         if (!rawItem || rawItem.hasFullDetail !== false) {
             setLoadedDetail(null);
@@ -102,7 +106,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [rawItem?.id, rawItem?.hasFullDetail]);
+    }, [rawItem?.id, rawItem?.hasFullDetail, rawFingerprint]);
     const [activeTab, setActiveTab] = useState<
         'overview' | 'tasks' | 'discussion' | 'ig_comments' | 'history' | 'performa'
     >('overview');
@@ -1725,7 +1729,10 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                 </div>
 
                                 {(item.reach !== null && item.reach !== undefined) ||
-                                (item.saves !== null && item.saves !== undefined) ? (
+                                (item.saves !== null && item.saves !== undefined) ||
+                                Boolean(item.metricsSyncedAt) ||
+                                (item.views ?? 0) > 0 ||
+                                (item.likes ?? 0) > 0 ? (
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-purple-500/20 text-[11px]">
                                         <div className="px-2.5 py-1.5 rounded-xl bg-[var(--md-sys-color-surface)]/80 border border-[var(--md-sys-color-outline-variant)]">
                                             <span className="text-[var(--md-sys-color-on-surface-muted)] block">
@@ -1747,12 +1754,24 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                                     : '—'}
                                             </strong>
                                         </div>
-                                        <div className="px-2.5 py-1.5 rounded-xl bg-[var(--md-sys-color-surface)]/80 border border-[var(--md-sys-color-outline-variant)] col-span-2">
+                                        <div className="px-2.5 py-1.5 rounded-xl bg-[var(--md-sys-color-surface)]/80 border border-[var(--md-sys-color-outline-variant)]">
                                             <span className="text-[var(--md-sys-color-on-surface-muted)] block">
-                                                Terakhir Sinkronisasi Meta
+                                                ER (%)
+                                            </span>
+                                            <strong className="sparc-code-id text-xs text-[var(--md-sys-color-secondary)]">
+                                                {item.reach && item.reach > 0
+                                                    ? `${((((item.likes ?? 0) + (item.commentsCount ?? 0) + (item.shares ?? 0) + (item.saves ?? 0)) / item.reach) * 100).toFixed(1)}%`
+                                                    : '—'}
+                                            </strong>
+                                        </div>
+                                        <div className="px-2.5 py-1.5 rounded-xl bg-[var(--md-sys-color-surface)]/80 border border-[var(--md-sys-color-outline-variant)]">
+                                            <span className="text-[var(--md-sys-color-on-surface-muted)] block">
+                                                {item.reelsAvgWatchTime ? 'Retensi Reels' : 'Sync Terakhir'}
                                             </span>
                                             <strong className="sparc-code-id text-xs text-[var(--md-sys-color-on-surface)]">
-                                                {item.metricsSyncedAt || 'Tersinkronisasi'}
+                                                {item.reelsAvgWatchTime
+                                                    ? `${item.reelsAvgWatchTime.toFixed(1)} dtk`
+                                                    : item.metricsSyncedAt || 'Tersinkronisasi'}
                                             </strong>
                                         </div>
                                     </div>

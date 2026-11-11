@@ -46,6 +46,7 @@ import {
 import { Sheet } from '@/Components/UI/Sheet';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
+import { runChunkedInstagramSync, runQuickNewPostCheck } from '@/lib/instagramSync';
 import { staggerContainerVariants, staggerItemVariants } from '@/lib/motion';
 import { cn } from '@/lib/utils';
 import type {
@@ -59,6 +60,14 @@ import type {
     SparcTeamMember,
 } from '@/types/sparc';
 
+interface DashboardStatsPayload {
+    statusCounts: Record<string, number>;
+    channels: Record<string, { posts: number; reach: number }>;
+    overdueCount: number;
+    monthlyPublishedCount: number;
+    totalItems: number;
+}
+
 interface DashboardPageProps {
     today?: string;
     contentItems?: SparcContentItem[];
@@ -68,8 +77,8 @@ interface DashboardPageProps {
     settings?: SparcSystemSettings;
     incomingTickets?: DashboardIncomingTicket[];
     performanceTrend?: DashboardTrendPoint[];
+    dashboardStats?: DashboardStatsPayload;
 }
-
 type DashboardPeriod = 'today' | 'week' | 'month';
 type TaskTimeTab = 'today' | 'upcoming';
 type TaskScopeFilter = 'team_ongoing' | 'mine' | 'completed';
@@ -215,11 +224,12 @@ export default function DashboardIndex({
     settings,
     incomingTickets = [],
     performanceTrend = [],
+    dashboardStats,
 }: DashboardPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const currentUser = props.auth?.user;
     const can = props.auth?.can;
-    const { error: toastError } = useToast();
+    const { success: toastSuccess, error: toastError } = useToast();
 
     // Topbar Period Capsule State
     const [period, setPeriod] = useState<DashboardPeriod>('month');
@@ -254,11 +264,54 @@ export default function DashboardIndex({
     const [approvingId, setApprovingId] = useState<string | null>(null);
     const [selectedTicket, setSelectedTicket] = useState<DashboardIncomingTicket | null>(null);
     const [isSyncingIgDash, setIsSyncingIgDash] = useState(false);
+    const [igSyncProgress, setIgSyncProgress] = useState(0);
 
     const igDash = settings?.instagram ?? props.instagramStatus;
     const unrepliedIgCount = props.workspaceBadges?.unrepliedComments ?? 0;
 
-    // Close search popover on outside click or Escape
+    useEffect(() => {
+        if (!(can?.editContent || can?.managePublishing)) {
+            return;
+        }
+        let cancelled = false;
+        void runQuickNewPostCheck().then((res) => {
+            if (!cancelled && res.importedCount > 0) {
+                toastSuccess(
+                    'Konten Instagram Baru Disinkronkan',
+                    `${res.importedCount.toLocaleString('id-ID')} postingan baru otomatis ditambahkan ke Dashboard.`
+                );
+                router.reload({
+                    only: ['contentItems', 'publications', 'performanceTrend', 'dashboardStats'],
+                });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const handleSyncIgFromDashboard = async () => {
+        setIsSyncingIgDash(true);
+        setIgSyncProgress(0);
+        const res = await runChunkedInstagramSync({
+            mode: 'smart',
+            includeProfile: true,
+            onProgress: (p) => setIgSyncProgress(p.fetchedCount),
+        });
+        setIsSyncingIgDash(false);
+        if (!res.success) {
+            toastError('Sinkronisasi IG Gagal', res.error || 'Gagal menyinkronkan data Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Instagram Disinkronkan',
+            `${res.syncedCount.toLocaleString('id-ID')} postingan diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
+        );
+        router.reload();
+    };
     useEffect(() => {
         const handleOutside = (e: MouseEvent) => {
             if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
@@ -370,8 +423,25 @@ export default function DashboardIndex({
         });
     }, [allTasks, taskScope, taskTab, currentUser, today]);
 
-    // Donut Chart ("Ringkasan Konten") Metrics
+    // Donut Chart ("Ringkasan Konten") Metrics — uses full-DB aggregates on `month` view so 120+ posts never truncate
     const donutStats = useMemo(() => {
+        if (period === 'month' && dashboardStats) {
+            const sc = dashboardStats.statusCounts;
+            const inProgress =
+                (sc.in_progress ?? 0) + (sc.review_approval ?? 0) + (sc.ready_to_publish ?? 0);
+            const completed = sc.published ?? 0;
+            const planning = (sc.inbox ?? 0) + (sc.briefing ?? 0);
+            const total = Math.max(1, inProgress + completed + planning);
+
+            return {
+                inProgress,
+                completed,
+                planning,
+                rawTotal: inProgress + completed + planning,
+                total,
+            };
+        }
+
         let inProgress = 0;
         let completed = 0;
         let planning = 0;
@@ -398,8 +468,7 @@ export default function DashboardIndex({
             rawTotal: inProgress + completed + planning,
             total,
         };
-    }, [scopedContentItems]);
-
+    }, [period, dashboardStats, scopedContentItems]);
     // Dual Spline Area Chart ("Reach vs Interaksi") Series
     const chartSeries = useMemo(() => {
         const base = performanceTrend;
@@ -445,6 +514,19 @@ export default function DashboardIndex({
     const monthlyTarget = settings?.monthlyContentTarget ?? 24;
 
     const pipelineMetrics = useMemo(() => {
+        if (period === 'month' && dashboardStats) {
+            const sc = dashboardStats.statusCounts;
+            return {
+                review: sc.review_approval ?? 0,
+                inProd: sc.in_progress ?? 0,
+                ready: sc.ready_to_publish ?? 0,
+                pub: dashboardStats.monthlyPublishedCount ?? (sc.published ?? 0),
+                draft: (sc.inbox ?? 0) + (sc.briefing ?? 0),
+                instagramCount: dashboardStats.channels?.instagram?.posts ?? 0,
+                overdueCount: dashboardStats.overdueCount ?? overdueItems.length,
+                totalCount: dashboardStats.totalItems ?? scopedContentItems.length,
+            };
+        }
         const review = scopedContentItems.filter((i) => i.status === 'review_approval').length;
         const inProd = scopedContentItems.filter((i) => i.status === 'in_progress').length;
         const ready = scopedContentItems.filter((i) => i.status === 'ready_to_publish').length;
@@ -453,19 +535,32 @@ export default function DashboardIndex({
             (i) => i.status === 'inbox' || i.status === 'briefing'
         ).length;
         const instagramCount = scopedContentItems.filter((i) => i.platform === 'instagram').length;
-        return { review, inProd, ready, pub, draft, instagramCount };
-    }, [scopedContentItems]);
+        return {
+            review,
+            inProd,
+            ready,
+            pub,
+            draft,
+            instagramCount,
+            overdueCount: overdueItems.length,
+            totalCount: scopedContentItems.length,
+        };
+    }, [period, dashboardStats, scopedContentItems, overdueItems.length]);
 
-    const overviewBars = useMemo(() => {
-        if (overviewMode === 'channels') {
-            const channelMap: Record<string, { posts: number; reach: number }> = {
-                instagram: { posts: 0, reach: 0 },
-                youtube: { posts: 0, reach: 0 },
-                tiktok: { posts: 0, reach: 0 },
-                website: { posts: 0, reach: 0 },
-                whatsapp: { posts: 0, reach: 0 },
-            };
+    const channelOverviewMeta = useMemo(() => {
+        const source =
+            period === 'month' && dashboardStats?.channels
+                ? dashboardStats.channels
+                : null;
+        const channelMap: Record<string, { posts: number; reach: number }> = {
+            instagram: source?.instagram ? { ...source.instagram } : { posts: 0, reach: 0 },
+            youtube: source?.youtube ? { ...source.youtube } : { posts: 0, reach: 0 },
+            tiktok: source?.tiktok ? { ...source.tiktok } : { posts: 0, reach: 0 },
+            website: source?.website ? { ...source.website } : { posts: 0, reach: 0 },
+            whatsapp: source?.whatsapp ? { ...source.whatsapp } : { posts: 0, reach: 0 },
+        };
 
+        if (!source) {
             for (const item of scopedContentItems) {
                 if (!channelMap[item.platform]) {
                     channelMap[item.platform] = { posts: 0, reach: 0 };
@@ -478,21 +573,30 @@ export default function DashboardIndex({
                 }
                 channelMap[pub.platform].reach += pub.metrics?.reach ?? 0;
             }
+        }
 
-            const entries = Object.entries(channelMap).slice(0, 5);
+        const activeChannelsCount = Object.values(channelMap).filter((v) => v.posts > 0).length;
+        const topEntry = Object.entries(channelMap).sort((a, b) => b[1].posts - a[1].posts)[0];
+
+        return { channelMap, activeChannelsCount, topEntry };
+    }, [period, dashboardStats, scopedContentItems, publications]);
+
+    const overviewBars = useMemo(() => {
+        if (overviewMode === 'channels') {
+            const entries = Object.entries(channelOverviewMeta.channelMap).slice(0, 5);
             const maxPosts = Math.max(1, ...entries.map(([, v]) => v.posts));
 
             return entries.map(([platformKey, val], idx) => ({
                 id: platformKey,
                 label: PLATFORM_LABELS[platformKey] ?? platformKey,
-                countText: `${val.posts} konten`,
+                countText: `${val.posts.toLocaleString('id-ID')} konten`,
                 metaText:
                     val.reach > 0
                         ? `${val.reach.toLocaleString('id-ID')} Reach`
                         : 'Menunggu metrik tayang',
-                pct: Math.max(12, Math.round((val.posts / maxPosts) * 100)),
+                pct: val.posts > 0 ? Math.max(12, Math.round((val.posts / maxPosts) * 100)) : 4,
                 colorClass: BAR_GRADIENTS[idx % BAR_GRADIENTS.length],
-                href: `/report`,
+                href: platformKey === 'instagram' ? '/instagram/library' : '/report',
             }));
         }
 
@@ -515,17 +619,17 @@ export default function DashboardIndex({
             });
         }
 
-        const { review: reviewCount, inProd: inProdCount, ready: readyCount, pub: pubCount, draft: draftCount } = pipelineMetrics;
-        const denom = Math.max(4, scopedContentItems.length);
+        const { review: reviewCount, inProd: inProdCount, ready: readyCount, pub: pubCount, draft: draftCount, overdueCount, totalCount } = pipelineMetrics;
+        const denom = Math.max(4, totalCount);
         const pubTargetPct = Math.min(100, Math.round((pubCount / Math.max(1, monthlyTarget)) * 100));
 
         return [
             {
                 id: 'overdue',
                 label: 'Tenggat Terlewat (Overdue)',
-                countText: `${overdueItems.length}`,
-                metaText: overdueItems.length > 0 ? 'Perlu Percepatan' : 'Tenggat Aman',
-                pct: overdueItems.length > 0 ? Math.max(22, Math.round((overdueItems.length / denom) * 100)) : 8,
+                countText: `${overdueCount}`,
+                metaText: overdueCount > 0 ? 'Perlu Percepatan' : 'Tenggat Aman',
+                pct: overdueCount > 0 ? Math.max(22, Math.round((overdueCount / denom) * 100)) : 8,
                 colorClass: BAR_GRADIENTS[0],
                 href: '/content?status=all',
             },
@@ -566,7 +670,7 @@ export default function DashboardIndex({
                 href: '/content?status=briefing',
             },
         ];
-    }, [overviewMode, scopedContentItems, publications, team, overdueItems.length, ongoingTeamTaskCount, monthlyTarget]);
+    }, [overviewMode, channelOverviewMeta, pipelineMetrics, team, ongoingTeamTaskCount, monthlyTarget]);
 
     // Right-Top ("Agenda & Jadwal Tayang") Combined Upcoming Schedule
     const scheduleCards = useMemo(() => {
@@ -1068,7 +1172,34 @@ export default function DashboardIndex({
                 {/* =================================================================
                     INSTAGRAM BUSINESS LIVE INSIGHTS & BEST POSTING HOURS STRIP
                    ================================================================= */}
-                {igDash?.connected && (
+                {!igDash?.connected ? (
+                    <motion.section
+                        variants={staggerItemVariants}
+                        className="panze-bento-card px-5 py-3.5 border border-amber-500/30 bg-amber-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                        <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                                <InstagramIcon className="w-4 h-4" />
+                            </span>
+                            <div className="min-w-0 text-xs">
+                                <strong className="font-bold text-[var(--md-sys-color-on-surface)] block">
+                                    Instagram Graph API Belum Terhubung
+                                </strong>
+                                <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                    Hubungkan akun Instagram Bisnis agar postingan, analitik, komentar, dan visual grid tersinkron otomatis ke Dashboard &amp; Laporan.
+                                </span>
+                            </div>
+                        </div>
+                        {can?.manageSettings && (
+                            <Link
+                                href="/settings"
+                                className="px-3.5 py-1.5 rounded-full text-xs font-bold bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] whitespace-nowrap self-start sm:self-center"
+                            >
+                                Hubungkan Instagram
+                            </Link>
+                        )}
+                    </motion.section>
+                ) : (
                     <motion.section
                         variants={staggerItemVariants}
                         className="panze-bento-card px-5 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-3"
@@ -1114,6 +1245,18 @@ export default function DashboardIndex({
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
                             <Link
+                                href="/instagram/library"
+                                className="px-3 py-1.5 rounded-full text-xs font-bold border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] hover:bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface)] transition-colors"
+                            >
+                                Konten IG
+                            </Link>
+                            <Link
+                                href="/report"
+                                className="px-3 py-1.5 rounded-full text-xs font-bold border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] hover:bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface)] transition-colors"
+                            >
+                                Report
+                            </Link>
+                            <Link
                                 href="/instagram/comments"
                                 className="px-3 py-1.5 rounded-full text-xs font-bold border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] hover:bg-[var(--md-sys-color-surface-container)] text-[var(--md-sys-color-on-surface)] inline-flex items-center gap-1.5 transition-colors"
                             >
@@ -1138,19 +1281,9 @@ export default function DashboardIndex({
                                     size="sm"
                                     isLoading={isSyncingIgDash}
                                     icon={<RefreshCw className={`w-3.5 h-3.5 ${isSyncingIgDash ? 'animate-spin' : ''}`} />}
-                                    onClick={() => {
-                                        setIsSyncingIgDash(true);
-                                        router.post(
-                                            '/settings/instagram/sync-profile',
-                                            {},
-                                            {
-                                                preserveScroll: true,
-                                                onFinish: () => setIsSyncingIgDash(false),
-                                            }
-                                        );
-                                    }}
+                                    onClick={handleSyncIgFromDashboard}
                                 >
-                                    Sync IG
+                                    {isSyncingIgDash && igSyncProgress > 0 ? `Sync (${igSyncProgress})...` : 'Sync IG'}
                                 </Button>
                             )}
                         </div>
@@ -1919,7 +2052,7 @@ export default function DashboardIndex({
                                 {overviewMode === 'pipeline' && (
                                     <>
                                         <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                                            {overdueItems.length} Terlambat
+                                            {pipelineMetrics.overdueCount} Terlambat
                                         </span>
                                         <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                                             {pipelineMetrics.review} Siap Review
@@ -1935,13 +2068,15 @@ export default function DashboardIndex({
                                 {overviewMode === 'channels' && (
                                     <>
                                         <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
-                                            5 Kanal Terhubung
+                                            {channelOverviewMeta.activeChannelsCount} Kanal Aktif
                                         </span>
-                                        <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
-                                            Instagram Unggul ({pipelineMetrics.instagramCount} Konten)
-                                        </span>
+                                        {channelOverviewMeta.topEntry && channelOverviewMeta.topEntry[1].posts > 0 && (
+                                            <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20">
+                                                {PLATFORM_LABELS[channelOverviewMeta.topEntry[0]] ?? channelOverviewMeta.topEntry[0]} Teratas ({channelOverviewMeta.topEntry[1].posts.toLocaleString('id-ID')} Konten)
+                                            </span>
+                                        )}
                                         <span className="sparc-code-id text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                                            Distribusi Multi-Kanal
+                                            {igDash?.connected ? `IG @${igDash.username} Tersambung` : 'Distribusi Multi-Kanal'}
                                         </span>
                                     </>
                                 )}

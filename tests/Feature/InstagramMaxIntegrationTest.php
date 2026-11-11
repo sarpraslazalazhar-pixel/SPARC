@@ -1197,4 +1197,147 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertSame(1450, (int) $secondImported->fresh()->reach);
         $this->assertNotNull($secondImported->fresh()->metrics_synced_at);
     }
+
+    public function test_report_analytics_dashboard_calendar_and_team_unify_instagram_data_and_reels_retention(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1811001',
+                        'caption' => 'Reels Edukasi Retensi Tinggi',
+                        'media_type' => 'VIDEO',
+                        'media_url' => 'https://cdn.example.com/reel-ret.mp4',
+                        'thumbnail_url' => 'https://cdn.example.com/reel-ret.jpg',
+                        'permalink' => 'https://www.instagram.com/reel/Ret001/',
+                        'timestamp' => '2026-11-08T10:00:00+0000',
+                        'like_count' => 240,
+                        'comments_count' => 18,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/1811001/insights*ig_reels*' => Http::response([
+                'data' => [
+                    ['name' => 'ig_reels_video_view_total_time', 'values' => [['value' => 125000]]],
+                    ['name' => 'ig_reels_avg_watch_time', 'values' => [['value' => 14500]]],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/1811001/insights*' => Http::response([
+                'data' => [
+                    ['name' => 'reach', 'values' => [['value' => 4200]]],
+                    ['name' => 'views', 'values' => [['value' => 6100]]],
+                    ['name' => 'saved', 'values' => [['value' => 95]]],
+                    ['name' => 'shares', 'values' => [['value' => 30]]],
+                ],
+            ], 200),
+        ]);
+
+        $this->postJson(route('content.syncBatchInstagram'), ['mode' => 'smart'])->assertOk();
+
+        $reelsItem = ContentItem::where('ig_media_id', '1811001')->firstOrFail();
+        $this->assertSame(125, $reelsItem->reels_watch_time);
+        $this->assertEqualsWithDelta(14.5, (float) $reelsItem->reels_avg_watch_time, 0.01);
+
+        // Unmeasured older IG post (reach=null, likes=10, comments=50) must NOT fabricate reach=60
+        $unmeasuredOld = ContentItem::factory()->create([
+            'title' => 'Arsip Lama Tanpa Reach',
+            'platform' => 'instagram',
+            'format' => 'feed',
+            'status' => 'published',
+            'publish_date' => '2026-01-18',
+            'ig_media_id' => '1811002',
+            'reach' => null,
+            'views' => 0,
+            'likes' => 10,
+            'comments_count' => 50,
+            'shares' => 0,
+            'saves' => null,
+            'metrics_synced_at' => now(),
+        ]);
+
+        $queuedSched = InstagramSchedule::create([
+            'content_item_id' => $reelsItem->id,
+            'media_type' => 'REELS',
+            'media_sources' => [['type' => 'url', 'url' => 'https://cdn.example.com/r.mp4', 'media_kind' => 'video']],
+            'publish_mode' => 'scheduled',
+            'status' => 'queued',
+            'scheduled_at' => now()->addDay(),
+        ]);
+
+        // /report exposes full-DB reportSummary preserving NULL != 0 and archiveSyncState
+        $this->get('/report')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Report/Index')
+                ->where('reportSummary.kpi.totalReach', 4200)
+                ->where('reportSummary.kpi.measuredCount', 1)
+                ->where('reportSummary.kpi.unmeasuredCount', 1)
+                ->where('archiveSyncState.dbIgCount', 2)
+                ->where('publications', function ($pubs) use ($unmeasuredOld): bool {
+                    $matched = collect($pubs)->firstWhere('contentItemId', (string) $unmeasuredOld->id);
+
+                    return is_array($matched)
+                        && array_key_exists('reach', (array) ($matched['metrics'] ?? []))
+                        && $matched['metrics']['reach'] === null
+                        && ($matched['metrics']['likes'] ?? 0) === 10
+                        && ($matched['metrics']['comments'] ?? 0) === 50;
+                })
+            );
+
+        // Date-scoped /report?date_from=... filters reportSummary & publications accurately
+        $this->get('/report?date_from=2026-01-01&date_to=2026-02-01')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Report/Index')
+                ->where('reportSummary.kpi.totalSlots', 1)
+                ->where('reportSummary.kpi.totalReach', null)
+                ->where('filters.date_from', '2026-01-01')
+            );
+
+        // /analytics forwards instagramSettings, archiveSyncState, and reportSummary
+        $this->get('/analytics')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Analytics/Index')
+                ->where('instagramSettings.connected', true)
+                ->where('reportSummary.kpi.totalReach', 4200)
+                ->where('archiveSyncState.dbIgCount', 2)
+            );
+
+        // /dashboard receives full-DB dashboardStats
+        $this->get('/dashboard')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Dashboard/Index')
+                ->where('dashboardStats.channels.instagram.posts', 2)
+                ->where('dashboardStats.channels.instagram.reach', 4200)
+                ->where('today', now()->toDateString())
+            );
+
+        // /calendar receives igSchedules and instagramSettings
+        $this->get('/calendar')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Calendar/Index')
+                ->where('instagramSettings.connected', true)
+                ->where('igSchedules', fn ($list): bool => collect($list)->contains('id', (string) $queuedSched->id))
+            );
+
+        // /team receives haloApuStatus alongside shared instagramStatus
+        $this->get('/team')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page) => $page
+                ->component('Team/Index')
+                ->has('haloApuStatus')
+                ->where('instagramStatus.connected', true)
+            );
+
+        // /report/export-excel works cleanly with non-OOM lite hydration & date filter
+        $this->get(route('report.export.excel', ['date_from' => '2026-11-01', 'date_to' => '2026-11-30']))
+            ->assertOk();
+    }
 }

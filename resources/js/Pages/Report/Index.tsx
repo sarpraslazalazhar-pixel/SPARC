@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
-import { Head, router, useForm, usePage } from '@inertiajs/react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import {
     AlertCircle,
+    AtSign,
     BarChart3,
     CheckCircle2,
     ChevronLeft,
@@ -31,6 +32,7 @@ import {
     Video,
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
+import { ContentDetailSheet } from '@/Components/ContentDetailSheet';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
 import { Modal } from '@/Components/UI/Modal';
@@ -50,13 +52,38 @@ import { Tabs } from '@/Components/UI/Tabs';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import { copyToClipboard } from '@/lib/utils';
-import { runChunkedInstagramSync } from '@/lib/instagramSync';
+import {
+    runChunkedInstagramSync,
+    runMissingInsightsBackfill,
+    runQuickNewPostCheck,
+    type InstagramSyncMode,
+} from '@/lib/instagramSync';
 import type {
     SparcContentItem,
     SparcPublication,
     SparcSystemSettings,
     SparcTeamMember,
 } from '@/types/sparc';
+
+export interface ReportSummaryPayload {
+    kpi: {
+        totalSlots: number;
+        measuredCount: number;
+        unmeasuredCount: number;
+        totalReach: number | null;
+        totalViews: number | null;
+        totalInteractions: number | null;
+        avgEr: number | null;
+    };
+    channels: Array<{ platform: string; posts: number; reach: number }>;
+    operational: {
+        byStage: Record<string, number>;
+        pillars: Record<string, number>;
+        overdueCount: number;
+        totalItems: number;
+        onTimeRate: number;
+    };
+}
 
 export interface ReportPageProps {
     today?: string;
@@ -65,8 +92,22 @@ export interface ReportPageProps {
     team?: SparcTeamMember[];
     pageTitle?: string;
     instagramSettings?: SparcSystemSettings['instagram'];
+    archiveSyncState?: {
+        savedCursor: string | null;
+        dbIgCount: number;
+        igMediaCount: number | null;
+        missingInsightsCount: number;
+    };
+    reportSummary?: ReportSummaryPayload;
+    filters?: {
+        platform?: string;
+        format?: string;
+        date_from?: string;
+        date_to?: string;
+    };
+    basePath?: string;
+    hasExtraSessionMetrics?: boolean;
 }
-
 const CSV_TEMPLATE =
     'content_id,platform,reach,impressions,views,likes,comments,shares,saves,clicks\nSPARC-2026-0001,instagram,28400,36900,45200,2640,148,510,920,310';
 
@@ -98,6 +139,11 @@ export default function ReportIndex({
     team = [],
     pageTitle = 'Performance Report',
     instagramSettings,
+    archiveSyncState,
+    reportSummary,
+    filters,
+    basePath = '/report',
+    hasExtraSessionMetrics = false,
 }: ReportPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
@@ -110,18 +156,84 @@ export default function ReportIndex({
     const [isSyncingDemographics, setIsSyncingDemographics] = useState(false);
     const [isSyncingStories, setIsSyncingStories] = useState(false);
     const [isSyncingMentions, setIsSyncingMentions] = useState(false);
-    const [platformFilter, setPlatformFilter] = useState('all');
-    const [formatFilter, setFormatFilter] = useState<'all' | 'reels' | 'feed' | 'carousel'>('all');
-    const [dateFrom, setDateFrom] = useState('');
-    const [dateTo, setDateTo] = useState('');
+    const [platformFilter, setPlatformFilter] = useState(filters?.platform || 'all');
+    const [formatFilter, setFormatFilter] = useState<'all' | 'reels' | 'feed' | 'carousel'>(
+        (filters?.format as 'all' | 'reels' | 'feed' | 'carousel') || 'all'
+    );
+    const [dateFrom, setDateFrom] = useState(filters?.date_from || '');
+    const [dateTo, setDateTo] = useState(filters?.date_to || '');
     const [manualModalOpen, setManualModalOpen] = useState(false);
     const [csvModalOpen, setCsvModalOpen] = useState(false);
+    const [pubPageSize, setPubPageSize] = useState<number>(25);
+    const [pubPage, setPubPage] = useState<number>(1);
+    const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
 
     const [isSyncingIg, setIsSyncingIg] = useState(false);
+    const [isSyncingArchive, setIsSyncingArchive] = useState(false);
+    const [isBackfillingInsights, setIsBackfillingInsights] = useState(false);
+    const [insightsProgress, setInsightsProgress] = useState<{ updated: number; remaining: number } | null>(null);
     const [syncProgressCount, setSyncProgressCount] = useState(0);
     const [isSyncingIgProfile, setIsSyncingIgProfile] = useState(false);
 
-    const igAccount = instagramSettings ?? props.instagramStatus;
+    const igAccount: SparcSystemSettings['instagram'] | undefined =
+        instagramSettings ?? (props.instagramStatus as SparcSystemSettings['instagram'] | undefined);
+
+    useEffect(() => {
+        if (!(can?.managePublishing || can?.editContent)) {
+            return;
+        }
+        let cancelled = false;
+        void runQuickNewPostCheck().then((res) => {
+            if (!cancelled && res.importedCount > 0) {
+                toastSuccess(
+                    'Konten Instagram Baru Ditemukan',
+                    `${res.importedCount.toLocaleString('id-ID')} postingan baru otomatis disinkronkan ke Laporan.`
+                );
+                router.reload({
+                    only: ['contentItems', 'publications', 'reportSummary', 'archiveSyncState'],
+                });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const visitWithFilters = (next: {
+        platform?: string;
+        format?: 'all' | 'reels' | 'feed' | 'carousel';
+        dateFrom?: string;
+        dateTo?: string;
+    }) => {
+        const nextPlatform = next.platform ?? platformFilter;
+        const nextFormat = next.format ?? formatFilter;
+        const nextFrom = next.dateFrom ?? dateFrom;
+        const nextTo = next.dateTo ?? dateTo;
+        setPubPage(1);
+        setReelsPage(1);
+
+        const params: Record<string, string> = {};
+        if (nextPlatform !== 'all') {
+            params.platform = nextPlatform;
+        }
+        if (nextFormat !== 'all') {
+            params.format = nextFormat;
+        }
+        if (nextFrom) {
+            params.date_from = nextFrom;
+        }
+        if (nextTo) {
+            params.date_to = nextTo;
+        }
+
+        router.get(basePath, params, {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        });
+    };
 
     const handleSyncIgAccountInsights = () => {
         setIsSyncingIgProfile(true);
@@ -135,22 +247,51 @@ export default function ReportIndex({
         );
     };
 
-    const handleSyncInstagram = async () => {
-        setIsSyncingIg(true);
+    const handleSyncInstagram = async (mode: InstagramSyncMode = 'smart', resetCursor = false) => {
+        if (mode === 'archive') {
+            setIsSyncingArchive(true);
+        } else {
+            setIsSyncingIg(true);
+        }
         setSyncProgressCount(0);
         const res = await runChunkedInstagramSync({
+            mode,
+            resetCursor,
             onProgress: (p) => setSyncProgressCount(p.fetchedCount),
         });
         setIsSyncingIg(false);
+        setIsSyncingArchive(false);
         if (!res.success) {
-            toastError('Sinkronisasi Gagal', res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.');
+            toastError(
+                res.rateLimited ? 'Jeda Sementara Rate-Limit Meta' : 'Sinkronisasi Gagal',
+                res.error || 'Terjadi kesalahan saat menyinkronkan Instagram.'
+            );
+            router.reload();
 
             return;
         }
         toastSuccess(
-            'Sinkronisasi Instagram Selesai',
+            mode === 'archive' ? 'Penarikan Arsip Instagram Selesai' : 'Sinkronisasi Instagram Selesai',
             `${res.syncedCount.toLocaleString('id-ID')} konten diperbarui (${res.importedCount.toLocaleString('id-ID')} postingan baru diimpor).`
         );
+        router.reload();
+    };
+
+    const handleBackfillInsights = async () => {
+        setIsBackfillingInsights(true);
+        setInsightsProgress({ updated: 0, remaining: archiveSyncState?.missingInsightsCount ?? 0 });
+        const res = await runMissingInsightsBackfill({
+            onProgress: (updated, remaining) => setInsightsProgress({ updated, remaining }),
+        });
+        setIsBackfillingInsights(false);
+        if (!res.success) {
+            toastError('Lengkapi Insights Terhenti', res.error || 'Terjadi kesalahan saat mengambil insights.');
+        } else {
+            toastSuccess(
+                'Insights Arsip Diperbarui',
+                `${res.updatedCount.toLocaleString('id-ID')} postingan berhasil dilengkapi metrik Reach/Views/Retensi.`
+            );
+        }
         router.reload();
     };
     const handleSyncAds = (overrideAccountId?: string, overridePreset?: string) => {
@@ -236,8 +377,31 @@ export default function ReportIndex({
         [publications, platformFilter, formatFilter, dateFrom, dateTo]
     );
 
-    // Aggregate KPI metrics strictly from non-null recorded rows
+    const totalPubPages = pubPageSize === 0 ? 1 : Math.max(1, Math.ceil(filteredPubs.length / pubPageSize));
+    const safePubPage = Math.min(pubPage, totalPubPages);
+    const visiblePubs = useMemo(() => {
+        if (pubPageSize === 0) {
+            return filteredPubs;
+        }
+        const start = (safePubPage - 1) * pubPageSize;
+
+        return filteredPubs.slice(start, start + pubPageSize);
+    }, [filteredPubs, pubPageSize, safePubPage]);
+
+    // Aggregate KPI metrics from full-DB SQL summary when available (never truncated by publishedLimit)
     const kpiSummary = useMemo(() => {
+        if (reportSummary && !hasExtraSessionMetrics) {
+            const k = reportSummary.kpi;
+
+            return {
+                measuredCount: k.measuredCount,
+                unmeasuredCount: k.unmeasuredCount,
+                totalReach: k.totalReach !== null ? k.totalReach.toLocaleString('id-ID') : '—',
+                totalViews: k.totalViews !== null ? k.totalViews.toLocaleString('id-ID') : '—',
+                totalInteractions: k.totalInteractions !== null ? k.totalInteractions.toLocaleString('id-ID') : '—',
+                avgEr: k.avgEr !== null ? `${k.avgEr.toFixed(1)}%` : '—',
+            };
+        }
         const measured = filteredPubs.filter((p) => p.metrics !== null && p.metrics.reach !== null);
         const unmeasuredCount = filteredPubs.length - measured.length;
 
@@ -264,10 +428,16 @@ export default function ReportIndex({
                 measured.length > 0 ? totalInteractions.toLocaleString('id-ID') : '—',
             avgEr,
         };
-    }, [filteredPubs]);
+    }, [reportSummary, hasExtraSessionMetrics, filteredPubs]);
 
     // Channel Reach Breakdown for readable bar visualization
     const channelStats = useMemo(() => {
+        if (reportSummary && !hasExtraSessionMetrics) {
+            const list = [...reportSummary.channels].sort((a, b) => b.reach - a.reach);
+            const maxReach = Math.max(1, ...list.map((c) => c.reach));
+
+            return list.map((c) => ({ ...c, pct: Math.round((c.reach / maxReach) * 100) }));
+        }
         const map: Record<string, { platform: string; reach: number; posts: number }> = {};
         filteredPubs.forEach((p) => {
             if (!map[p.platform]) {
@@ -281,7 +451,7 @@ export default function ReportIndex({
         const list = Object.values(map).sort((a, b) => b.reach - a.reach);
         const maxReach = Math.max(1, ...list.map((c) => c.reach));
         return list.map((c) => ({ ...c, pct: Math.round((c.reach / maxReach) * 100) }));
-    }, [filteredPubs]);
+    }, [reportSummary, hasExtraSessionMetrics, filteredPubs]);
 
     // Operational stage & pillar counts
     const operationalSummary = useMemo(() => {
@@ -293,6 +463,22 @@ export default function ReportIndex({
             'ready_to_publish',
             'published',
         ];
+        if (reportSummary) {
+            const op = reportSummary.operational;
+            const byStage = stages.map((st) => ({
+                status: st,
+                label: WORKFLOW_STATUS_META[st].label,
+                count: op.byStage[st] ?? 0,
+            }));
+
+            return {
+                byStage,
+                pillars: Object.entries(op.pillars).sort((a, b) => b[1] - a[1]),
+                overdueCount: op.overdueCount,
+                totalItems: op.totalItems,
+                onTimeRate: op.onTimeRate,
+            };
+        }
         const byStage = stages.map((st) => ({
             status: st,
             label: WORKFLOW_STATUS_META[st].label,
@@ -320,16 +506,27 @@ export default function ReportIndex({
             byStage,
             pillars: Object.entries(pillarMap).sort((a, b) => b[1] - a[1]),
             overdueCount,
+            totalItems: contentItems.length,
             onTimeRate,
         };
-    }, [contentItems, today]);
+    }, [reportSummary, contentItems, today]);
 
     const reelsItems = useMemo(
         () =>
-            contentItems.filter((i) =>
-                FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase())
-            ),
-        [contentItems]
+            contentItems.filter((i) => {
+                if (!FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase())) {
+                    return false;
+                }
+                if (dateFrom && (!i.publishDate || i.publishDate.slice(0, 10) < dateFrom)) {
+                    return false;
+                }
+                if (dateTo && (!i.publishDate || i.publishDate.slice(0, 10) > dateTo)) {
+                    return false;
+                }
+
+                return true;
+            }),
+        [contentItems, dateFrom, dateTo]
     );
     const [reelsPageSize, setReelsPageSize] = useState<number>(15);
     const [reelsPage, setReelsPage] = useState<number>(1);
@@ -344,6 +541,10 @@ export default function ReportIndex({
         return reelsItems.slice(start, start + reelsPageSize);
     }, [reelsItems, reelsPageSize, safeReelsPage]);
 
+    const activeDetailItem = useMemo(
+        () => (activeDetailId ? contentItems.find((i) => i.id === activeDetailId) ?? null : null),
+        [activeDetailId, contentItems]
+    );
     // Manual Metric Form (`POST /report/metrics`)
     const metricForm = useForm({
         publication_id: publications[0]?.id ?? '',
@@ -500,9 +701,10 @@ export default function ReportIndex({
                                         }`}
                                     />
                                 }
+                                disabled={isSyncingIg || isSyncingArchive || isBackfillingInsights}
                                 isLoading={isSyncingIg}
-                                onClick={handleSyncInstagram}
-                                title="Sinkronisasi seluruh postingan Instagram dari Meta Graph API"
+                                onClick={() => handleSyncInstagram('smart')}
+                                title="Sinkronisasi postingan terbaru & metrik Instagram dari Meta Graph API"
                             >
                                 {isSyncingIg && syncProgressCount > 0 ? `Menarik IG (${syncProgressCount})...` : 'Sync Metrik IG'}
                             </Button>
@@ -552,7 +754,11 @@ export default function ReportIndex({
                             <select
                                 aria-label="Filter kanal pada laporan"
                                 value={platformFilter}
-                                onChange={(e) => setPlatformFilter(e.target.value)}
+                                onChange={(e) => {
+                                    const v = e.target.value;
+                                    setPlatformFilter(v);
+                                    visitWithFilters({ platform: v });
+                                }}
                                 className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
                             >
                                 <option value="all">Kanal: Semua Platform</option>
@@ -566,7 +772,11 @@ export default function ReportIndex({
                             <select
                                 aria-label="Filter format konten"
                                 value={formatFilter}
-                                onChange={(e) => setFormatFilter(e.target.value as typeof formatFilter)}
+                                onChange={(e) => {
+                                    const v = e.target.value as typeof formatFilter;
+                                    setFormatFilter(v);
+                                    visitWithFilters({ format: v });
+                                }}
                                 className="h-9 text-xs bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
                             >
                                 <option value="all">Format: Semua</option>
@@ -581,7 +791,11 @@ export default function ReportIndex({
                                     aria-label="Tanggal dari"
                                     value={dateFrom}
                                     max={dateTo || undefined}
-                                    onChange={(e) => setDateFrom(e.target.value)}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        setDateFrom(v);
+                                        visitWithFilters({ dateFrom: v });
+                                    }}
                                     className="bg-transparent text-xs text-[var(--md-sys-color-on-surface)] outline-none cursor-pointer"
                                     title="Tanggal Mulai"
                                 />
@@ -593,7 +807,11 @@ export default function ReportIndex({
                                     aria-label="Tanggal sampai"
                                     value={dateTo}
                                     min={dateFrom || undefined}
-                                    onChange={(e) => setDateTo(e.target.value)}
+                                    onChange={(e) => {
+                                        const v = e.target.value;
+                                        setDateTo(v);
+                                        visitWithFilters({ dateTo: v });
+                                    }}
                                     className="bg-transparent text-xs text-[var(--md-sys-color-on-surface)] outline-none cursor-pointer"
                                     title="Tanggal Selesai"
                                 />
@@ -610,6 +828,7 @@ export default function ReportIndex({
                                         setFormatFilter('all');
                                         setDateFrom('');
                                         setDateTo('');
+                                        visitWithFilters({ platform: 'all', format: 'all', dateFrom: '', dateTo: '' });
                                     }}
                                     className="text-xs"
                                 >
@@ -626,7 +845,29 @@ export default function ReportIndex({
                 {activeLayer === 'content' && (
                     <div className="space-y-5">
                         {/* Instagram Business 28-Day Insights & Best Posting Hours Banner */}
-                        {igAccount?.connected && (
+                        {!igAccount?.connected ? (
+                            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                                <div className="flex items-start gap-2.5">
+                                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                            Akun Instagram Bisnis Belum Terhubung ke Laporan
+                                        </p>
+                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)] mt-0.5">
+                                            Hubungkan akun Instagram Bisnis via Meta Graph API untuk menarik reach, views, saves, demografi, iklan, dan jam tayang terbaik secara otomatis.
+                                        </p>
+                                    </div>
+                                </div>
+                                {can?.manageSettings && (
+                                    <Link
+                                        href="/settings"
+                                        className="px-3.5 py-1.5 rounded-xl bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] font-bold whitespace-nowrap self-start sm:self-center"
+                                    >
+                                        Hubungkan di Pengaturan
+                                    </Link>
+                                )}
+                            </div>
+                        ) : (
                             <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-500/10 via-pink-500/10 to-amber-500/10 border border-purple-500/25 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                                 <div className="space-y-1.5 min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
@@ -703,6 +944,68 @@ export default function ReportIndex({
                             </div>
                         )}
 
+                        {igAccount?.connected &&
+                            archiveSyncState &&
+                            (archiveSyncState.savedCursor ||
+                                (archiveSyncState.igMediaCount !== null &&
+                                    archiveSyncState.dbIgCount < archiveSyncState.igMediaCount) ||
+                                archiveSyncState.missingInsightsCount > 0) && (
+                                <div className="p-3.5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-3 text-xs">
+                                    <div className="space-y-0.5">
+                                        <div className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                            Sinkronisasi Arsip &amp; Insights IG:{' '}
+                                            <span className="sparc-code-id text-[var(--md-sys-color-primary)]">
+                                                {archiveSyncState.dbIgCount.toLocaleString('id-ID')}
+                                                {archiveSyncState.igMediaCount
+                                                    ? ` / ${archiveSyncState.igMediaCount.toLocaleString('id-ID')}`
+                                                    : ''}
+                                            </span>{' '}
+                                            postingan IG tersimpan
+                                        </div>
+                                        <div className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                            {archiveSyncState.missingInsightsCount > 0
+                                                ? `${archiveSyncState.missingInsightsCount.toLocaleString('id-ID')} postingan arsip belum dilengkapi data Reach/Views/Retensi.`
+                                                : 'Ada arsip postingan lama yang dapat ditarik ke Laporan.'}
+                                        </div>
+                                    </div>
+                                    {can?.managePublishing && (
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {(archiveSyncState.savedCursor ||
+                                                (archiveSyncState.igMediaCount !== null &&
+                                                    archiveSyncState.dbIgCount < archiveSyncState.igMediaCount)) && (
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    size="sm"
+                                                    disabled={isSyncingIg || isSyncingArchive || isBackfillingInsights}
+                                                    isLoading={isSyncingArchive}
+                                                    onClick={() => handleSyncInstagram('archive')}
+                                                >
+                                                    {isSyncingArchive
+                                                        ? `Menarik Arsip (${syncProgressCount})...`
+                                                        : archiveSyncState.savedCursor
+                                                          ? 'Lanjutkan Arsip IG'
+                                                          : 'Tarik Semua Arsip'}
+                                                </Button>
+                                            )}
+                                            {archiveSyncState.missingInsightsCount > 0 && (
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    disabled={isSyncingIg || isSyncingArchive || isBackfillingInsights}
+                                                    isLoading={isBackfillingInsights}
+                                                    onClick={handleBackfillInsights}
+                                                >
+                                                    {isBackfillingInsights && insightsProgress
+                                                        ? `Insights +${insightsProgress.updated} (sisa ${insightsProgress.remaining})...`
+                                                        : `Lengkapi Reach/Views (${archiveSyncState.missingInsightsCount.toLocaleString('id-ID')})`}
+                                                </Button>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         {/* KPI Cards */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                             <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)]">
@@ -809,6 +1112,29 @@ export default function ReportIndex({
                                         Tanda &ldquo;—&rdquo; menandakan metrik H+3 belum dicatat (bukan angka nol)
                                     </p>
                                 </div>
+                                {filteredPubs.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface-variant)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
+                                            {pubPageSize === 0 || filteredPubs.length <= pubPageSize
+                                                ? `${filteredPubs.length.toLocaleString('id-ID')} publikasi`
+                                                : `${((safePubPage - 1) * pubPageSize + 1).toLocaleString('id-ID')}–${Math.min(safePubPage * pubPageSize, filteredPubs.length).toLocaleString('id-ID')} dari ${filteredPubs.length.toLocaleString('id-ID')}`}
+                                        </span>
+                                        <select
+                                            aria-label="Jumlah baris tabel capaian publikasi"
+                                            value={pubPageSize}
+                                            onChange={(e) => {
+                                                setPubPageSize(Number(e.target.value));
+                                                setPubPage(1);
+                                            }}
+                                            className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium cursor-pointer"
+                                        >
+                                            <option value={25}>25 / halaman</option>
+                                            <option value={50}>50 / halaman</option>
+                                            <option value={100}>100 / halaman</option>
+                                            <option value={0}>Semua ({filteredPubs.length})</option>
+                                        </select>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="overflow-x-auto">
@@ -821,41 +1147,64 @@ export default function ReportIndex({
                                             <th className="py-3 px-3 text-right">Reach</th>
                                             <th className="py-3 px-3 text-right">Views</th>
                                             <th className="py-3 px-3 text-right">Likes</th>
+                                            <th className="py-3 px-3 text-right">Komentar</th>
                                             <th className="py-3 px-3 text-right">Shares</th>
                                             <th className="py-3 px-3 text-right">Saves</th>
                                             <th className="py-3 px-3 text-right">ER (%)</th>
-                                            {can?.managePublishing && (
-                                                <th className="py-3 px-4 text-right">Aksi</th>
-                                            )}
+                                            <th className="py-3 px-4 text-right">Aksi</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {filteredPubs.length === 0 ? (
+                                        {visiblePubs.length === 0 ? (
                                             <tr>
                                                 <td
-                                                    colSpan={can?.managePublishing ? 10 : 9}
+                                                    colSpan={11}
                                                     className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]"
                                                 >
                                                     Tidak ada publikasi pada rentang tanggal / format ini.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            filteredPubs.map((pub) => {
+                                            visiblePubs.map((pub) => {
                                                 const m = pub.metrics;
                                                 const er = computeEngagementRate(pub);
+                                                const hasDetail = Boolean(
+                                                    pub.contentItemId &&
+                                                        contentItems.some((ci) => ci.id === pub.contentItemId)
+                                                );
                                                 return (
-                                                    <tr key={pub.id} className="notion-row">
+                                                    <tr
+                                                        key={pub.id}
+                                                        onClick={() => {
+                                                            if (hasDetail && pub.contentItemId) {
+                                                                setActiveDetailId(pub.contentItemId);
+                                                            }
+                                                        }}
+                                                        className={`notion-row ${hasDetail ? 'cursor-pointer' : ''}`}
+                                                    >
                                                         <td className="py-3 px-4 min-w-[230px]">
-                                                            <div className="flex items-center gap-1.5 mb-0.5">
-                                                                <ContentIdBadge contentId={pub.contentId} />
-                                                                {m?.source && (
-                                                                    <span className="text-[10px] uppercase font-semibold text-[var(--md-sys-color-on-surface-muted)]">
-                                                                        • {m.source}
-                                                                    </span>
+                                                            <div className="flex items-center gap-2.5">
+                                                                {pub.mediaPreviewUrl && (
+                                                                    <img
+                                                                        src={pub.mediaPreviewUrl}
+                                                                        alt={pub.title}
+                                                                        loading="lazy"
+                                                                        className="w-9 h-9 rounded-lg object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                                                    />
                                                                 )}
-                                                            </div>
-                                                            <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
-                                                                {pub.title}
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                                                        <ContentIdBadge contentId={pub.contentId} />
+                                                                        {m?.source && (
+                                                                            <span className="text-[10px] uppercase font-semibold text-[var(--md-sys-color-on-surface-muted)]">
+                                                                                • {m.source}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
+                                                                        {pub.title}
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                         </td>
                                                         <td className="py-3 px-3 whitespace-nowrap">
@@ -867,45 +1216,95 @@ export default function ReportIndex({
                                                         <td className="py-3 px-3 text-right sparc-code-id font-semibold text-[var(--md-sys-color-on-surface)]">
                                                             {formatNullableMetric(m?.reach)}
                                                         </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
-                                                        {formatNullableMetric(m?.views)}
-                                                    </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
-                                                        {formatNullableMetric(m?.likes)}
-                                                    </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
-                                                        {formatNullableMetric(m?.shares)}
-                                                    </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
-                                                        {formatNullableMetric(m?.saves)}
-                                                    </td>
-                                                    <td
-                                                        className={`py-3 px-3 text-right sparc-code-id font-bold ${
-                                                            er === '—'
-                                                                ? 'text-[var(--md-sys-color-on-surface-muted)]'
-                                                                : 'text-[var(--md-sys-color-secondary)]'
-                                                        }`}
-                                                    >
-                                                        {er}
-                                                    </td>
-                                                    {can?.managePublishing && (
-                                                        <td className="py-3 px-4 text-right whitespace-nowrap">
-                                                            <Button
-                                                                type="button"
-                                                                variant="ghost"
-                                                                size="sm"
-                                                                onClick={() => openManualForPub(pub)}
-                                                            >
-                                                                {m ? 'Perbarui' : 'Input H+3'}
-                                                            </Button>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {formatNullableMetric(m?.views)}
                                                         </td>
-                                                    )}
-                                                </tr>
-                                            );
-                                        }))}
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {formatNullableMetric(m?.likes)}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {formatNullableMetric(m?.comments)}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {formatNullableMetric(m?.shares)}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {formatNullableMetric(m?.saves)}
+                                                        </td>
+                                                        <td
+                                                            className={`py-3 px-3 text-right sparc-code-id font-bold ${
+                                                                er === '—'
+                                                                    ? 'text-[var(--md-sys-color-on-surface-muted)]'
+                                                                    : 'text-[var(--md-sys-color-secondary)]'
+                                                            }`}
+                                                        >
+                                                            {er}
+                                                        </td>
+                                                        <td
+                                                            className="py-3 px-4 text-right whitespace-nowrap"
+                                                            onClick={(e) => e.stopPropagation()}
+                                                        >
+                                                            <div className="inline-flex items-center justify-end gap-1.5">
+                                                                {pub.publishedUrl && (
+                                                                    <a
+                                                                        href={pub.publishedUrl}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        aria-label={`Buka postingan ${pub.title}`}
+                                                                        className="inline-flex items-center justify-center p-1.5 rounded-lg text-[var(--md-sys-color-primary)] hover:bg-[var(--md-sys-color-primary-container)]/40 transition-colors"
+                                                                    >
+                                                                        <ExternalLink className="w-3.5 h-3.5" />
+                                                                    </a>
+                                                                )}
+                                                                {can?.managePublishing && (
+                                                                    <Button
+                                                                        type="button"
+                                                                        variant="ghost"
+                                                                        size="sm"
+                                                                        onClick={() => openManualForPub(pub)}
+                                                                    >
+                                                                        {m ? 'Perbarui' : 'Input H+3'}
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
+                            {filteredPubs.length > 0 && pubPageSize > 0 && totalPubPages > 1 && (
+                                <div className="px-4 py-3 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <span className="text-[var(--md-sys-color-on-surface-muted)]">
+                                        Halaman <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{safePubPage}</strong> dari{' '}
+                                        <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{totalPubPages}</strong>
+                                    </span>
+                                    <div className="inline-flex items-center gap-1.5">
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={safePubPage <= 1}
+                                            icon={<ChevronLeft className="w-3.5 h-3.5" />}
+                                            onClick={() => setPubPage((p) => Math.max(1, p - 1))}
+                                        >
+                                            Sebelumnya
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={safePubPage >= totalPubPages}
+                                            onClick={() => setPubPage((p) => Math.min(totalPubPages, p + 1))}
+                                        >
+                                            Berikutnya
+                                            <ChevronRight className="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -956,7 +1355,7 @@ export default function ReportIndex({
                             <div className="space-y-3">
                                 {operationalSummary.pillars.map(([pillar, count]) => {
                                     const pct = Math.round(
-                                        (count / Math.max(1, contentItems.length)) * 100
+                                        (count / Math.max(1, operationalSummary.totalItems)) * 100
                                     );
                                     return (
                                         <div key={pillar} className="space-y-1">
@@ -1727,6 +2126,88 @@ export default function ReportIndex({
                                 </div>
                             )}
                         </div>
+
+                        {/* Tags & Mentions Publik Instagram */}
+                        <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] p-4 space-y-3">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div>
+                                    <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)] flex items-center gap-2">
+                                        <AtSign className="w-4 h-4 text-blue-500" />
+                                        Tags &amp; Mentions Publik Instagram
+                                    </h4>
+                                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                        Postingan masyarakat &amp; mitra yang menandai atau menyebut @{igAccount?.username || 'instansi'}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        isLoading={isSyncingMentions}
+                                        icon={<RefreshCw className="w-3.5 h-3.5 text-blue-500" />}
+                                        onClick={handleSyncMentions}
+                                    >
+                                        Tarik Tags &amp; Mentions
+                                    </Button>
+                                    <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
+                                        {(igAccount?.mentionsData?.total_tagged ?? 0) + (igAccount?.mentionsData?.total_mentioned ?? 0)} Terdata
+                                    </span>
+                                </div>
+                            </div>
+
+                            {!igAccount?.mentionsData ? (
+                                <div className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    Belum ada data tags &amp; mentions yang ditarik. Klik &ldquo;Tarik Tags &amp; Mentions&rdquo; untuk mengambil daftar postingan yang menandai akun resmi.
+                                </div>
+                            ) : (igAccount.mentionsData.tagged_posts?.length ?? 0) === 0 && (igAccount.mentionsData.mentioned_posts?.length ?? 0) === 0 ? (
+                                <div className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                    Tidak ada postingan tags atau mentions terbaru ditemukan pada sinkronisasi terakhir ({igAccount.mentionsData.synced_at || '—'}).
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    {[...(igAccount.mentionsData.tagged_posts ?? []), ...(igAccount.mentionsData.mentioned_posts ?? [])]
+                                        .slice(0, 9)
+                                        .map((mp) => (
+                                            <div
+                                                key={mp.id}
+                                                className="p-3 rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] space-y-2 flex flex-col justify-between"
+                                            >
+                                                <div className="space-y-1">
+                                                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                                                        <span className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            {'username' in mp && mp.username ? `@${mp.username}` : 'Mention Instagram'}
+                                                        </span>
+                                                        <span className="sparc-code-id text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                            {mp.timestamp ? mp.timestamp.slice(0, 10) : ''}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-[var(--md-sys-color-on-surface-variant)] line-clamp-2">
+                                                        {mp.caption || '(Tanpa caption)'}
+                                                    </p>
+                                                </div>
+                                                <div className="flex items-center justify-between pt-2 border-t border-[var(--md-sys-color-outline-variant)]/60 text-[11px]">
+                                                    <span className="sparc-code-id text-[var(--md-sys-color-on-surface-muted)]">
+                                                        {'like_count' in mp && mp.like_count !== undefined
+                                                            ? `${mp.like_count} suka`
+                                                            : mp.media_type || 'IG'}
+                                                    </span>
+                                                    {mp.permalink && (
+                                                        <a
+                                                            href={mp.permalink}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="inline-flex items-center gap-1 font-semibold text-[var(--md-sys-color-primary)] hover:underline"
+                                                        >
+                                                            Lihat di IG <ExternalLink className="w-3 h-3" />
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
@@ -1991,6 +2472,12 @@ export default function ReportIndex({
                     </div>
                 </form>
             </Modal>
+            <ContentDetailSheet
+                item={activeDetailItem}
+                today={today}
+                team={team}
+                onClose={() => setActiveDetailId(null)}
+            />
         </AppLayout>
     );
 }

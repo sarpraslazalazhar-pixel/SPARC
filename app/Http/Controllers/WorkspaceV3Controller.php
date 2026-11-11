@@ -556,9 +556,35 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
+     * Compute lightweight archive & missing-insights status for Instagram library, report, and analytics banners.
+     *
+     * @return array{savedCursor: string|null, dbIgCount: int, igMediaCount: int|null, missingInsightsCount: int}
+     */
+    public static function buildInstagramArchiveSyncState(): array
+    {
+        $savedCursor = Cache::get(self::instagramArchiveCursorCacheKey());
+        $dbIgCount = Schema::hasTable('content_items')
+            ? ContentItem::query()->whereNotNull('ig_media_id')->count()
+            : 0;
+        $missingInsightsCount = Schema::hasTable('content_items')
+            ? ContentItem::query()->whereNotNull('ig_media_id')->whereNull('metrics_synced_at')->count()
+            : 0;
+        $igMediaCount = Schema::hasTable('instagram_connections')
+            ? (InstagramConnection::current()->media_count ?? null)
+            : null;
+
+        return [
+            'savedCursor' => is_string($savedCursor) && $savedCursor !== '' ? $savedCursor : null,
+            'dbIgCount' => $dbIgCount,
+            'igMediaCount' => $igMediaCount !== null ? (int) $igMediaCount : null,
+            'missingInsightsCount' => $missingInsightsCount,
+        ];
+    }
+
+    /**
      * Ensure the SPARC v3 operational workspace state is initialized in session.
      *
-     * @param  array{includePublications?: bool, includeRelations?: bool, liteRelations?: bool, month?: string|null, currentMonth?: string|null, publishedLimit?: int|null, dateFrom?: string|null, dateTo?: string|null}  $options
+     * @param  array{includePublications?: bool, includeRelations?: bool, liteRelations?: bool, month?: string|null, currentMonth?: string|null, publishedLimit?: int|null, dateFrom?: string|null, dateTo?: string|null, platformFilter?: string|null, formatFilter?: string|null}  $options
      * @return array<string, mixed>
      */
     public static function hydrateWorkspace(Request $request, array $options = []): array
@@ -571,8 +597,14 @@ class WorkspaceV3Controller extends Controller
         $publishedLimit = array_key_exists('publishedLimit', $options) && $options['publishedLimit'] !== null ? (int) $options['publishedLimit'] : null;
         $dateFrom = isset($options['dateFrom']) && is_string($options['dateFrom']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $options['dateFrom']) === 1 ? $options['dateFrom'] : null;
         $dateTo = isset($options['dateTo']) && is_string($options['dateTo']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $options['dateTo']) === 1 ? $options['dateTo'] : null;
+        $platformFilter = isset($options['platformFilter']) && is_string($options['platformFilter']) && $options['platformFilter'] !== '' && $options['platformFilter'] !== 'all'
+            ? strtolower(trim($options['platformFilter']))
+            : null;
+        $formatFilter = isset($options['formatFilter']) && is_string($options['formatFilter']) && in_array($options['formatFilter'], ['reels', 'feed', 'carousel'], true)
+            ? $options['formatFilter']
+            : null;
         $cacheAttrKey = sprintf(
-            '_sparc_hydrated_workspace_%d_%d_%d_%s_%s_%s_%s_%s',
+            '_sparc_hydrated_workspace_%d_%d_%d_%s_%s_%s_%s_%s_%s_%s',
             $includePublications ? 1 : 0,
             $includeRelations ? 1 : 0,
             $liteRelations ? 1 : 0,
@@ -580,7 +612,9 @@ class WorkspaceV3Controller extends Controller
             $scopeCurrentMonth ?? 'none',
             $publishedLimit !== null ? (string) $publishedLimit : 'unlim',
             $dateFrom ?? 'none',
-            $dateTo ?? 'none'
+            $dateTo ?? 'none',
+            $platformFilter ?? 'all',
+            $formatFilter ?? 'all'
         );
         if ($request->isMethodSafe() && $request->attributes->has($cacheAttrKey)) {
             /** @var array<string, mixed> $cachedState */
@@ -738,6 +772,17 @@ class WorkspaceV3Controller extends Controller
                             }
                             if ($dateTo !== null) {
                                 $pubQuery->where('publish_date', '<=', $dateTo);
+                            }
+                            if ($platformFilter !== null) {
+                                $pubQuery->whereRaw('LOWER(platform) = ?', [$platformFilter]);
+                            }
+                            if ($formatFilter !== null) {
+                                $formatGroups = [
+                                    'reels' => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+                                    'carousel' => ['carousel', 'carousel_feed'],
+                                    'feed' => ['feed', 'single', 'single_image', 'single_feed'],
+                                ];
+                                $pubQuery->whereIn(DB::raw('LOWER(format)'), $formatGroups[$formatFilter]);
                             }
                             $pubRows = $pubQuery
                                 ->orderByDesc('publish_date')
@@ -981,13 +1026,8 @@ class WorkspaceV3Controller extends Controller
                             || (int) $row->shares > 0
                             || $row->saves !== null;
 
-                        $effectiveReach = $row->reach !== null
-                            ? (int) $row->reach
-                            : ((int) $row->views > 0
-                                ? (int) $row->views
-                                : (($row->likes !== null || $row->comments_count !== null) && ((int) $row->likes > 0 || (int) $row->comments_count > 0)
-                                    ? ((int) $row->likes + (int) $row->comments_count)
-                                    : null));
+                        $effectiveReach = $row->reach !== null ? (int) $row->reach : null;
+                        $effectiveImpressions = (int) $row->views > 0 ? (int) $row->views : $effectiveReach;
 
                         $schedStr = ($pubDate ?? now()->toDateString()).' '.($row->publish_time ?: '10:00');
                         $recordedAtStr = $row->metrics_synced_at
@@ -1002,7 +1042,7 @@ class WorkspaceV3Controller extends Controller
                             if ($row->status === 'published' && $hasApiMetrics && $row->metrics_synced_at !== null && $existingMetricSource === 'api') {
                                 $publications[$matchedPubIdx]['metrics'] = [
                                     'reach' => $effectiveReach,
-                                    'impressions' => (int) $row->views > 0 ? (int) $row->views : $effectiveReach,
+                                    'impressions' => $effectiveImpressions,
                                     'views' => (int) $row->views,
                                     'likes' => (int) $row->likes,
                                     'comments' => (int) $row->comments_count,
@@ -1038,7 +1078,7 @@ class WorkspaceV3Controller extends Controller
                                 : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $row->platform)),
                             'metrics' => ($isLive && $hasApiMetrics) ? [
                                 'reach' => $effectiveReach,
-                                'impressions' => (int) $row->views > 0 ? (int) $row->views : $effectiveReach,
+                                'impressions' => $effectiveImpressions,
                                 'views' => (int) $row->views,
                                 'likes' => (int) $row->likes,
                                 'comments' => (int) $row->comments_count,
@@ -1152,13 +1192,8 @@ class WorkspaceV3Controller extends Controller
                                 || (int) $dbItem->shares > 0
                                 || $dbItem->saves !== null;
 
-                            $effectiveReach = $dbItem->reach !== null
-                                ? (int) $dbItem->reach
-                                : ((int) $dbItem->views > 0
-                                    ? (int) $dbItem->views
-                                    : (($dbItem->likes !== null || $dbItem->comments_count !== null) && ((int) $dbItem->likes > 0 || (int) $dbItem->comments_count > 0)
-                                        ? ((int) $dbItem->likes + (int) $dbItem->comments_count)
-                                        : null));
+                            $effectiveReach = $dbItem->reach !== null ? (int) $dbItem->reach : null;
+                            $effectiveImpressions = (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach;
 
                             $schedStr = ($dbItem->publish_date?->toDateString() ?? now()->toDateString()).' '.($dbItem->publish_time ?: '10:00');
 
@@ -1170,7 +1205,7 @@ class WorkspaceV3Controller extends Controller
                                 if ($dbItem->status === 'published' && $hasApiMetrics && $dbItem->metrics_synced_at !== null && $existingMetricSource === 'api') {
                                     $publications[$matchedPubIdx]['metrics'] = [
                                         'reach' => $effectiveReach,
-                                        'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
+                                        'impressions' => $effectiveImpressions,
                                         'views' => (int) $dbItem->views,
                                         'likes' => (int) $dbItem->likes,
                                         'comments' => (int) $dbItem->comments_count,
@@ -1206,7 +1241,7 @@ class WorkspaceV3Controller extends Controller
                                     : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $dbItem->platform)),
                                 'metrics' => ($isLive && $hasApiMetrics) ? [
                                     'reach' => $effectiveReach,
-                                    'impressions' => (int) $dbItem->views > 0 ? (int) $dbItem->views : $effectiveReach,
+                                    'impressions' => $effectiveImpressions,
                                     'views' => (int) $dbItem->views,
                                     'likes' => (int) $dbItem->likes,
                                     'comments' => (int) $dbItem->comments_count,
@@ -1419,7 +1454,7 @@ class WorkspaceV3Controller extends Controller
         $publications = $state['publications'];
 
         return Inertia::render('Dashboard/Index', [
-            'today' => self::TODAY,
+            'today' => now()->toDateString(),
             'contentItems' => $state['contentItems'],
             'activities' => $state['activities'],
             'publications' => $publications,
@@ -1427,10 +1462,115 @@ class WorkspaceV3Controller extends Controller
             'settings' => $state['settings'],
             'incomingTickets' => self::defaultIncomingTickets($request),
             'performanceTrend' => self::buildPerformanceTrendFromDb($request->hasSession() ? $request->session()->get('sparc_v3.publications', []) : []),
+            'dashboardStats' => self::buildDashboardStatsFromDb($state['contentItems'], $publications),
             'sessionItems' => $request->session()->get('sparc.planner_items', []),
             'itemUpdates' => $request->session()->get('sparc.planner_updates', []),
             'deletedIds' => $request->session()->get('sparc.deleted_planner_ids', []),
         ]);
+    }
+
+    /**
+     * Compute full-DB aggregate counts and channel reach for Dashboard without loading 10,000+ rows.
+     *
+     * @param  array<int, array<string, mixed>>  $contentItems
+     * @param  array<int, array<string, mixed>>  $publications
+     * @return array<string, mixed>
+     */
+    public static function buildDashboardStatsFromDb(array $contentItems, array $publications): array
+    {
+        $todayStr = now()->toDateString();
+        $monthStart = now()->format('Y-m-01');
+        $nextMonthStart = now()->addMonthNoOverflow()->format('Y-m-01');
+
+        $statusCounts = [
+            'inbox' => 0,
+            'briefing' => 0,
+            'in_progress' => 0,
+            'review_approval' => 0,
+            'ready_to_publish' => 0,
+            'published' => 0,
+        ];
+        $channelMap = [
+            'instagram' => ['posts' => 0, 'reach' => 0],
+            'youtube' => ['posts' => 0, 'reach' => 0],
+            'tiktok' => ['posts' => 0, 'reach' => 0],
+            'website' => ['posts' => 0, 'reach' => 0],
+            'whatsapp' => ['posts' => 0, 'reach' => 0],
+        ];
+        $overdueCount = 0;
+        $monthlyPublishedCount = 0;
+
+        if (Schema::hasTable('content_items')) {
+            $rows = ContentItem::query()
+                ->selectRaw('
+                    status,
+                    LOWER(platform) as plat,
+                    COUNT(*) as cnt,
+                    COALESCE(SUM(reach), 0) as reach_sum,
+                    SUM(CASE WHEN status != ? AND production_deadline IS NOT NULL AND production_deadline < ? THEN 1 ELSE 0 END) as overdue_cnt,
+                    SUM(CASE WHEN status = ? AND publish_date >= ? AND publish_date < ? THEN 1 ELSE 0 END) as month_pub_cnt
+                ', ['published', $todayStr, 'published', $monthStart, $nextMonthStart])
+                ->groupBy(['status', DB::raw('LOWER(platform)')])
+                ->toBase()
+                ->get();
+
+            foreach ($rows as $r) {
+                $st = self::normalizeStatus((string) ($r->status ?? 'inbox'));
+                $statusCounts[$st] = ($statusCounts[$st] ?? 0) + (int) $r->cnt;
+
+                $plat = (string) ($r->plat ?? 'other');
+                if (! isset($channelMap[$plat])) {
+                    $channelMap[$plat] = ['posts' => 0, 'reach' => 0];
+                }
+                $channelMap[$plat]['posts'] += (int) $r->cnt;
+                $channelMap[$plat]['reach'] += (int) ($r->reach_sum ?? 0);
+
+                $overdueCount += (int) ($r->overdue_cnt ?? 0);
+                $monthlyPublishedCount += (int) ($r->month_pub_cnt ?? 0);
+            }
+        }
+        // Include session-only items (non-numeric IDs like `p-*`, `ci-*`) so test/session flows stay accurate
+        foreach ($contentItems as $item) {
+            $id = (string) ($item['id'] ?? '');
+            if ($id === '' || ctype_digit($id)) {
+                continue;
+            }
+            $st = self::normalizeStatus((string) ($item['status'] ?? 'inbox'));
+            $statusCounts[$st] = ($statusCounts[$st] ?? 0) + 1;
+            $plat = strtolower((string) ($item['platform'] ?? 'instagram'));
+            if (! isset($channelMap[$plat])) {
+                $channelMap[$plat] = ['posts' => 0, 'reach' => 0];
+            }
+            $channelMap[$plat]['posts'] += 1;
+            $pubDate = substr((string) ($item['publishDate'] ?? ''), 0, 10);
+            if ($st === 'published' && $pubDate >= $monthStart && $pubDate < $nextMonthStart) {
+                $monthlyPublishedCount += 1;
+            }
+            $deadline = substr((string) ($item['productionDeadline'] ?? ''), 0, 10);
+            if ($st !== 'published' && $deadline !== '' && $deadline < $todayStr) {
+                $overdueCount += 1;
+            }
+        }
+
+        foreach ($publications as $pub) {
+            $id = (string) ($pub['id'] ?? '');
+            if (str_starts_with($id, 'pub-db-')) {
+                continue;
+            }
+            $plat = strtolower((string) ($pub['platform'] ?? 'instagram'));
+            if (! isset($channelMap[$plat])) {
+                $channelMap[$plat] = ['posts' => 0, 'reach' => 0];
+            }
+            $channelMap[$plat]['reach'] += (int) ($pub['metrics']['reach'] ?? 0);
+        }
+
+        return [
+            'statusCounts' => $statusCounts,
+            'channels' => $channelMap,
+            'overdueCount' => $overdueCount,
+            'monthlyPublishedCount' => $monthlyPublishedCount,
+            'totalItems' => array_sum($statusCounts),
+        ];
     }
 
     /**
@@ -1755,15 +1895,41 @@ class WorkspaceV3Controller extends Controller
      */
     public function calendar(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 150]);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 400]);
         $contentItems = $state['contentItems'];
         usort($contentItems, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
+
+        $igSchedules = [];
+        if (Schema::hasTable('instagram_schedules')) {
+            $igSchedules = InstagramSchedule::with('contentItem')
+                ->orderByDesc('scheduled_at')
+                ->limit(100)
+                ->get()
+                ->map(fn (InstagramSchedule $s): array => [
+                    'id' => (string) $s->id,
+                    'publicationSlotId' => $s->publication_slot_id,
+                    'contentItemId' => $s->content_item_id ? (string) $s->content_item_id : null,
+                    'contentCode' => $s->contentItem?->content_id,
+                    'contentTitle' => $s->contentItem?->title,
+                    'mediaType' => $s->media_type,
+                    'publishMode' => $s->publish_mode,
+                    'status' => $s->status,
+                    'scheduledAt' => $s->scheduled_at?->format('Y-m-d H:i'),
+                    'publishedAt' => $s->published_at?->format('Y-m-d H:i'),
+                    'permalink' => $s->permalink,
+                    'errorMessage' => $s->error_message,
+                ])
+                ->values()
+                ->all();
+        }
 
         return Inertia::render('Calendar/Index', [
             'today' => now()->toDateString(),
             'contentItems' => $contentItems,
             'activities' => $state['activities'],
             'publications' => $state['publications'],
+            'igSchedules' => $igSchedules,
+            'instagramSettings' => self::resolveLightweightInstagramStatus($request),
             'sessionEvents' => $request->session()->get('sparc.calendar_events', []),
         ]);
     }
@@ -1805,7 +1971,7 @@ class WorkspaceV3Controller extends Controller
             || str_ends_with($sampleHost, '.local');
 
         return Inertia::render('Publishing/Index', [
-            'today' => self::TODAY,
+            'today' => now()->toDateString(),
             'contentItems' => $state['contentItems'],
             'publications' => $state['publications'],
             'igSchedules' => $igSchedules,
@@ -1821,13 +1987,18 @@ class WorkspaceV3Controller extends Controller
     {
         $dateFrom = $request->query('date_from');
         $dateTo = $request->query('date_to');
-        $hasRange = is_string($dateFrom) && $dateFrom !== '' || is_string($dateTo) && $dateTo !== '';
+        $platformFilter = trim((string) $request->query('platform', 'all')) ?: 'all';
+        $formatFilter = trim((string) $request->query('format', 'all')) ?: 'all';
+        $cleanDateFrom = is_string($dateFrom) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom) === 1 ? $dateFrom : null;
+        $cleanDateTo = is_string($dateTo) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo) === 1 ? $dateTo : null;
 
         $state = self::hydrateWorkspace($request, [
             'includeRelations' => false,
-            'publishedLimit' => $hasRange ? 500 : 200,
-            'dateFrom' => is_string($dateFrom) ? $dateFrom : null,
-            'dateTo' => is_string($dateTo) ? $dateTo : null,
+            'publishedLimit' => 500,
+            'dateFrom' => $cleanDateFrom,
+            'dateTo' => $cleanDateTo,
+            'platformFilter' => $platformFilter,
+            'formatFilter' => $formatFilter,
         ]);
 
         return Inertia::render('Report/Index', [
@@ -1836,7 +2007,214 @@ class WorkspaceV3Controller extends Controller
             'publications' => $state['publications'],
             'team' => self::buildRealTeamWorkloadFromDb($state['team']),
             'instagramSettings' => $state['settings']['instagram'] ?? [],
+            'archiveSyncState' => self::buildInstagramArchiveSyncState(),
+            'reportSummary' => self::buildReportSummaryFromDb(
+                $cleanDateFrom,
+                $cleanDateTo,
+                $platformFilter,
+                $formatFilter,
+                $state['publications'],
+                $state['contentItems']
+            ),
+            'filters' => [
+                'platform' => $platformFilter,
+                'format' => $formatFilter,
+                'date_from' => $cleanDateFrom ?? '',
+                'date_to' => $cleanDateTo ?? '',
+            ],
         ]);
+    }
+
+    /**
+     * Compute full-DB SQL aggregates for Performance Report so KPIs, Channel Breakdown, and Operational stats never truncate at publishedLimit.
+     *
+     * @param  array<int, array<string, mixed>>  $publications
+     * @param  array<int, array<string, mixed>>  $contentItems
+     * @return array<string, mixed>
+     */
+    public static function buildReportSummaryFromDb(
+        ?string $dateFrom,
+        ?string $dateTo,
+        string $platformFilter,
+        string $formatFilter,
+        array $publications,
+        array $contentItems
+    ): array {
+        $todayStr = now()->toDateString();
+        $formatGroups = [
+            'reels' => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+            'carousel' => ['carousel', 'carousel_feed'],
+            'feed' => ['feed', 'single', 'single_image', 'single_feed'],
+        ];
+
+        $totalSlots = 0;
+        $measuredCount = 0;
+        $totalReach = 0;
+        $totalViews = 0;
+        $totalInteractions = 0;
+        $channelMap = [];
+
+        $byStage = [
+            'inbox' => 0,
+            'briefing' => 0,
+            'in_progress' => 0,
+            'review_approval' => 0,
+            'ready_to_publish' => 0,
+            'published' => 0,
+        ];
+        $pillars = [];
+        $overdueCount = 0;
+        $totalItems = 0;
+
+        if (Schema::hasTable('content_items')) {
+            $pubBase = ContentItem::query()->whereIn('status', ['ready_to_publish', 'published']);
+            if ($dateFrom !== null) {
+                $pubBase->where('publish_date', '>=', $dateFrom);
+            }
+            if ($dateTo !== null) {
+                $pubBase->where('publish_date', '<=', $dateTo);
+            }
+            if ($platformFilter !== 'all' && $platformFilter !== '') {
+                $pubBase->whereRaw('LOWER(platform) = ?', [strtolower($platformFilter)]);
+            }
+            if (isset($formatGroups[$formatFilter])) {
+                $pubBase->whereIn(DB::raw('LOWER(format)'), $formatGroups[$formatFilter]);
+            }
+
+            $kpiRow = (clone $pubBase)->selectRaw('
+                COUNT(*) as total_slots,
+                SUM(CASE WHEN status = ? AND reach IS NOT NULL THEN 1 ELSE 0 END) as measured_cnt,
+                COALESCE(SUM(CASE WHEN status = ? AND reach IS NOT NULL THEN reach ELSE 0 END), 0) as sum_reach,
+                COALESCE(SUM(CASE WHEN status = ? AND reach IS NOT NULL THEN COALESCE(views, 0) ELSE 0 END), 0) as sum_views,
+                COALESCE(SUM(CASE WHEN status = ? AND reach IS NOT NULL THEN (COALESCE(likes, 0) + COALESCE(comments_count, 0) + COALESCE(shares, 0) + COALESCE(saves, 0)) ELSE 0 END), 0) as sum_interactions
+            ', ['published', 'published', 'published', 'published'])->toBase()->first();
+
+            $totalSlots = (int) ($kpiRow->total_slots ?? 0);
+            $measuredCount = (int) ($kpiRow->measured_cnt ?? 0);
+            $totalReach = (int) ($kpiRow->sum_reach ?? 0);
+            $totalViews = (int) ($kpiRow->sum_views ?? 0);
+            $totalInteractions = (int) ($kpiRow->sum_interactions ?? 0);
+
+            $chanRows = (clone $pubBase)
+                ->selectRaw('LOWER(platform) as plat, COUNT(*) as cnt, COALESCE(SUM(CASE WHEN status = ? AND reach IS NOT NULL THEN reach ELSE 0 END), 0) as sum_reach', ['published'])
+                ->groupBy(DB::raw('LOWER(platform)'))
+                ->toBase()
+                ->get();
+            foreach ($chanRows as $cr) {
+                $plat = (string) ($cr->plat ?: 'instagram');
+                $channelMap[$plat] = [
+                    'platform' => $plat,
+                    'posts' => (int) $cr->cnt,
+                    'reach' => (int) ($cr->sum_reach ?? 0),
+                ];
+            }
+
+            $stageRows = ContentItem::query()
+                ->selectRaw('status, COUNT(*) as cnt')
+                ->groupBy('status')
+                ->toBase()
+                ->get();
+            foreach ($stageRows as $sr) {
+                $st = self::normalizeStatus((string) ($sr->status ?? 'inbox'));
+                $byStage[$st] = ($byStage[$st] ?? 0) + (int) $sr->cnt;
+                $totalItems += (int) $sr->cnt;
+            }
+
+            $pillarRows = ContentItem::query()
+                ->selectRaw('pillar, COUNT(*) as cnt')
+                ->groupBy('pillar')
+                ->toBase()
+                ->get();
+            foreach ($pillarRows as $pr) {
+                $pKey = (string) ($pr->pillar ?: 'edukasi');
+                $pillars[$pKey] = ($pillars[$pKey] ?? 0) + (int) $pr->cnt;
+            }
+
+            $overdueCount = ContentItem::query()
+                ->where('status', '!=', 'published')
+                ->whereNotNull('production_deadline')
+                ->where('production_deadline', '<', $todayStr)
+                ->count();
+        }
+
+        // Merge session-only publications (non `pub-db-*`)
+        foreach ($publications as $pub) {
+            $id = (string) ($pub['id'] ?? '');
+            if (str_starts_with($id, 'pub-db-')) {
+                continue;
+            }
+            $plat = strtolower((string) ($pub['platform'] ?? 'instagram'));
+            if ($platformFilter !== 'all' && $plat !== strtolower($platformFilter)) {
+                continue;
+            }
+            if (isset($formatGroups[$formatFilter])) {
+                $fmt = strtolower((string) ($pub['format'] ?? ''));
+                if (! in_array($fmt, $formatGroups[$formatFilter], true)) {
+                    continue;
+                }
+            }
+            $pubDate = substr((string) ($pub['publishedActualAt'] ?: ($pub['scheduledAt'] ?? '')), 0, 10);
+            if ($dateFrom !== null && ($pubDate === '' || $pubDate < $dateFrom)) {
+                continue;
+            }
+            if ($dateTo !== null && ($pubDate === '' || $pubDate > $dateTo)) {
+                continue;
+            }
+            $totalSlots += 1;
+            if (! isset($channelMap[$plat])) {
+                $channelMap[$plat] = ['platform' => $plat, 'posts' => 0, 'reach' => 0];
+            }
+            $channelMap[$plat]['posts'] += 1;
+            $m = is_array($pub['metrics'] ?? null) ? $pub['metrics'] : null;
+            if ($m !== null && isset($m['reach']) && $m['reach'] !== null) {
+                $measuredCount += 1;
+                $totalReach += (int) $m['reach'];
+                $totalViews += (int) ($m['views'] ?? 0);
+                $totalInteractions += (int) ($m['likes'] ?? 0) + (int) ($m['comments'] ?? 0) + (int) ($m['shares'] ?? 0) + (int) ($m['saves'] ?? 0);
+                $channelMap[$plat]['reach'] += (int) $m['reach'];
+            }
+        }
+
+        // Merge session-only content items for operational counts
+        foreach ($contentItems as $item) {
+            $id = (string) ($item['id'] ?? '');
+            if ($id === '' || ctype_digit($id)) {
+                continue;
+            }
+            $st = self::normalizeStatus((string) ($item['status'] ?? 'inbox'));
+            $byStage[$st] = ($byStage[$st] ?? 0) + 1;
+            $pKey = (string) ($item['pillar'] ?? 'edukasi');
+            $pillars[$pKey] = ($pillars[$pKey] ?? 0) + 1;
+            $totalItems += 1;
+            $deadline = substr((string) ($item['productionDeadline'] ?? ''), 0, 10);
+            if ($st !== 'published' && $deadline !== '' && $deadline < $todayStr) {
+                $overdueCount += 1;
+            }
+        }
+
+        $channelList = array_values($channelMap);
+        usort($channelList, static fn (array $a, array $b): int => $b['reach'] <=> $a['reach']);
+        arsort($pillars);
+
+        return [
+            'kpi' => [
+                'totalSlots' => $totalSlots,
+                'measuredCount' => $measuredCount,
+                'unmeasuredCount' => max(0, $totalSlots - $measuredCount),
+                'totalReach' => $measuredCount > 0 ? $totalReach : null,
+                'totalViews' => $measuredCount > 0 ? $totalViews : null,
+                'totalInteractions' => $measuredCount > 0 ? $totalInteractions : null,
+                'avgEr' => $totalReach > 0 ? round(($totalInteractions / $totalReach) * 100, 1) : null,
+            ],
+            'channels' => $channelList,
+            'operational' => [
+                'byStage' => $byStage,
+                'pillars' => $pillars,
+                'overdueCount' => $overdueCount,
+                'totalItems' => $totalItems,
+                'onTimeRate' => $totalItems > 0 ? (int) round((($totalItems - $overdueCount) / $totalItems) * 100) : 100,
+            ],
+        ];
     }
 
     /**
@@ -1962,6 +2340,7 @@ class WorkspaceV3Controller extends Controller
         return Inertia::render('Team/Index', [
             'team' => self::buildRealTeamWorkloadFromDb($state['team']),
             'contentItems' => $state['contentItems'],
+            'haloApuStatus' => self::resolveHaloApuSettingsPayload(),
         ]);
     }
 
@@ -2037,24 +2416,67 @@ class WorkspaceV3Controller extends Controller
             }
         }
 
+        $todayStr = now()->toDateString();
         $hasContentTable = Schema::hasTable('content_items');
         $overdueCount = $hasContentTable
             ? ContentItem::where('status', '!=', 'published')
                 ->whereNotNull('production_deadline')
-                ->whereDate('production_deadline', '<', self::TODAY)
+                ->whereDate('production_deadline', '<', $todayStr)
                 ->count()
             : 0;
 
         $publishTodayCount = $hasContentTable
             ? ContentItem::where('status', 'ready_to_publish')
-                ->whereDate('publish_date', self::TODAY)
+                ->whereDate('publish_date', $todayStr)
                 ->count()
             : 0;
+
+        $pendingHaloTickets = Schema::hasTable('haloapu_tickets')
+            ? HaloApuTicket::where('sync_status', 'pending')->count()
+            : 0;
+
+        // Non-blocking fallback runner for due Instagram Auto-Publish schedules when system cron is absent
+        if (
+            ! app()->runningUnitTests()
+            && Schema::hasTable('instagram_schedules')
+            && Cache::add('sparc_ig_poll_sched_lock', true, now()->addSeconds(55))
+        ) {
+            $hasDue = InstagramSchedule::query()
+                ->whereIn('status', ['queued', 'processing'])
+                ->where(function ($q): void {
+                    $q->whereNull('scheduled_at')->orWhere('scheduled_at', '<=', now());
+                })
+                ->exists();
+
+            if ($hasDue) {
+                dispatch(static function (): void {
+                    try {
+                        $service = new InstagramGraphService;
+                        if (! $service->isConfigured()) {
+                            return;
+                        }
+                        $due = InstagramSchedule::query()
+                            ->whereIn('status', ['queued', 'processing'])
+                            ->where(function ($q): void {
+                                $q->whereNull('scheduled_at')->orWhere('scheduled_at', '<=', now());
+                            })
+                            ->orderBy('scheduled_at')
+                            ->limit(5)
+                            ->get();
+                        foreach ($due as $schedule) {
+                            $service->publishSchedule($schedule);
+                        }
+                    } catch (\Throwable) {
+                        // Non-fatal background schedule runner
+                    }
+                })->afterResponse();
+            }
+        }
 
         return response()->json([
             'server_time' => now()->toIso8601String(),
             'unread_notification_count' => $unreadCount,
-            'new_halo_apu_tickets' => 2,
+            'new_halo_apu_tickets' => $pendingHaloTickets,
             'overdue_content_count' => $overdueCount,
             'upcoming_publish_today' => $publishTodayCount,
             'notifications' => array_slice($notifications, 0, 30),
@@ -2694,9 +3116,10 @@ class WorkspaceV3Controller extends Controller
             'comments_count' => $result['comments_count'] ?? $item->comments_count,
             'shares' => $result['shares'] ?? $item->shares,
             'saves' => $result['saves'] ?? $item->saves,
+            'reels_watch_time' => $result['reels_watch_time'] ?? $item->reels_watch_time,
+            'reels_avg_watch_time' => $result['reels_avg_watch_time'] ?? $item->reels_avg_watch_time,
             'metrics_synced_at' => now(),
         ]);
-
         $item->history()->create([
             'from_status' => $item->status,
             'to_status' => $item->status,
@@ -3474,7 +3897,6 @@ class WorkspaceV3Controller extends Controller
      */
     public function exportReportExcel(Request $request, SparcExcelReportService $excelService): HttpResponse
     {
-        $state = self::hydrateWorkspace($request);
         $today = now()->toDateString();
 
         $validated = $request->validate([
@@ -3491,6 +3913,15 @@ class WorkspaceV3Controller extends Controller
         $dateFrom = $validated['date_from'] ?? null;
         $dateTo = $validated['date_to'] ?? null;
 
+        $state = self::hydrateWorkspace($request, [
+            'includeRelations' => false,
+            'publishedLimit' => 2000,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
+            'platformFilter' => $platformFilter,
+            'formatFilter' => $formatFilter,
+        ]);
+
         $binary = $excelService->generateReportWorkbook([
             'today' => $today,
             'platformFilter' => $platformFilter,
@@ -3500,10 +3931,9 @@ class WorkspaceV3Controller extends Controller
             'activeLayer' => $activeLayer,
             'publications' => $state['publications'],
             'contentItems' => $state['contentItems'],
-            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
+            'team' => self::buildRealTeamWorkloadFromDb($state['team']),
             'instagramSettings' => $state['settings']['instagram'] ?? [],
         ]);
-
         if (! empty($dateFrom) || ! empty($dateTo)) {
             $filename = sprintf(
                 'Laporan-Performa-SPARC-%s_sd_%s.xlsx',

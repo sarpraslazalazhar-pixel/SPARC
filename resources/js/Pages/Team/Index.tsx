@@ -1,18 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Head, router, useForm, usePage } from '@inertiajs/react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import {
     AlertTriangle,
     CheckCircle2,
     Eye,
     EyeOff,
+    Globe,
     Mail,
     Search,
+    Server,
     Shield,
     Sparkles,
     Trash2,
     UserPlus,
     Users,
 } from 'lucide-react';
+import { InstagramIcon } from '@/Components/Icons';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
@@ -23,13 +26,13 @@ import {
     type UserRoleKey,
 } from '@/Components/UI/Semantics';
 import { useToast } from '@/Components/UI/Toast';
-import type { SparcContentItem, SparcTeamMember } from '@/types/sparc';
+import type { SparcContentItem, SparcSystemSettings, SparcTeamMember } from '@/types/sparc';
 
 interface TeamPageProps {
     team?: SparcTeamMember[];
     contentItems?: SparcContentItem[];
+    haloApuStatus?: SparcSystemSettings['haloApu'];
 }
-
 const ROLE_KEYS: UserRoleKey[] = [
     'admin',
     'manager',
@@ -49,7 +52,7 @@ function generateRandomPassword(): string {
     return pwd.split('').sort(() => Math.random() - 0.5).join('');
 }
 
-export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProps) {
+export default function TeamIndex({ team = [], contentItems = [], haloApuStatus }: TeamPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
     const { error: toastError } = useToast();
@@ -189,7 +192,80 @@ export default function TeamIndex({ team = [], contentItems = [] }: TeamPageProp
                     </div>
                 </div>
 
-                {/* Manager/Admin Workload Capacity Overview */}
+                {/* Ecosystem Integration Status Strip */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 via-pink-500 to-purple-600 text-white flex items-center justify-center shrink-0">
+                                <InstagramIcon className="w-4 h-4" />
+                            </span>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 text-xs">
+                                    <span className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                        Instagram Graph API
+                                    </span>
+                                    <span
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            props.instagramStatus?.connected
+                                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                        }`}
+                                    >
+                                        {props.instagramStatus?.connected
+                                            ? `@${props.instagramStatus.username || 'terhubung'}`
+                                            : 'Belum Terhubung'}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] truncate mt-0.5">
+                                    {props.instagramStatus?.connected
+                                        ? `${(props.instagramStatus.followersCount ?? 0).toLocaleString('id-ID')} pengikut • Sync: ${props.instagramStatus.lastSyncedAt || 'Aktif'}`
+                                        : 'Hubungkan akun Instagram Bisnis di Pengaturan untuk sinkronisasi otomatis.'}
+                                </p>
+                            </div>
+                        </div>
+                        <Link
+                            href={props.instagramStatus?.connected ? '/instagram/library' : can?.manageSettings ? '/settings' : '/report'}
+                            className="text-xs font-bold text-[var(--md-sys-color-primary)] hover:underline whitespace-nowrap shrink-0"
+                        >
+                            {props.instagramStatus?.connected ? 'Lihat Konten →' : can?.manageSettings ? 'Pengaturan →' : 'Laporan →'}
+                        </Link>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <span className="w-9 h-9 rounded-xl bg-blue-600/15 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                                <Server className="w-4 h-4" />
+                            </span>
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 text-xs">
+                                    <span className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                        REST API HALO APU
+                                    </span>
+                                    <span
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            haloApuStatus?.isEnabled
+                                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                                : 'bg-zinc-500/15 text-zinc-600 dark:text-zinc-400'
+                                        }`}
+                                    >
+                                        {haloApuStatus?.isEnabled ? 'Aktif' : 'Nonaktif'}
+                                    </span>
+                                </div>
+                                <p className="text-[11px] text-[var(--md-sys-color-on-surface-muted)] truncate mt-0.5">
+                                    {haloApuStatus?.isEnabled
+                                        ? `Sync terakhir: ${haloApuStatus.lastSyncAt || '—'}`
+                                        : 'Konfigurasi webhook & sinkronisasi tiket di menu Pengaturan.'}
+                                </p>
+                            </div>
+                        </div>
+                        <Link
+                            href="/incoming"
+                            className="text-xs font-bold text-[var(--md-sys-color-primary)] hover:underline whitespace-nowrap shrink-0"
+                        >
+                            Tiket Masuk →
+                        </Link>
+                    </div>
+                </div>
                 {can?.viewTeamWorkload && (
                     <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] space-y-4">
                         <div className="flex items-center justify-between">

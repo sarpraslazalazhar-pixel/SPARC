@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\ContentItem;
 use App\Models\InstagramComment;
-use App\Models\InstagramConnection;
 use App\Models\InstagramGridSlot;
 use App\Models\InstagramSchedule;
 use App\Services\InstagramGraphService;
@@ -12,7 +11,6 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -379,17 +377,6 @@ class InstagramOperationsController extends Controller
         WorkspaceV3Controller::resolveAuthContextData($request);
         $pageData = WorkspaceV3Controller::queryInstagramLibraryPage($request, 50);
 
-        $savedCursor = Cache::get(WorkspaceV3Controller::instagramArchiveCursorCacheKey());
-        $dbIgCount = Schema::hasTable('content_items')
-            ? ContentItem::query()->whereNotNull('ig_media_id')->count()
-            : 0;
-        $missingInsightsCount = Schema::hasTable('content_items')
-            ? ContentItem::query()->whereNotNull('ig_media_id')->whereNull('metrics_synced_at')->count()
-            : 0;
-        $igMediaCount = Schema::hasTable('instagram_connections')
-            ? (InstagramConnection::current()->media_count ?? null)
-            : null;
-
         return Inertia::render('InstagramLibrary/Index', [
             'today' => now()->toDateString(),
             'contentItems' => $pageData['contentItems'],
@@ -397,12 +384,7 @@ class InstagramOperationsController extends Controller
             'kpi' => $pageData['kpi'],
             'pagination' => $pageData['pagination'],
             'filters' => $pageData['filters'],
-            'archiveSyncState' => [
-                'savedCursor' => is_string($savedCursor) && $savedCursor !== '' ? $savedCursor : null,
-                'dbIgCount' => $dbIgCount,
-                'igMediaCount' => $igMediaCount !== null ? (int) $igMediaCount : null,
-                'missingInsightsCount' => $missingInsightsCount,
-            ],
+            'archiveSyncState' => WorkspaceV3Controller::buildInstagramArchiveSyncState(),
             'team' => WorkspaceV3Controller::loadRealTeam(),
         ]);
     }

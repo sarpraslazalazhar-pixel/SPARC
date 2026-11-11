@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Head, router, useForm, usePage } from '@inertiajs/react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import {
     AlertTriangle,
     Calendar as CalendarIcon,
@@ -12,10 +12,13 @@ import {
     LayoutGrid,
     List,
     Plus,
+    RefreshCw,
     Send,
+    Sparkles,
     Trash2,
     Wrench,
 } from 'lucide-react';
+import { InstagramIcon } from '@/Components/Icons';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
@@ -31,13 +34,15 @@ import {
 import { Sheet } from '@/Components/UI/Sheet';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
+import { runChunkedInstagramSync, runQuickNewPostCheck } from '@/lib/instagramSync';
 import { cn } from '@/lib/utils';
 import type {
     InstitutionalActivity,
+    InstagramScheduleItem,
     SparcContentItem,
     SparcPublication,
+    SparcSystemSettings,
 } from '@/types/sparc';
-
 interface LegacySessionCalendarEvent {
     id: string;
     day: number;
@@ -56,6 +61,8 @@ interface CalendarPageProps {
     contentItems?: SparcContentItem[];
     activities?: InstitutionalActivity[];
     publications?: SparcPublication[];
+    igSchedules?: InstagramScheduleItem[];
+    instagramSettings?: SparcSystemSettings['instagram'];
     sessionEvents?: LegacySessionCalendarEvent[];
 }
 
@@ -76,11 +83,19 @@ interface UnifiedCalendarEntry {
     activityType?: string;
     description?: string;
     publishedUrl?: string;
+    thumbnailUrl?: string;
+    metricsSummary?: {
+        reach?: number | null;
+        views?: number;
+        likes?: number;
+        commentsCount?: number;
+    };
+    isIgAutoPublish?: boolean;
+    igScheduleStatus?: string;
     isAtRisk: boolean;
     riskReason?: string;
     canReschedule: boolean;
 }
-
 const INDONESIAN_MONTHS = [
     'Januari',
     'Februari',
@@ -118,12 +133,59 @@ export default function CalendarIndex({
     contentItems = [],
     activities = [],
     publications = [],
+    igSchedules = [],
+    instagramSettings,
     sessionEvents = [],
 }: CalendarPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
-    const { error: toastError } = useToast();
+    const { success: toastSuccess, error: toastError } = useToast();
+    const [isSyncingIg, setIsSyncingIg] = useState(false);
+    const [syncProgressCount, setSyncProgressCount] = useState(0);
 
+    const igAccount = instagramSettings ?? props.instagramStatus;
+    const bestPostingHours = igAccount?.bestPostingHours ?? [];
+
+    useEffect(() => {
+        if (!(can?.editContent || can?.managePublishing)) {
+            return;
+        }
+        let cancelled = false;
+        void runQuickNewPostCheck().then((res) => {
+            if (!cancelled && res.importedCount > 0) {
+                toastSuccess(
+                    'Postingan Instagram Baru Ditemukan',
+                    `${res.importedCount.toLocaleString('id-ID')} postingan baru otomatis ditambahkan ke Kalender.`
+                );
+                router.reload({ only: ['contentItems', 'publications', 'igSchedules'] });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const handleSyncInstagram = async () => {
+        setIsSyncingIg(true);
+        setSyncProgressCount(0);
+        const res = await runChunkedInstagramSync({
+            mode: 'smart',
+            onProgress: (p) => setSyncProgressCount(p.fetchedCount),
+        });
+        setIsSyncingIg(false);
+        if (!res.success) {
+            toastError('Sinkronisasi IG Gagal', res.error || 'Gagal menarik postingan Instagram.');
+
+            return;
+        }
+        toastSuccess(
+            'Kalender Instagram Diperbarui',
+            `${res.syncedCount.toLocaleString('id-ID')} postingan IG disinkronkan (${res.importedCount.toLocaleString('id-ID')} baru).`
+        );
+        router.reload();
+    };
     const initialDate = useMemo(() => {
         const parts = today.split('-');
         if (parts.length === 3) {
@@ -281,6 +343,17 @@ export default function CalendarIndex({
                     picName: item.picName,
                     description: item.caption || item.brief,
                     publishedUrl: item.publishedUrl,
+                    thumbnailUrl: item.igThumbnailUrl || item.igMediaUrl || undefined,
+                    metricsSummary:
+                        item.platform === 'instagram' &&
+                        (item.reach !== undefined || (item.views ?? 0) > 0 || (item.likes ?? 0) > 0)
+                            ? {
+                                  reach: item.reach,
+                                  views: item.views,
+                                  likes: item.likes,
+                                  commentsCount: item.commentsCount,
+                              }
+                            : undefined,
                     isAtRisk: overduePub || notReadyNearPub || scheduleConflict,
                     riskReason: overduePub
                         ? `Jadwal tayang (${pubDate}) terlewat dan konten belum dipublikasikan.`
@@ -329,14 +402,59 @@ export default function CalendarIndex({
             }
         });
 
-        // Legacy quick-schedule events (`POST /calendar/events`) mapped into November 2026
+        // Instagram Graph API Auto-Publish Schedules (`instagram_schedules`)
+        igSchedules.forEach((sched) => {
+            const rawSched = sched.scheduledAt || sched.publishedAt || '';
+            if (!rawSched || sched.status === 'cancelled') {
+                return;
+            }
+            const schedDate = rawSched.slice(0, 10);
+            const schedTime = rawSched.slice(11, 16) || '19:00';
+            const existingIdx = list.findIndex(
+                (e) =>
+                    e.layer === 'publish' &&
+                    sched.contentItemId &&
+                    e.entityId === sched.contentItemId
+            );
+            if (existingIdx >= 0) {
+                list[existingIdx] = {
+                    ...list[existingIdx],
+                    isIgAutoPublish: true,
+                    igScheduleStatus: sched.status,
+                    publishedUrl: list[existingIdx].publishedUrl || sched.permalink || undefined,
+                };
+
+                return;
+            }
+            list.push({
+                uid: `igsched-${sched.id}`,
+                entityId: sched.contentItemId || sched.id,
+                layer: 'publish',
+                date: schedDate,
+                time: schedTime,
+                title: sched.contentTitle || `Auto-Publish IG (${sched.mediaType})`,
+                contentId: sched.contentCode ?? undefined,
+                platform: 'instagram',
+                status: sched.status === 'published' ? 'published' : 'ready_to_publish',
+                picName: 'Auto-Publish IG',
+                description: sched.errorMessage || `Publikasi otomatis Instagram (${sched.mediaType})`,
+                publishedUrl: sched.permalink ?? undefined,
+                isIgAutoPublish: true,
+                igScheduleStatus: sched.status,
+                isAtRisk: sched.status === 'failed',
+                riskReason: sched.errorMessage ?? undefined,
+                canReschedule: false,
+            });
+        });
+
+        // Legacy quick-schedule events (`POST /calendar/events`) mapped to active viewed month
         sessionEvents.forEach((ev) => {
-            const safeDay = Math.max(1, Math.min(30, Number(ev.day) || 1));
+            const safeDay = Math.max(1, Math.min(31, Number(ev.day) || 1));
             list.push({
                 uid: `legacy-${ev.id}`,
                 entityId: ev.id,
                 layer: 'publish',
-                date: `2026-11-${pad2(safeDay)}`,
+                date: `${activeMonth.key}-${pad2(safeDay)}`,
                 time: ev.time || '10:00',
                 title: ev.title,
                 platform: ev.platform,
@@ -352,8 +470,7 @@ export default function CalendarIndex({
         return list.sort((a, b) =>
             a.date !== b.date ? a.date.localeCompare(b.date) : (a.time ?? '').localeCompare(b.time ?? '')
         );
-    }, [activities, contentItems, publications, sessionEvents, today]);
-
+    }, [activities, contentItems, publications, igSchedules, sessionEvents, today, activeMonth.key]);
     const filteredEntries = useMemo(() => {
         return allEntries.filter((entry) => {
             if (layerFilter === 'risk' && !entry.isAtRisk) {
@@ -647,7 +764,33 @@ export default function CalendarIndex({
                 </div>
             }
             actions={
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {igAccount?.connected ? (
+                        <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/25">
+                            <InstagramIcon className="w-3 h-3" /> @{igAccount.username || 'instagram'}
+                        </span>
+                    ) : (
+                        can?.manageSettings && (
+                            <Link
+                                href="/settings"
+                                className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:underline"
+                            >
+                                Hubungkan IG
+                            </Link>
+                        )
+                    )}
+                    {(can?.editContent || can?.managePublishing) && (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            isLoading={isSyncingIg}
+                            icon={<RefreshCw className={`w-3.5 h-3.5 text-purple-600 ${isSyncingIg ? 'animate-spin' : ''}`} />}
+                            onClick={handleSyncInstagram}
+                        >
+                            {isSyncingIg && syncProgressCount > 0 ? `Sync IG (${syncProgressCount})...` : 'Sync IG'}
+                        </Button>
+                    )}
                     {can?.manageActivities && (
                         <Button
                             variant="outline"
@@ -1080,6 +1223,58 @@ export default function CalendarIndex({
                             </div>
                         </div>
 
+                        {selectedEntry.thumbnailUrl && (
+                            <div className="rounded-xl overflow-hidden border border-[var(--md-sys-color-outline-variant)] bg-black/5">
+                                <img
+                                    src={selectedEntry.thumbnailUrl}
+                                    alt={selectedEntry.title}
+                                    className="w-full max-h-52 object-cover"
+                                />
+                            </div>
+                        )}
+
+                        {selectedEntry.isIgAutoPublish && (
+                            <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/25 text-xs text-purple-800 dark:text-purple-200 flex items-center justify-between gap-2">
+                                <span className="font-bold flex items-center gap-1.5">
+                                    <Sparkles className="w-3.5 h-3.5" /> Auto-Publish Instagram
+                                </span>
+                                <span className="uppercase text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-purple-500/20">
+                                    {selectedEntry.igScheduleStatus || 'queued'}
+                                </span>
+                            </div>
+                        )}
+
+                        {selectedEntry.metricsSummary && (
+                            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                                <div className="p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
+                                    <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] block">Reach</span>
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {selectedEntry.metricsSummary.reach !== null && selectedEntry.metricsSummary.reach !== undefined
+                                            ? selectedEntry.metricsSummary.reach.toLocaleString('id-ID')
+                                            : '—'}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
+                                    <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] block">Views</span>
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {(selectedEntry.metricsSummary.views ?? 0).toLocaleString('id-ID')}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
+                                    <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] block">Likes</span>
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {(selectedEntry.metricsSummary.likes ?? 0).toLocaleString('id-ID')}
+                                    </strong>
+                                </div>
+                                <div className="p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)]">
+                                    <span className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] block">Komentar</span>
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {(selectedEntry.metricsSummary.commentsCount ?? 0).toLocaleString('id-ID')}
+                                    </strong>
+                                </div>
+                            </div>
+                        )}
+
                         {selectedEntry.description && (
                             <div className="p-3.5 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] text-xs text-[var(--md-sys-color-on-surface)] leading-relaxed">
                                 {selectedEntry.description}
@@ -1096,7 +1291,6 @@ export default function CalendarIndex({
                                 Buka Bukti Publikasi <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                         )}
-
                         <div className="pt-3 border-t border-[var(--md-sys-color-outline-variant)] flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2">
                                 {selectedEntry.canReschedule && can?.editContent && (
@@ -1358,6 +1552,23 @@ export default function CalendarIndex({
                                     error={scheduleForm.errors.time}
                                 />
                             </div>
+                            {scheduleForm.data.platform === 'instagram' && bestPostingHours.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                    <span className="text-[var(--md-sys-color-on-surface-muted)] font-semibold inline-flex items-center gap-1">
+                                        <Clock className="w-3 h-3 text-purple-600" /> Jam Aktif IG (WIB):
+                                    </span>
+                                    {bestPostingHours.map((bh) => (
+                                        <button
+                                            key={bh}
+                                            type="button"
+                                            onClick={() => scheduleForm.setData('time', bh.slice(0, 5))}
+                                            className="px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-700 dark:text-purple-300 font-bold hover:bg-purple-500/25 cursor-pointer"
+                                        >
+                                            {bh}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
                             <Input
                                 type="number"
                                 min={1}

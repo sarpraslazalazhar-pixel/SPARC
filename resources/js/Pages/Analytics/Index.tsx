@@ -27,6 +27,10 @@ export default function AnalyticsIndex({
     publications = [],
     team = [],
     sessionMetrics = [],
+    instagramSettings,
+    archiveSyncState,
+    reportSummary,
+    filters,
 }: AnalyticsPageProps) {
     const mergedPublications = useMemo<SparcPublication[]>(() => {
         const legacyConverted: SparcPublication[] = sessionMetrics.map((m, idx) => ({
@@ -64,6 +68,12 @@ export default function AnalyticsIndex({
             publications={mergedPublications}
             team={team}
             pageTitle="Performance Report"
+            instagramSettings={instagramSettings}
+            archiveSyncState={archiveSyncState}
+            reportSummary={reportSummary}
+            filters={filters}
+            basePath="/analytics"
+            hasExtraSessionMetrics={sessionMetrics.length > 0}
         />
     );
 }

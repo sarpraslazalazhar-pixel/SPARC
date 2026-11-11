@@ -338,7 +338,24 @@ export default function PublishingIndex({
             title="Publishing &amp; Optimization"
             subtitle="Pusat kendali mutu (QC) pra-publikasi kanal, penayangan otomatis Meta Graph API, dan konfirmasi bukti tayang"
             actions={
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                    {instagramSettings?.connected || props.instagramStatus?.connected ? (
+                        <Link
+                            href="/instagram/library"
+                            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/25 hover:bg-purple-500/15"
+                        >
+                            <Sparkles className="w-3 h-3" /> @{instagramSettings?.username || props.instagramStatus?.username || 'instagram'}
+                        </Link>
+                    ) : (
+                        can?.manageSettings && (
+                            <Link
+                                href="/settings"
+                                className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:underline"
+                            >
+                                Hubungkan IG
+                            </Link>
+                        )
+                    )}
                     <Button
                         type="button"
                         variant="outline"
@@ -940,8 +957,9 @@ export default function PublishingIndex({
                                             <th className="py-3 px-4">Kode &amp; Judul</th>
                                             <th className="py-3 px-3">Kanal</th>
                                             <th className="py-3 px-3">Waktu Tayang Aktual</th>
+                                            <th className="py-3 px-3">Metrik Ringkas</th>
                                             <th className="py-3 px-3">Publisher</th>
-                                            <th className="py-3 px-3">Tautan Bukti Tayang</th>
+                                            <th className="py-3 px-4">Tautan Bukti Tayang</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
@@ -962,6 +980,19 @@ export default function PublishingIndex({
                                                     <span className="sparc-code-id">
                                                         {pub.publishedActualAt || '-'}
                                                     </span>
+                                                </td>
+                                                <td className="py-3 px-3 whitespace-nowrap text-[11px]">
+                                                    {pub.metrics ? (
+                                                        <span className="sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            Reach:{' '}
+                                                            <strong className="text-[var(--md-sys-color-on-surface)]">
+                                                                {pub.metrics.reach !== null ? pub.metrics.reach.toLocaleString('id-ID') : '—'}
+                                                            </strong>{' '}
+                                                            • ♥ {(pub.metrics.likes ?? 0).toLocaleString('id-ID')}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-[var(--md-sys-color-on-surface-muted)]">—</span>
+                                                    )}
                                                 </td>
                                                 <td className="py-3 px-3 whitespace-nowrap text-[var(--md-sys-color-on-surface-muted)]">
                                                     {pub.picName}

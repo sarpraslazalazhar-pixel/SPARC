@@ -1226,7 +1226,7 @@ class InstagramGraphService
      * Parse raw `/insights` response rows into pure separated metrics without synthetic multipliers.
      *
      * @param  array<int, array<string, mixed>>  $insightsData
-     * @return array{reach: int|null, views: int, saves: int|null, shares: int|null, effective_shares: int}
+     * @return array{reach: int|null, views: int, saves: int|null, shares: int|null, effective_shares: int, reels_watch_time: int|null, reels_avg_watch_time: float|null}
      */
     protected function parseMediaInsightsRows(array $insightsData): array
     {
@@ -1234,6 +1234,8 @@ class InstagramGraphService
         $views = 0;
         $saves = null;
         $shares = null;
+        $reelsWatchTime = null;
+        $reelsAvgWatchTime = null;
 
         foreach ($insightsData as $row) {
             $name = (string) ($row['name'] ?? '');
@@ -1243,16 +1245,22 @@ class InstagramGraphService
             if ($rawVal === null || ! is_numeric($rawVal)) {
                 continue;
             }
-            $val = (int) $rawVal;
+            $val = (float) $rawVal;
 
             if ($name === 'reach') {
-                $reach = $val;
+                $reach = (int) $val;
             } elseif ($name === 'views') {
-                $views = max($views, $val);
+                $views = max($views, (int) $val);
             } elseif ($name === 'saved') {
-                $saves = $val;
+                $saves = (int) $val;
             } elseif ($name === 'shares') {
-                $shares = $val;
+                $shares = (int) $val;
+            } elseif ($name === 'ig_reels_video_view_total_time') {
+                // Meta returns watch time in milliseconds; SPARC stores seconds.
+                $reelsWatchTime = $val > 0 ? (int) round($val / 1000) : 0;
+            } elseif ($name === 'ig_reels_avg_watch_time') {
+                // Meta returns average watch time in milliseconds; SPARC stores seconds.
+                $reelsAvgWatchTime = $val > 0 ? round($val / 1000, 1) : 0.0;
             }
         }
 
@@ -1266,6 +1274,8 @@ class InstagramGraphService
             'saves' => $saves,
             'shares' => $shares,
             'effective_shares' => $shares ?? ($saves ?? 0),
+            'reels_watch_time' => $reelsWatchTime,
+            'reels_avg_watch_time' => $reelsAvgWatchTime,
         ];
     }
 
@@ -1344,6 +1354,67 @@ class InstagramGraphService
     }
 
     /**
+     * Fetch Reels-specific retention metrics (`ig_reels_video_view_total_time`, `ig_reels_avg_watch_time`) concurrently.
+     * Non-Reels video posts that reject Reels-only metrics fail gracefully without impacting standard insights.
+     *
+     * @param  array<int, string>  $reelsMediaIds
+     * @return array<string, array{reels_watch_time: int|null, reels_avg_watch_time: float|null}>
+     */
+    protected function fetchBatchReelsRetention(array $reelsMediaIds, ?float $startedAt = null, float $budgetSeconds = 18.0): array
+    {
+        $uniqueIds = array_values(array_unique(array_filter($reelsMediaIds)));
+        if (empty($uniqueIds)) {
+            return [];
+        }
+
+        $retentionMap = [];
+
+        foreach (array_chunk($uniqueIds, 40) as $chunk) {
+            if ($startedAt !== null && $this->isTimeBudgetExceeded($startedAt, $budgetSeconds)) {
+                break;
+            }
+
+            try {
+                $responses = Http::batch(function (Batch $batch) use ($chunk): array {
+                    $reqs = [];
+                    foreach ($chunk as $mId) {
+                        $reqs[] = $batch->as((string) $mId)
+                            ->connectTimeout(4)
+                            ->timeout(7)
+                            ->withOptions(['force_ip_resolve' => 'v4'])
+                            ->get(
+                                sprintf('%s/%s/insights', $this->baseUrl, $mId),
+                                [
+                                    'metric' => 'ig_reels_video_view_total_time,ig_reels_avg_watch_time',
+                                    'access_token' => $this->accessToken,
+                                ]
+                            );
+                    }
+
+                    return $reqs;
+                })->concurrency(8)->send();
+
+                foreach ($chunk as $mId) {
+                    $resp = $responses[$mId] ?? null;
+                    if ($resp instanceof Response && $resp->successful()) {
+                        /** @var array<int, array<string, mixed>> $rows */
+                        $rows = $resp->json('data') ?? [];
+                        $parsed = $this->parseMediaInsightsRows($rows);
+                        $retentionMap[$mId] = [
+                            'reels_watch_time' => $parsed['reels_watch_time'],
+                            'reels_avg_watch_time' => $parsed['reels_avg_watch_time'],
+                        ];
+                    }
+                }
+            } catch (\Throwable) {
+                // Non-fatal: Reels retention metrics are optional when unavailable on legacy video posts
+            }
+        }
+
+        return $retentionMap;
+    }
+
+    /**
      * Fetch paginated media items from Meta Graph API following `paging.next` cursors.
      * Pass `$maxItems <= 0` to fetch all available media pages without artificial count caps.
      *
@@ -1353,13 +1424,12 @@ class InstagramGraphService
     {
         $localStart = microtime(true);
         $unlimited = $maxItems <= 0;
-        $targetMax = $unlimited ? 50000 : max(1, $maxItems);
+        $targetMax = $unlimited ? 500000 : max(1, $maxItems);
         $pageSize = min(100, $targetMax);
         $collected = [];
         $seenIds = [];
         $lastResponse = null;
-        $maxPages = $singlePageOnly ? 1 : ($unlimited ? 500 : max(1, (int) ceil($targetMax / max(1, $pageSize)) + 2));
-
+        $maxPages = $singlePageOnly ? 1 : ($unlimited ? 5000 : max(1, (int) ceil($targetMax / max(1, $pageSize)) + 2));
         $queryParams = [
             'fields' => $fields,
             'limit' => $pageSize,
@@ -1540,6 +1610,9 @@ class InstagramGraphService
             $comments = (int) ($targetMedia['comments_count'] ?? 0);
             $insightsMap = $this->fetchBatchMediaInsights([$mediaId]);
             $parsed = $insightsMap[$mediaId] ?? $this->parseMediaInsightsRows([]);
+            $reelsRetention = strtoupper((string) ($targetMedia['media_type'] ?? '')) === 'VIDEO'
+                ? ($this->fetchBatchReelsRetention([$mediaId])[$mediaId] ?? [])
+                : [];
 
             $this->captureApiTelemetry($mediaResponse, 'fetch_single_metric', $started, sprintf('Metrik media #%s ditarik.', $mediaId));
 
@@ -1555,6 +1628,8 @@ class InstagramGraphService
                 'comments_count' => $comments,
                 'shares' => $parsed['effective_shares'],
                 'saves' => $parsed['saves'],
+                'reels_watch_time' => $reelsRetention['reels_watch_time'] ?? null,
+                'reels_avg_watch_time' => $reelsRetention['reels_avg_watch_time'] ?? null,
             ];
         } catch (\Throwable $e) {
             return [
@@ -1705,6 +1780,13 @@ class InstagramGraphService
 
         $mediaIds = array_map(static fn (array $pair): string => (string) $pair['media']['id'], $matchedMap);
         $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds);
+        $reelsIds = array_values(array_filter(array_map(
+            static fn (array $pair): ?string => strtoupper((string) ($pair['media']['media_type'] ?? '')) === 'VIDEO'
+                ? (string) $pair['media']['id']
+                : null,
+            $matchedMap
+        )));
+        $reelsRetentionByMedia = $this->fetchBatchReelsRetention($reelsIds);
 
         $syncedCount = 0;
         $failedCount = 0;
@@ -1720,6 +1802,7 @@ class InstagramGraphService
             $likes = (int) ($targetMedia['like_count'] ?? 0);
             $comments = (int) ($targetMedia['comments_count'] ?? 0);
             $parsed = $insightsByMedia[$mediaId] ?? $this->parseMediaInsightsRows([]);
+            $ret = $reelsRetentionByMedia[$mediaId] ?? [];
 
             $views = $parsed['views'];
             $shares = $parsed['effective_shares'];
@@ -1739,9 +1822,10 @@ class InstagramGraphService
                 'comments_count' => $comments,
                 'shares' => $shares,
                 'saves' => $parsed['saves'] ?? $item->saves,
+                'reels_watch_time' => $ret['reels_watch_time'] ?? $item->reels_watch_time,
+                'reels_avg_watch_time' => $ret['reels_avg_watch_time'] ?? $item->reels_avg_watch_time,
                 'metrics_synced_at' => now(),
             ]);
-
             if ($hasChanged) {
                 $item->history()->create([
                     'from_status' => $item->status,
@@ -1909,7 +1993,7 @@ class InstagramGraphService
         $slimColumns = [
             'id', 'content_id', 'title', 'status', 'published_url',
             'ig_media_id', 'ig_media_url', 'ig_thumbnail_url',
-            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves', 'metrics_synced_at', 'deleted_at',
+            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves', 'reels_watch_time', 'reels_avg_watch_time', 'metrics_synced_at', 'deleted_at',
         ];
         if (count($mediaIds) <= 500) {
             $existingItems = empty($mediaIds)
@@ -1952,6 +2036,14 @@ class InstagramGraphService
             }
         }
         $insightsByMedia = [];
+        $reelsRetentionByMedia = [];
+        $mediaTypeById = [];
+        foreach ($mediaList as $m) {
+            $mKey = (string) ($m['id'] ?? '');
+            if ($mKey !== '') {
+                $mediaTypeById[$mKey] = strtoupper((string) ($m['media_type'] ?? ''));
+            }
+        }
         if ($syncInsights && ! empty($mediaIds)) {
             // Only call /insights for posts that haven't been synced yet + up to 25 newest posts on page 1
             $insightsMax = $this->isUnlimitedBudget() ? 200 : ($isChunkMode ? 35 : 60);
@@ -1968,9 +2060,15 @@ class InstagramGraphService
             }
             if (! empty($priorityIds)) {
                 $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds, $started, 16.0);
+                $reelsPriorityIds = array_values(array_filter(
+                    $priorityIds,
+                    static fn (string $id): bool => ($mediaTypeById[$id] ?? '') === 'VIDEO'
+                ));
+                if (! empty($reelsPriorityIds)) {
+                    $reelsRetentionByMedia = $this->fetchBatchReelsRetention($reelsPriorityIds, $started, 17.5);
+                }
             }
         }
-
         $cachedThumbs = [];
         if ($cacheThumbnails && $afterCursor === null) {
             $thumbTargets = [];
@@ -1993,6 +2091,7 @@ class InstagramGraphService
         DB::transaction(function () use (
             $mediaList,
             $insightsByMedia,
+            $reelsRetentionByMedia,
             $cachedThumbs,
             &$existingByMediaId,
             &$existingByPermalink,
@@ -2043,6 +2142,7 @@ class InstagramGraphService
                         : $rawThumbUrl;
 
                     $hasInsight = isset($insightsByMedia[$mediaId]);
+                    $ret = $reelsRetentionByMedia[$mediaId] ?? [];
                     $matchedItem->update([
                         'ig_media_id' => $mediaId ?: $matchedItem->ig_media_id,
                         'ig_media_url' => $rawMediaUrl,
@@ -2053,9 +2153,10 @@ class InstagramGraphService
                         'comments_count' => $comments,
                         'shares' => $hasInsight ? $shares : (int) $matchedItem->shares,
                         'saves' => $hasInsight ? ($parsed['saves'] ?? $matchedItem->saves) : $matchedItem->saves,
+                        'reels_watch_time' => $ret['reels_watch_time'] ?? $matchedItem->reels_watch_time,
+                        'reels_avg_watch_time' => $ret['reels_avg_watch_time'] ?? $matchedItem->reels_avg_watch_time,
                         'metrics_synced_at' => $hasInsight ? now() : $matchedItem->metrics_synced_at,
                     ]);
-
                     if ($hasChanged && $updatedHistoryCount < 20) {
                         $updatedHistoryCount++;
                         $matchedItem->history()->create([
@@ -2108,6 +2209,7 @@ class InstagramGraphService
                             continue;
                         }
                         $existingByMediaId[$mediaId] = $existingInDb;
+                        $ret = $reelsRetentionByMedia[$mediaId] ?? [];
                         $existingInDb->update([
                             'reach' => $hasInsight ? ($parsed['reach'] ?? $existingInDb->reach) : $existingInDb->reach,
                             'views' => $hasInsight ? $views : (int) $existingInDb->views,
@@ -2115,9 +2217,10 @@ class InstagramGraphService
                             'comments_count' => $comments,
                             'shares' => $hasInsight ? $shares : (int) $existingInDb->shares,
                             'saves' => $hasInsight ? ($parsed['saves'] ?? $existingInDb->saves) : $existingInDb->saves,
+                            'reels_watch_time' => $ret['reels_watch_time'] ?? $existingInDb->reels_watch_time,
+                            'reels_avg_watch_time' => $ret['reels_avg_watch_time'] ?? $existingInDb->reels_avg_watch_time,
                             'metrics_synced_at' => $hasInsight ? now() : $existingInDb->metrics_synced_at,
                         ]);
-                        $syncedCount++;
 
                         continue;
                     }
@@ -2145,9 +2248,10 @@ class InstagramGraphService
                         'comments_count' => $comments,
                         'shares' => $shares,
                         'saves' => $parsed['saves'],
+                        'reels_watch_time' => ($reelsRetentionByMedia[$mediaId]['reels_watch_time'] ?? null),
+                        'reels_avg_watch_time' => ($reelsRetentionByMedia[$mediaId]['reels_avg_watch_time'] ?? null),
                         'metrics_synced_at' => $hasInsight ? now() : null,
                     ]);
-
                     $newItem->history()->create([
                         'from_status' => 'inbox',
                         'to_status' => 'published',
@@ -2234,7 +2338,7 @@ class InstagramGraphService
         $this->prepareWebExecutionBudget();
 
         $targets = ContentItem::query()
-            ->select(['id', 'ig_media_id', 'reach', 'views', 'shares', 'saves', 'metrics_synced_at'])
+            ->select(['id', 'format', 'ig_media_id', 'reach', 'views', 'shares', 'saves', 'reels_watch_time', 'reels_avg_watch_time', 'metrics_synced_at'])
             ->whereNotNull('ig_media_id')
             ->where('ig_media_id', '!=', '')
             ->whereNull('metrics_synced_at')
@@ -2253,12 +2357,20 @@ class InstagramGraphService
 
         $mediaIds = $targets->pluck('ig_media_id')->filter()->values()->all();
         $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds, $started, 18.0);
+        $reelsIds = $targets
+            ->filter(static fn (ContentItem $t): bool => in_array(strtolower((string) $t->format), ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'], true))
+            ->pluck('ig_media_id')
+            ->filter()
+            ->values()
+            ->all();
+        $reelsRetentionByMedia = $this->fetchBatchReelsRetention($reelsIds, $started, 19.5);
 
         $updatedCount = 0;
-        DB::transaction(function () use ($targets, $insightsByMedia, &$updatedCount): void {
+        DB::transaction(function () use ($targets, $insightsByMedia, $reelsRetentionByMedia, &$updatedCount): void {
             foreach ($targets as $item) {
                 $mId = (string) $item->ig_media_id;
                 $parsed = $insightsByMedia[$mId] ?? null;
+                $ret = $reelsRetentionByMedia[$mId] ?? [];
                 $updates = ['metrics_synced_at' => now()];
                 if ($parsed !== null) {
                     if ($parsed['reach'] !== null) {
@@ -2273,6 +2385,12 @@ class InstagramGraphService
                     if ($parsed['saves'] !== null) {
                         $updates['saves'] = $parsed['saves'];
                     }
+                }
+                if (isset($ret['reels_watch_time'])) {
+                    $updates['reels_watch_time'] = $ret['reels_watch_time'];
+                }
+                if (isset($ret['reels_avg_watch_time'])) {
+                    $updates['reels_avg_watch_time'] = $ret['reels_avg_watch_time'];
                 }
                 $item->update($updates);
                 $updatedCount++;

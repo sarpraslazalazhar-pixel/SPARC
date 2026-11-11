@@ -79,7 +79,7 @@ export async function runChunkedInstagramSync(options?: {
     const mode: InstagramSyncMode = options?.mode ?? 'smart';
     const batchSize = options?.batchSize ?? (mode === 'archive' ? 100 : 50);
     const includeProfile = options?.includeProfile ?? true;
-    const maxBatches = mode === 'archive' ? 400 : 25;
+    const maxBatches = mode === 'archive' ? 2000 : 35;
 
     let cursor: string | null = null;
     let hasMore = true;
