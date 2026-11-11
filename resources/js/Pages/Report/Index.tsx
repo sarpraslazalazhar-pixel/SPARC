@@ -313,6 +313,15 @@ export default function ReportIndex({
         };
     }, [contentItems, today]);
 
+    const reelsItems = useMemo(
+        () =>
+            contentItems.filter((i) =>
+                FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase())
+            ),
+        [contentItems]
+    );
+    const visibleReelsItems = useMemo(() => reelsItems.slice(0, 15), [reelsItems]);
+
     // Manual Metric Form (`POST /report/metrics`)
     const metricForm = useForm({
         publication_id: publications[0]?.id ?? '',
@@ -1492,7 +1501,7 @@ export default function ReportIndex({
                         )}
                         {/* Reels Performance & Retention */}
                         <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
-                            <div className="p-4 border-b border-[var(--md-sys-color-outline-variant)] flex items-center justify-between">
+                            <div className="p-4 border-b border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2">
                                 <div>
                                     <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)] flex items-center gap-2">
                                         <Video className="w-4 h-4 text-purple-500" />
@@ -1502,6 +1511,13 @@ export default function ReportIndex({
                                         Metrik video khusus: ig_reels_video_view_total_time & ig_reels_avg_watch_time
                                     </p>
                                 </div>
+                                {reelsItems.length > 0 && (
+                                    <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface-variant)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
+                                        {reelsItems.length > 15
+                                            ? `Menampilkan 15 dari ${reelsItems.length.toLocaleString('id-ID')} Reels`
+                                            : `${reelsItems.length} Reels`}
+                                    </span>
+                                )}
                             </div>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left text-xs border-collapse">
@@ -1516,16 +1532,14 @@ export default function ReportIndex({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {contentItems.filter((i) => FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase())).length === 0 ? (
+                                        {visibleReelsItems.length === 0 ? (
                                             <tr>
                                                 <td colSpan={6} className="py-6 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
                                                     Belum ada konten Reels yang dipublikasikan.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            contentItems
-                                                .filter((i) => FORMAT_GROUPS.reels.includes((i.format || '').toLowerCase()))
-                                                .map((item) => (
+                                            visibleReelsItems.map((item) => (
                                                     <tr key={item.id} className="notion-row">
                                                         <td className="py-3 px-4 font-bold text-[var(--md-sys-color-on-surface)]">
                                                             <div className="line-clamp-1">{item.title}</div>

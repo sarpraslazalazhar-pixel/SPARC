@@ -74,9 +74,9 @@ export default function Login({ status }: LoginProps) {
 
                         {/* Instagram Link Button */}
                         <a
-                            href="https://instagram.com"
+                            href="https://www.instagram.com/lazalazhar/"
                             target="_blank"
-                            rel="noreferrer"
+                            rel="noopener noreferrer"
                             aria-label="Instagram SPARC"
                             className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#121B2B] hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center justify-center transition-colors shadow-xs"
                         >
@@ -85,17 +85,18 @@ export default function Login({ status }: LoginProps) {
                             </svg>
                         </a>
 
-                        {/* Telegram / Direct Link Button */}
-                        <button
-                            type="button"
-                            onClick={() => alert('SPARC v3.0 — Platform Orkestrasi Editorial & Pelaporan Konten HUMAS Instansi Pemerintah.')}
-                            aria-label="Informasi Sistem"
-                            className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-800 bg-slate-900 text-white dark:bg-white dark:text-slate-900 hover:opacity-90 flex items-center justify-center transition-opacity shadow-xs cursor-pointer"
+                        {/* WhatsApp Direct Link Button */}
+                        <a
+                            href="https://wa.me/6285841980107"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label="Hubungi WhatsApp Bantuan"
+                            className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-800 bg-slate-900 text-white dark:bg-white dark:text-slate-900 hover:opacity-90 flex items-center justify-center transition-opacity shadow-xs"
                         >
                             <svg className="w-4 h-4 fill-current rotate-45 -translate-y-0.5" viewBox="0 0 24 24">
                                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                             </svg>
-                        </button>
+                        </a>
                     </div>
                 </header>
 
@@ -248,11 +249,9 @@ export default function Login({ status }: LoginProps) {
                             <span className="text-xs text-slate-400 dark:text-slate-500">
                                 Mengalami kendala masuk?{' '}
                                 <a
-                                    href="#"
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        alert('Silakan hubungi Administrator SPARC atau Kepala HUMAS untuk permohonan akses kredensial.');
-                                    }}
+                                    href="https://wa.me/6285841980107"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
                                     className="font-bold text-slate-800 dark:text-slate-200 hover:text-[#1546D8] dark:hover:text-[#7BA4FF] transition-colors"
                                 >
                                     Bantuan
