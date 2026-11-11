@@ -4,6 +4,8 @@ import {
     AlertCircle,
     BarChart3,
     CheckCircle2,
+    ChevronLeft,
+    ChevronRight,
     Clock,
     Copy,
     DollarSign,
@@ -320,7 +322,18 @@ export default function ReportIndex({
             ),
         [contentItems]
     );
-    const visibleReelsItems = useMemo(() => reelsItems.slice(0, 15), [reelsItems]);
+    const [reelsPageSize, setReelsPageSize] = useState<number>(15);
+    const [reelsPage, setReelsPage] = useState<number>(1);
+    const totalReelsPages = reelsPageSize === 0 ? 1 : Math.max(1, Math.ceil(reelsItems.length / reelsPageSize));
+    const safeReelsPage = Math.min(reelsPage, totalReelsPages);
+    const visibleReelsItems = useMemo(() => {
+        if (reelsPageSize === 0) {
+            return reelsItems;
+        }
+        const start = (safeReelsPage - 1) * reelsPageSize;
+
+        return reelsItems.slice(start, start + reelsPageSize);
+    }, [reelsItems, reelsPageSize, safeReelsPage]);
 
     // Manual Metric Form (`POST /report/metrics`)
     const metricForm = useForm({
@@ -1512,11 +1525,27 @@ export default function ReportIndex({
                                     </p>
                                 </div>
                                 {reelsItems.length > 0 && (
-                                    <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface-variant)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
-                                        {reelsItems.length > 15
-                                            ? `Menampilkan 15 dari ${reelsItems.length.toLocaleString('id-ID')} Reels`
-                                            : `${reelsItems.length} Reels`}
-                                    </span>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface-variant)] px-2.5 py-1 rounded-xl bg-[var(--md-sys-color-surface-container-high)]">
+                                            {reelsPageSize === 0 || reelsItems.length <= reelsPageSize
+                                                ? `${reelsItems.length.toLocaleString('id-ID')} Reels`
+                                                : `${((safeReelsPage - 1) * reelsPageSize + 1).toLocaleString('id-ID')}–${Math.min(safeReelsPage * reelsPageSize, reelsItems.length).toLocaleString('id-ID')} dari ${reelsItems.length.toLocaleString('id-ID')} Reels`}
+                                        </span>
+                                        <select
+                                            aria-label="Jumlah baris tabel Retensi Video Reels"
+                                            value={reelsPageSize}
+                                            onChange={(e) => {
+                                                setReelsPageSize(Number(e.target.value));
+                                                setReelsPage(1);
+                                            }}
+                                            className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer"
+                                        >
+                                            <option value={15}>15 / halaman</option>
+                                            <option value={30}>30 / halaman</option>
+                                            <option value={50}>50 / halaman</option>
+                                            <option value={0}>Semua ({reelsItems.length})</option>
+                                        </select>
+                                    </div>
                                 )}
                             </div>
                             <div className="overflow-x-auto">
@@ -1566,6 +1595,36 @@ export default function ReportIndex({
                                     </tbody>
                                 </table>
                             </div>
+                            {reelsItems.length > 0 && reelsPageSize > 0 && totalReelsPages > 1 && (
+                                <div className="px-4 py-3 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <span className="text-[var(--md-sys-color-on-surface-muted)]">
+                                        Halaman <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{safeReelsPage}</strong> dari{' '}
+                                        <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{totalReelsPages}</strong>
+                                    </span>
+                                    <div className="inline-flex items-center gap-1.5">
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={safeReelsPage <= 1}
+                                            icon={<ChevronLeft className="w-3.5 h-3.5" />}
+                                            onClick={() => setReelsPage((p) => Math.max(1, p - 1))}
+                                        >
+                                            Sebelumnya
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={safeReelsPage >= totalReelsPages}
+                                            onClick={() => setReelsPage((p) => Math.min(totalReelsPages, p + 1))}
+                                        >
+                                            Berikutnya
+                                            <ChevronRight className="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Active 24-Hour Stories */}
