@@ -1022,6 +1022,11 @@ class InstagramGraphService
                 'views_28d' => null,
                 'accounts_engaged_28d' => null,
                 'total_interactions_28d' => null,
+                'profile_views_28d' => null,
+                'reach_non_followers' => null,
+                'reach_followers' => null,
+                'views_non_followers' => null,
+                'views_followers' => null,
                 'best_posting_hours' => ['11:30 WIB', '16:30 WIB', '19:30 WIB'],
                 'best_hours_source' => 'benchmark_humas',
                 'hourly_active_wib' => [],
@@ -1030,14 +1035,13 @@ class InstagramGraphService
 
             // 1. Account-level 28-day insights (v21/v22 compatible)
             $insightsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
-                'metric' => 'reach,views,accounts_engaged,total_interactions',
+                'metric' => 'reach,views,accounts_engaged,total_interactions,profile_views',
                 'metric_type' => 'total_value',
                 'period' => 'day',
                 'since' => now()->subDays(28)->timestamp,
                 'until' => now()->timestamp,
                 'access_token' => $this->accessToken,
             ]);
-
             if (! $insightsResp->successful()) {
                 $insightsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
                     'metric' => 'reach',
@@ -1071,9 +1075,50 @@ class InstagramGraphService
                             $accountMetrics['accounts_engaged_28d'] = $val;
                         } elseif ($mName === 'total_interactions') {
                             $accountMetrics['total_interactions_28d'] = $val;
+                        } elseif ($mName === 'profile_views') {
+                            $accountMetrics['profile_views_28d'] = $val;
                         }
                     }
                 }
+            }
+
+            // 1b. Follower vs Non-Follower breakdown (Penonton Baru / Non-Followers)
+            try {
+                $followBreakResp = $this->metaHttp(15, 10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+                    'metric' => 'reach,views',
+                    'period' => 'day',
+                    'since' => now()->subDays(28)->timestamp,
+                    'until' => now()->timestamp,
+                    'breakdown' => 'follow_type',
+                    'metric_type' => 'total_value',
+                    'access_token' => $this->accessToken,
+                ]);
+                if ($followBreakResp->successful()) {
+                    foreach ((array) ($followBreakResp->json('data') ?? []) as $bdRow) {
+                        $bdMetric = (string) ($bdRow['name'] ?? '');
+                        foreach ((array) ($bdRow['total_value']['breakdowns'] ?? []) as $bdItem) {
+                            foreach ((array) ($bdItem['results'] ?? []) as $rItem) {
+                                $dim = strtoupper((string) ($rItem['dimension_values'][0] ?? ''));
+                                $val = (int) ($rItem['value'] ?? 0);
+                                if ($bdMetric === 'reach') {
+                                    if ($dim === 'NON_FOLLOWER') {
+                                        $accountMetrics['reach_non_followers'] = $val;
+                                    } elseif ($dim === 'FOLLOWER') {
+                                        $accountMetrics['reach_followers'] = $val;
+                                    }
+                                } elseif ($bdMetric === 'views') {
+                                    if ($dim === 'NON_FOLLOWER') {
+                                        $accountMetrics['views_non_followers'] = $val;
+                                    } elseif ($dim === 'FOLLOWER') {
+                                        $accountMetrics['views_followers'] = $val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable) {
+                // Non-fatal if follow_type breakdown is unsupported on specific accounts
             }
 
             // 2. Online followers hourly distribution -> convert PST (UTC-8) to WIB (UTC+7 = +15h)

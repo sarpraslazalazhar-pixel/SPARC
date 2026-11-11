@@ -1224,6 +1224,18 @@ export default function DashboardIndex({
                                                 • Reach 28h: {igDash.accountInsights.reach_28d.toLocaleString('id-ID')}
                                             </span>
                                         )}
+                                    {igDash.accountInsights?.reach_non_followers !== undefined &&
+                                        igDash.accountInsights.reach_non_followers !== null && (
+                                            <span className="sparc-code-id text-[11px] font-bold text-blue-600 dark:text-blue-400">
+                                                • Penonton Baru: {igDash.accountInsights.reach_non_followers.toLocaleString('id-ID')} akun
+                                            </span>
+                                        )}
+                                    {igDash.accountInsights?.profile_views_28d !== undefined &&
+                                        igDash.accountInsights.profile_views_28d !== null && (
+                                            <span className="sparc-code-id text-[11px] font-bold text-purple-600 dark:text-purple-400">
+                                                • {igDash.accountInsights.profile_views_28d.toLocaleString('id-ID')} kunjungan profil
+                                            </span>
+                                        )}
                                 </div>
                                 {(igDash.bestPostingHours?.length ?? 0) > 0 && (
                                     <div className="flex flex-wrap items-center gap-1.5 mt-0.5 text-[11px]">

@@ -910,6 +910,25 @@ export default function ReportIndex({
                                                     : '—'}
                                             </strong>
                                         </span>
+                                        {igAccount.accountInsights?.reach_non_followers !== undefined &&
+                                            igAccount.accountInsights.reach_non_followers !== null && (
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-700 dark:text-blue-300 font-bold text-[11px]">
+                                                    <Users className="w-3 h-3 text-blue-600" />
+                                                    Penonton Baru: {igAccount.accountInsights.reach_non_followers.toLocaleString('id-ID')} akun
+                                                    {igAccount.accountInsights.views_non_followers !== null &&
+                                                        igAccount.accountInsights.views_non_followers !== undefined &&
+                                                        ` (${igAccount.accountInsights.views_non_followers.toLocaleString('id-ID')} views)`}
+                                                </span>
+                                            )}
+                                        {igAccount.accountInsights?.profile_views_28d !== undefined &&
+                                            igAccount.accountInsights.profile_views_28d !== null && (
+                                                <span>
+                                                    Kunjungan Profil:{' '}
+                                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                                        {igAccount.accountInsights.profile_views_28d.toLocaleString('id-ID')}
+                                                    </strong>
+                                                </span>
+                                            )}
                                     </div>
 
                                     {(igAccount.bestPostingHours?.length ?? 0) > 0 && (

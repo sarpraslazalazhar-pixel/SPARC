@@ -76,6 +76,11 @@ export interface InstagramAccountInsights {
     views_28d?: number | null;
     accounts_engaged_28d?: number | null;
     total_interactions_28d?: number | null;
+    profile_views_28d?: number | null;
+    reach_non_followers?: number | null;
+    reach_followers?: number | null;
+    views_non_followers?: number | null;
+    views_followers?: number | null;
     best_posting_hours?: string[];
     best_hours_source?: 'instagram_audience' | 'benchmark_humas';
     hourly_active_wib?: Record<string, number>;

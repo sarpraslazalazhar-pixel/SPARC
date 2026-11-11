@@ -169,12 +169,45 @@ class InstagramMaxIntegrationTest extends TestCase
                     ],
                 ],
             ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/insights*breakdown=follow_type*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'reach',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['follow_type'],
+                                    'results' => [
+                                        ['dimension_values' => ['NON_FOLLOWER'], 'value' => 12400],
+                                        ['dimension_values' => ['FOLLOWER'], 'value' => 71800],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                    [
+                        'name' => 'views',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['follow_type'],
+                                    'results' => [
+                                        ['dimension_values' => ['NON_FOLLOWER'], 'value' => 28500],
+                                        ['dimension_values' => ['FOLLOWER'], 'value' => 101000],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
             'https://graph.facebook.com/v21.0/17841400111222/insights*' => Http::response([
                 'data' => [
                     ['name' => 'reach', 'total_value' => ['value' => 84200]],
                     ['name' => 'views', 'total_value' => ['value' => 129500]],
                     ['name' => 'accounts_engaged', 'total_value' => ['value' => 9430]],
                     ['name' => 'total_interactions', 'total_value' => ['value' => 11200]],
+                    ['name' => 'profile_views', 'total_value' => ['value' => 450]],
                 ],
             ], 200),
             'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
@@ -213,6 +246,11 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertSame(312, $conn->media_count);
         $this->assertSame(84200, $conn->account_insights['reach_28d'] ?? null);
         $this->assertSame(129500, $conn->account_insights['views_28d'] ?? null);
+        $this->assertSame(450, $conn->account_insights['profile_views_28d'] ?? null);
+        $this->assertSame(12400, $conn->account_insights['reach_non_followers'] ?? null);
+        $this->assertSame(71800, $conn->account_insights['reach_followers'] ?? null);
+        $this->assertSame(28500, $conn->account_insights['views_non_followers'] ?? null);
+        $this->assertSame(101000, $conn->account_insights['views_followers'] ?? null);
         $this->assertSame(
             ['19:00 WIB', '16:00 WIB', '11:00 WIB'],
             $conn->account_insights['best_posting_hours'] ?? []
