@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Head, router, usePage } from '@inertiajs/react';
 import {
     BarChart3,
+    ChevronLeft,
+    ChevronRight,
     ExternalLink,
     Eye,
     Images,
@@ -22,6 +24,28 @@ import type { SparcContentItem, SparcTeamMember } from '@/types/sparc';
 interface InstagramLibraryPageProps {
     today?: string;
     contentItems?: SparcContentItem[];
+    monthOptions?: string[];
+    kpi?: {
+        totalPosts: number;
+        measuredCount: number;
+        totalReach: number | null;
+        totalViews: number | null;
+        avgEr: number | null;
+    };
+    pagination?: {
+        currentPage: number;
+        lastPage: number;
+        perPage: number;
+        total: number;
+        from: number;
+        to: number;
+    };
+    filters?: {
+        q?: string;
+        month?: string;
+        format?: string;
+        sort?: string;
+    };
     team?: SparcTeamMember[];
 }
 
@@ -61,25 +85,85 @@ function metric(value: number | null | undefined): string {
 export default function InstagramLibraryIndex({
     today = '2026-10-27',
     contentItems = [],
+    monthOptions: serverMonthOptions,
+    kpi: serverKpi,
+    pagination: serverPagination,
+    filters: serverFilters,
     team = [],
 }: InstagramLibraryPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
     const { success: toastSuccess, error: toastError } = useToast();
+    const isServerPaginated = Boolean(serverPagination && serverKpi);
 
-    const [searchQuery, setSearchQuery] = useState('');
-    const [monthFilter, setMonthFilter] = useState('all');
-    const [formatFilter, setFormatFilter] = useState<'all' | 'reels' | 'feed' | 'carousel'>('all');
-    const [sortBy, setSortBy] = useState<'newest' | 'reach' | 'views' | 'er'>('newest');
+    const [searchQuery, setSearchQuery] = useState(serverFilters?.q ?? '');
+    const [monthFilter, setMonthFilter] = useState(serverFilters?.month ?? 'all');
+    const [formatFilter, setFormatFilter] = useState<'all' | 'reels' | 'feed' | 'carousel'>(
+        (serverFilters?.format as 'all' | 'reels' | 'feed' | 'carousel') || 'all'
+    );
+    const [sortBy, setSortBy] = useState<'newest' | 'reach' | 'views' | 'er'>(
+        (serverFilters?.sort as 'newest' | 'reach' | 'views' | 'er') || 'newest'
+    );
     const [visibleCount, setVisibleCount] = useState(PAGE_BATCH_SIZE);
     const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncProgressCount, setSyncProgressCount] = useState(0);
 
+    const visitWithQuery = (next: {
+        q?: string;
+        month?: string;
+        format?: string;
+        sort?: string;
+        page?: number;
+    }) => {
+        if (!isServerPaginated) {
+            return;
+        }
+        const qVal = (next.q ?? searchQuery).trim();
+        const monthVal = next.month ?? monthFilter;
+        const formatVal = next.format ?? formatFilter;
+        const sortVal = next.sort ?? sortBy;
+        const pageVal = next.page ?? 1;
+
+        const params: Record<string, string | number> = {};
+        if (qVal !== '') {
+            params.q = qVal;
+        }
+        if (monthVal !== 'all') {
+            params.month = monthVal;
+        }
+        if (formatVal !== 'all') {
+            params.format = formatVal;
+        }
+        if (sortVal !== 'newest') {
+            params.sort = sortVal;
+        }
+        if (pageVal > 1) {
+            params.page = pageVal;
+        }
+
+        router.get('/instagram/library', params, {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        });
+    };
+
     useEffect(() => {
         setVisibleCount(PAGE_BATCH_SIZE);
-    }, [searchQuery, monthFilter, formatFilter, sortBy]);
+        if (!isServerPaginated) {
+            return;
+        }
+        if (searchQuery === (serverFilters?.q ?? '')) {
+            return;
+        }
+        const timer = window.setTimeout(() => {
+            visitWithQuery({ q: searchQuery, page: 1 });
+        }, 350);
 
+        return () => window.clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchQuery]);
     const handleSyncInstagram = async () => {
         setIsSyncing(true);
         setSyncProgressCount(0);
@@ -100,6 +184,9 @@ export default function InstagramLibraryIndex({
     };
 
     const monthOptions = useMemo(() => {
+        if (serverMonthOptions && serverMonthOptions.length > 0) {
+            return serverMonthOptions;
+        }
         const set = new Set<string>();
         contentItems.forEach((item) => {
             const ym = (item.publishDate || '').slice(0, 7);
@@ -109,9 +196,12 @@ export default function InstagramLibraryIndex({
         });
 
         return Array.from(set).sort((a, b) => b.localeCompare(a));
-    }, [contentItems]);
+    }, [serverMonthOptions, contentItems]);
 
     const filteredItems = useMemo(() => {
+        if (isServerPaginated) {
+            return contentItems;
+        }
         const q = searchQuery.trim().toLowerCase();
 
         const filtered = contentItems.filter((item) => {
@@ -150,9 +240,18 @@ export default function InstagramLibraryIndex({
 
             return (erValue(b) ?? -1) - (erValue(a) ?? -1);
         });
-    }, [contentItems, searchQuery, monthFilter, formatFilter, sortBy]);
+    }, [isServerPaginated, contentItems, searchQuery, monthFilter, formatFilter, sortBy]);
 
     const kpi = useMemo(() => {
+        if (serverKpi) {
+            return {
+                totalPosts: serverKpi.totalPosts,
+                totalReach: serverKpi.totalReach !== null ? serverKpi.totalReach.toLocaleString('id-ID') : '—',
+                measuredCount: serverKpi.measuredCount,
+                totalViews: serverKpi.totalViews !== null ? serverKpi.totalViews.toLocaleString('id-ID') : '—',
+                avgEr: serverKpi.avgEr !== null ? `${serverKpi.avgEr.toFixed(1)}%` : '—',
+            };
+        }
         const reachItems = filteredItems.filter((i) => i.reach !== null && i.reach !== undefined);
         const totalReach = reachItems.reduce((sum, i) => sum + (i.reach ?? 0), 0);
         const totalViews = filteredItems.reduce((sum, i) => sum + (i.views ?? 0), 0);
@@ -167,14 +266,15 @@ export default function InstagramLibraryIndex({
             totalViews: filteredItems.length > 0 ? totalViews.toLocaleString('id-ID') : '—',
             avgEr: erReachSum > 0 ? `${((erInteractionSum / erReachSum) * 100).toFixed(1)}%` : '—',
         };
-    }, [filteredItems]);
+    }, [serverKpi, filteredItems]);
 
     const visibleItems = useMemo(
-        () => filteredItems.slice(0, visibleCount),
-        [filteredItems, visibleCount]
+        () => (isServerPaginated ? filteredItems : filteredItems.slice(0, visibleCount)),
+        [isServerPaginated, filteredItems, visibleCount]
     );
-    const remainingCount = Math.max(0, filteredItems.length - visibleItems.length);
-
+    const remainingCount = isServerPaginated
+        ? 0
+        : Math.max(0, filteredItems.length - visibleItems.length);
     const activeDetailItem = useMemo(
         () => (activeDetailId ? contentItems.find((i) => i.id === activeDetailId) ?? null : null),
         [activeDetailId, contentItems]
@@ -274,7 +374,11 @@ export default function InstagramLibraryIndex({
                     <select
                         aria-label="Filter bulan tayang"
                         value={monthFilter}
-                        onChange={(e) => setMonthFilter(e.target.value)}
+                        onChange={(e) => {
+                            const v = e.target.value;
+                            setMonthFilter(v);
+                            visitWithQuery({ month: v, page: 1 });
+                        }}
                         className="h-9 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer capitalize"
                     >
                         <option value="all">Semua Bulan</option>
@@ -288,7 +392,11 @@ export default function InstagramLibraryIndex({
                     <select
                         aria-label="Filter format konten"
                         value={formatFilter}
-                        onChange={(e) => setFormatFilter(e.target.value as typeof formatFilter)}
+                        onChange={(e) => {
+                            const v = e.target.value as typeof formatFilter;
+                            setFormatFilter(v);
+                            visitWithQuery({ format: v, page: 1 });
+                        }}
                         className="h-9 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer"
                     >
                         <option value="all">Format: Semua</option>
@@ -300,7 +408,11 @@ export default function InstagramLibraryIndex({
                     <select
                         aria-label="Urutkan postingan"
                         value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                        onChange={(e) => {
+                            const v = e.target.value as typeof sortBy;
+                            setSortBy(v);
+                            visitWithQuery({ sort: v, page: 1 });
+                        }}
                         className="h-9 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer"
                     >
                         <option value="newest">Urutkan: Terbaru</option>
@@ -311,7 +423,7 @@ export default function InstagramLibraryIndex({
                 </div>
 
                 {/* Instagram Library Table */}
-                {contentItems.length === 0 ? (
+                {kpi.totalPosts === 0 && !searchQuery && monthFilter === 'all' && formatFilter === 'all' ? (
                     <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] p-12 text-center space-y-2 shadow-[var(--md-elevation-1)]">
                         <Images className="w-9 h-9 text-[var(--md-sys-color-on-surface-muted)] mx-auto" />
                         <p className="text-sm font-semibold text-[var(--md-sys-color-on-surface)]">
@@ -430,17 +542,57 @@ export default function InstagramLibraryIndex({
                             </table>
                         </div>
 
-                        {remainingCount > 0 && (
-                            <div className="p-4 border-t border-[var(--md-sys-color-outline-variant)] flex justify-center">
-                                <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="sm"
-                                    onClick={() => setVisibleCount((c) => c + PAGE_BATCH_SIZE)}
-                                >
-                                    Tampilkan {PAGE_BATCH_SIZE} lagi (sisa {remainingCount.toLocaleString('id-ID')})
-                                </Button>
+                        {isServerPaginated && serverPagination ? (
+                            <div className="px-4 py-3 border-t border-[var(--md-sys-color-outline-variant)] flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <span className="text-[var(--md-sys-color-on-surface-muted)]">
+                                    Menampilkan{' '}
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {serverPagination.from.toLocaleString('id-ID')}–{serverPagination.to.toLocaleString('id-ID')}
+                                    </strong>{' '}
+                                    dari{' '}
+                                    <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                        {serverPagination.total.toLocaleString('id-ID')}
+                                    </strong>{' '}
+                                    postingan • Halaman {serverPagination.currentPage} dari {serverPagination.lastPage}
+                                </span>
+                                {serverPagination.lastPage > 1 && (
+                                    <div className="inline-flex items-center gap-1.5">
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={serverPagination.currentPage <= 1}
+                                            icon={<ChevronLeft className="w-3.5 h-3.5" />}
+                                            onClick={() => visitWithQuery({ page: serverPagination.currentPage - 1 })}
+                                        >
+                                            Sebelumnya
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            disabled={serverPagination.currentPage >= serverPagination.lastPage}
+                                            onClick={() => visitWithQuery({ page: serverPagination.currentPage + 1 })}
+                                        >
+                                            Berikutnya
+                                            <ChevronRight className="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
+                        ) : (
+                            remainingCount > 0 && (
+                                <div className="p-4 border-t border-[var(--md-sys-color-outline-variant)] flex justify-center">
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => setVisibleCount((c) => c + PAGE_BATCH_SIZE)}
+                                    >
+                                        Tampilkan {PAGE_BATCH_SIZE} lagi (sisa {remainingCount.toLocaleString('id-ID')})
+                                    </Button>
+                                </div>
+                            )
                         )}
                     </div>
                 )}

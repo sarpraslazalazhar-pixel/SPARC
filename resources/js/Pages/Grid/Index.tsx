@@ -79,12 +79,14 @@ interface GridIndexProps {
     igProfile?: SparcSystemSettings['instagram'];
     plannedSlots?: PlannedGridSlot[];
     livePosts?: LiveInstagramPostTile[];
+    totalLiveCount?: number;
 }
 
 export default function GridIndex({
     igProfile,
     plannedSlots: initialPlanned = [],
     livePosts = [],
+    totalLiveCount,
 }: GridIndexProps) {
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
@@ -105,6 +107,7 @@ export default function GridIndex({
     const [isSyncingIg, setIsSyncingIg] = useState(false);
     const [syncProgressCount, setSyncProgressCount] = useState(0);
     const [visibleLiveCount, setVisibleLiveCount] = useState(30);
+    const [isLoadingMoreLive, setIsLoadingMoreLive] = useState(false);
     const [isDeletingSlot, setIsDeletingSlot] = useState(false);
 
     const slotForm = useForm<{
@@ -644,7 +647,7 @@ export default function GridIndex({
                                     <div className="flex items-center gap-2">
                                         <Grid3x3 className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
                                         <h3 className="text-xs font-extrabold uppercase tracking-wider text-[var(--md-sys-color-on-surface)]">
-                                            Feed Instagram Asli — {livePosts.length} Kiriman Tayang
+                                            Feed Instagram Asli — {(totalLiveCount ?? livePosts.length).toLocaleString('id-ID')} Kiriman Tayang
                                         </h3>
                                     </div>
                                     <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
@@ -761,15 +764,36 @@ export default function GridIndex({
                                             </div>
                                         ))}
                                     </div>
-                                    {livePosts.length > visibleLiveCount && (
+                                    {(livePosts.length > visibleLiveCount || (totalLiveCount ?? livePosts.length) > livePosts.length) && (
                                         <div className="flex justify-center pt-1">
                                             <Button
                                                 type="button"
                                                 variant="secondary"
                                                 size="sm"
-                                                onClick={() => setVisibleLiveCount((c) => c + 30)}
+                                                isLoading={isLoadingMoreLive}
+                                                onClick={() => {
+                                                    if (livePosts.length > visibleLiveCount) {
+                                                        setVisibleLiveCount((c) => c + 30);
+                                                    } else {
+                                                        const nextLimit = livePosts.length + 60;
+                                                        setIsLoadingMoreLive(true);
+                                                        router.get(
+                                                            '/grid',
+                                                            { live_limit: nextLimit },
+                                                            {
+                                                                preserveState: true,
+                                                                preserveScroll: true,
+                                                                only: ['livePosts', 'totalLiveCount'],
+                                                                onFinish: () => {
+                                                                    setVisibleLiveCount(nextLimit);
+                                                                    setIsLoadingMoreLive(false);
+                                                                },
+                                                            }
+                                                        );
+                                                    }
+                                                }}
                                             >
-                                                Tampilkan 30 kiriman lagi (sisa {(livePosts.length - visibleLiveCount).toLocaleString('id-ID')})
+                                                Tampilkan kiriman lebih lama (sisa {Math.max(0, (totalLiveCount ?? livePosts.length) - Math.min(visibleLiveCount, livePosts.length)).toLocaleString('id-ID')})
                                             </Button>
                                         </div>
                                     )}

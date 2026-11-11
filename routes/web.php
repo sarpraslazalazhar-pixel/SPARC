@@ -105,7 +105,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/report/metrics/import-csv', [WorkspaceV3Controller::class, 'importReportCsv'])->name('report.metrics.csv');
 
     Route::get('/analytics', function (Request $request) {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request, ['includeRelations' => false]);
+        $state = WorkspaceV3Controller::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 200]);
 
         return Inertia::render('Analytics/Index', [
             'today' => WorkspaceV3Controller::TODAY,

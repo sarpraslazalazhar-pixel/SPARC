@@ -375,10 +375,15 @@ class InstagramOperationsController extends Controller
     public function libraryIndex(Request $request): Response
     {
         WorkspaceV3Controller::resolveAuthContextData($request);
+        $pageData = WorkspaceV3Controller::queryInstagramLibraryPage($request, 50);
 
         return Inertia::render('InstagramLibrary/Index', [
             'today' => now()->toDateString(),
-            'contentItems' => WorkspaceV3Controller::loadInstagramLibraryItems(),
+            'contentItems' => $pageData['contentItems'],
+            'monthOptions' => $pageData['monthOptions'],
+            'kpi' => $pageData['kpi'],
+            'pagination' => $pageData['pagination'],
+            'filters' => $pageData['filters'],
             'team' => WorkspaceV3Controller::loadRealTeam(),
         ]);
     }
@@ -793,6 +798,8 @@ class InstagramOperationsController extends Controller
         $igSettings = WorkspaceV3Controller::resolveLightweightInstagramStatus($request);
         $plannedSlots = [];
         $livePosts = [];
+        $totalLiveCount = 0;
+        $liveLimit = min(600, max(60, (int) $request->query('live_limit', 60)));
 
         if (Schema::hasTable('content_items')) {
 
@@ -833,13 +840,7 @@ class InstagramOperationsController extends Controller
                 ];
             }
 
-            $publishedItems = ContentItem::query()
-                ->select([
-                    'id', 'content_id', 'title', 'format',
-                    'ig_thumbnail_url', 'ig_media_url', 'result_design_url',
-                    'published_url', 'publish_date', 'reach', 'views',
-                    'likes', 'comments_count', 'saves', 'shares',
-                ])
+            $liveBaseQuery = ContentItem::query()
                 ->where('platform', 'instagram')
                 ->where('status', 'published')
                 ->where(function ($q) {
@@ -847,12 +848,22 @@ class InstagramOperationsController extends Controller
                         ->orWhereNotNull('ig_media_url')
                         ->orWhereNotNull('ig_thumbnail_url')
                         ->orWhereNotNull('published_url');
-                })
+                });
+
+            $totalLiveCount = (clone $liveBaseQuery)->count();
+
+            $publishedItems = $liveBaseQuery
+                ->select([
+                    'id', 'content_id', 'title', 'format',
+                    'ig_thumbnail_url', 'ig_media_url', 'result_design_url',
+                    'published_url', 'publish_date', 'reach', 'views',
+                    'likes', 'comments_count', 'saves', 'shares',
+                ])
                 ->orderByDesc('publish_date')
                 ->orderByDesc('publish_time')
                 ->orderByDesc('id')
+                ->limit($liveLimit)
                 ->get();
-
             foreach ($publishedItems as $item) {
                 $livePosts[] = [
                     'id' => 'live-'.$item->id,
@@ -906,6 +917,7 @@ class InstagramOperationsController extends Controller
         return Inertia::render('Grid/Index', [
             'igProfile' => $igSettings,
             'plannedSlots' => array_values($plannedSlots),
+            'totalLiveCount' => $totalLiveCount,
             'livePosts' => array_values($livePosts),
         ]);
     }

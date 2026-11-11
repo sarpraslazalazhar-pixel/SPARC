@@ -21,6 +21,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -35,6 +36,18 @@ class WorkspaceV3Controller extends Controller
      * Operational reference date for consistent deadline & schedule evaluation.
      */
     public const TODAY = '2026-10-27';
+
+    private static function hasTableCached(Request $request, string $table): bool
+    {
+        $key = '_sparc_tbl_'.$table;
+        if ($request->attributes->has($key)) {
+            return (bool) $request->attributes->get($key);
+        }
+        $exists = Schema::hasTable($table);
+        $request->attributes->set($key, $exists);
+
+        return $exists;
+    }
 
     /**
      * Ensure the SPARC v3 operational workspace state is initialized in session.
@@ -134,15 +147,9 @@ class WorkspaceV3Controller extends Controller
 
         $sessionIg = $request->hasSession() ? $request->session()->get('sparc_v3.settings.instagram', []) : [];
         $conn = null;
-        if (Schema::hasTable('instagram_connections')) {
+        if (self::hasTableCached($request, 'instagram_connections')) {
             try {
-                $conn = InstagramConnection::query()
-                    ->select([
-                        'id', 'connected', 'username', 'name', 'biography', 'website',
-                        'profile_picture_url', 'followers_count', 'media_count',
-                        'last_synced_at', 'granted_scopes', 'requested_scopes', 'account_insights',
-                    ])
-                    ->first();
+                $conn = InstagramConnection::current();
             } catch (\Throwable) {
                 $conn = null;
             }
@@ -202,10 +209,18 @@ class WorkspaceV3Controller extends Controller
 
         $reviewQueue = 0;
         $readyQueue = 0;
-        if (Schema::hasTable('content_items')) {
+        if (self::hasTableCached($request, 'content_items')) {
             try {
-                $reviewQueue = ContentItem::query()->where('status', 'review_approval')->count();
-                $readyQueue = ContentItem::query()->where('status', 'ready_to_publish')->count();
+                $counts = ContentItem::query()
+                    ->whereIn('status', ['review_approval', 'ready_to_publish'])
+                    ->selectRaw("
+                        SUM(CASE WHEN status = 'review_approval' THEN 1 ELSE 0 END) as review_cnt,
+                        SUM(CASE WHEN status = 'ready_to_publish' THEN 1 ELSE 0 END) as ready_cnt
+                    ")
+                    ->toBase()
+                    ->first();
+                $reviewQueue = (int) ($counts->review_cnt ?? 0);
+                $readyQueue = (int) ($counts->ready_cnt ?? 0);
             } catch (\Throwable) {
                 $reviewQueue = 0;
                 $readyQueue = 0;
@@ -230,7 +245,7 @@ class WorkspaceV3Controller extends Controller
         }
 
         $pendingIncoming = 0;
-        if (Schema::hasTable('haloapu_tickets')) {
+        if (self::hasTableCached($request, 'haloapu_tickets')) {
             try {
                 /** @var array<string, string> $overrides */
                 $overrides = $request->hasSession() ? (array) $request->session()->get('sparc.ticket_overrides', []) : [];
@@ -251,7 +266,7 @@ class WorkspaceV3Controller extends Controller
         }
 
         $unrepliedComments = 0;
-        if (Schema::hasTable('instagram_comments')) {
+        if (self::hasTableCached($request, 'instagram_comments')) {
             try {
                 $unrepliedComments = InstagramComment::query()
                     ->whereNull('parent_ig_comment_id')
@@ -282,23 +297,185 @@ class WorkspaceV3Controller extends Controller
      *
      * @return array<int, array<string, mixed>>
      */
-    public static function loadInstagramLibraryItems(): array
+    public static function deduplicateInstagramContentItems(): array
     {
         if (! Schema::hasTable('content_items')) {
-            return [];
+            return ['duplicate_groups' => 0, 'removed_rows' => 0, 'unique_ig_posts' => 0, 'manual_non_ig_posts' => 0, 'total_posts' => 0];
         }
 
-        $rows = ContentItem::query()
+        $dupMediaIds = ContentItem::withTrashed()
             ->whereNotNull('ig_media_id')
-            ->select([
-                'id', 'content_id', 'title', 'status', 'priority',
-                'platform', 'format', 'pillar', 'pic_name', 'pic_role', 'pic_avatar',
-                'production_deadline', 'publish_date', 'publish_time', 'caption',
-                'published_url', 'ig_media_id', 'ig_thumbnail_url',
-                'reach', 'views', 'likes', 'comments_count', 'shares', 'saves',
-            ])
-            ->orderByDesc('publish_date')
-            ->orderByDesc('id')
+            ->where('ig_media_id', '!=', '')
+            ->select('ig_media_id')
+            ->groupBy('ig_media_id')
+            ->havingRaw('COUNT(*) > 1')
+            ->pluck('ig_media_id')
+            ->all();
+
+        $removedRows = 0;
+        foreach ($dupMediaIds as $mediaId) {
+            $candidates = ContentItem::withTrashed()
+                ->where('ig_media_id', $mediaId)
+                ->orderByRaw('CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END ASC')
+                ->orderByRaw('CASE WHEN ticket_id IS NOT NULL THEN 0 ELSE 1 END ASC')
+                ->orderByDesc('reach')
+                ->orderBy('id')
+                ->get();
+
+            $winner = $candidates->first();
+            if (! $winner) {
+                continue;
+            }
+
+            $loserIds = $candidates->slice(1)->pluck('id')->all();
+            if (empty($loserIds)) {
+                continue;
+            }
+
+            DB::transaction(function () use ($winner, $loserIds, &$removedRows): void {
+                if (Schema::hasTable('instagram_comments')) {
+                    DB::table('instagram_comments')->whereIn('content_item_id', $loserIds)->update(['content_item_id' => $winner->id]);
+                }
+                if (Schema::hasTable('instagram_schedules')) {
+                    DB::table('instagram_schedules')->whereIn('content_item_id', $loserIds)->update(['content_item_id' => $winner->id]);
+                }
+                if (Schema::hasTable('haloapu_tickets')) {
+                    DB::table('haloapu_tickets')->whereIn('content_item_id', $loserIds)->update(['content_item_id' => $winner->id]);
+                }
+                if (Schema::hasTable('content_tasks')) {
+                    DB::table('content_tasks')->whereIn('content_item_id', $loserIds)->delete();
+                }
+                if (Schema::hasTable('content_comments')) {
+                    DB::table('content_comments')->whereIn('content_item_id', $loserIds)->delete();
+                }
+                if (Schema::hasTable('content_workflow_histories')) {
+                    DB::table('content_workflow_histories')->whereIn('content_item_id', $loserIds)->delete();
+                }
+                $removedRows += DB::table('content_items')->whereIn('id', $loserIds)->delete();
+            });
+        }
+
+        $uniqueIg = ContentItem::query()->whereNotNull('ig_media_id')->count();
+        $manualNonIg = ContentItem::query()->whereNull('ig_media_id')->count();
+
+        return [
+            'duplicate_groups' => count($dupMediaIds),
+            'removed_rows' => $removedRows,
+            'unique_ig_posts' => $uniqueIg,
+            'manual_non_ig_posts' => $manualNonIg,
+            'total_posts' => $uniqueIg + $manualNonIg,
+        ];
+    }
+
+    /**
+     * Query server-side paginated Instagram library rows + SQL KPI aggregates (scales to 10,000+ posts without lag).
+     *
+     * @return array<string, mixed>
+     */
+    public static function queryInstagramLibraryPage(Request $request, int $perPage = 50): array
+    {
+        $q = trim((string) $request->query('q', ''));
+        $month = trim((string) $request->query('month', 'all')) ?: 'all';
+        $format = trim((string) $request->query('format', 'all')) ?: 'all';
+        $sort = trim((string) $request->query('sort', 'newest')) ?: 'newest';
+        if (! in_array($sort, ['newest', 'reach', 'views', 'er'], true)) {
+            $sort = 'newest';
+        }
+        $page = max(1, (int) $request->query('page', 1));
+
+        if (! Schema::hasTable('content_items')) {
+            return [
+                'contentItems' => [],
+                'monthOptions' => [],
+                'kpi' => ['totalPosts' => 0, 'measuredCount' => 0, 'totalReach' => null, 'totalViews' => null, 'avgEr' => null],
+                'pagination' => ['currentPage' => 1, 'lastPage' => 1, 'perPage' => $perPage, 'total' => 0, 'from' => 0, 'to' => 0],
+                'filters' => ['q' => $q, 'month' => $month, 'format' => $format, 'sort' => $sort],
+            ];
+        }
+
+        $monthOptions = ContentItem::query()
+            ->whereNotNull('ig_media_id')
+            ->whereNotNull('publish_date')
+            ->selectRaw('DISTINCT SUBSTR(publish_date, 1, 7) as ym')
+            ->orderByDesc('ym')
+            ->toBase()
+            ->pluck('ym')
+            ->filter(static fn ($ym): bool => is_string($ym) && preg_match('/^\d{4}-\d{2}$/', $ym) === 1)
+            ->values()
+            ->all();
+
+        $baseQuery = ContentItem::query()->whereNotNull('ig_media_id');
+        if ($month !== 'all' && preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month) === 1) {
+            $monthStart = $month.'-01';
+            $nextMonthStart = Carbon::createFromFormat('Y-m', $month)->addMonthNoOverflow()->format('Y-m-01');
+            $baseQuery->where('publish_date', '>=', $monthStart)->where('publish_date', '<', $nextMonthStart);
+        } else {
+            $month = 'all';
+        }
+
+        $formatGroups = [
+            'reels' => ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+            'carousel' => ['carousel', 'carousel_feed'],
+            'feed' => ['feed', 'single', 'single_image', 'single_feed'],
+        ];
+        if (isset($formatGroups[$format])) {
+            $baseQuery->whereIn(DB::raw('LOWER(format)'), $formatGroups[$format]);
+        } else {
+            $format = 'all';
+        }
+
+        if ($q !== '') {
+            $like = '%'.str_replace(['%', '_'], ['\\%', '\\_'], $q).'%';
+            $baseQuery->where(function ($sub) use ($like): void {
+                $sub->where('title', 'like', $like)
+                    ->orWhere('caption', 'like', $like)
+                    ->orWhere('content_id', 'like', $like);
+            });
+        }
+
+        $kpiRow = (clone $baseQuery)->selectRaw('
+            COUNT(*) as total_posts,
+            COUNT(reach) as measured_count,
+            COALESCE(SUM(reach), 0) as total_reach,
+            COALESCE(SUM(views), 0) as total_views,
+            COALESCE(SUM(CASE WHEN reach > 0 THEN reach ELSE 0 END), 0) as er_reach_sum,
+            COALESCE(SUM(CASE WHEN reach > 0 THEN (COALESCE(likes, 0) + COALESCE(comments_count, 0) + COALESCE(shares, 0) + COALESCE(saves, 0)) ELSE 0 END), 0) as er_interaction_sum
+        ')->toBase()->first();
+
+        $total = (int) ($kpiRow->total_posts ?? 0);
+        $measuredCount = (int) ($kpiRow->measured_count ?? 0);
+        $totalReach = (int) ($kpiRow->total_reach ?? 0);
+        $totalViews = (int) ($kpiRow->total_views ?? 0);
+        $erReachSum = (float) ($kpiRow->er_reach_sum ?? 0);
+        $erInteractionSum = (float) ($kpiRow->er_interaction_sum ?? 0);
+        $lastPage = max(1, (int) ceil($total / $perPage));
+        $safePage = min($page, $lastPage);
+
+        $itemsQuery = (clone $baseQuery)->select([
+            'id', 'content_id', 'title', 'status', 'priority',
+            'platform', 'format', 'pillar', 'pic_name', 'pic_avatar',
+            'production_deadline', 'publish_date', 'publish_time', 'caption',
+            'published_url', 'ig_media_id', 'ig_thumbnail_url',
+            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves',
+        ]);
+
+        if ($sort === 'reach') {
+            $itemsQuery->orderByRaw('CASE WHEN reach IS NULL THEN 1 ELSE 0 END ASC')
+                ->orderByDesc('reach')
+                ->orderByDesc('id');
+        } elseif ($sort === 'views') {
+            $itemsQuery->orderByDesc('views')->orderByDesc('id');
+        } elseif ($sort === 'er') {
+            $itemsQuery->orderByRaw('CASE WHEN reach IS NULL OR reach <= 0 THEN 1 ELSE 0 END ASC')
+                ->orderByRaw('(COALESCE(likes, 0) + COALESCE(comments_count, 0) + COALESCE(shares, 0) + COALESCE(saves, 0)) * 1.0 / NULLIF(reach, 0) DESC')
+                ->orderByDesc('id');
+        } else {
+            $itemsQuery->orderByDesc('publish_date')->orderByDesc('id');
+        }
+
+        $rows = $itemsQuery
+            ->offset(($safePage - 1) * $perPage)
+            ->limit($perPage)
             ->toBase()
             ->get();
 
@@ -347,15 +524,41 @@ class WorkspaceV3Controller extends Controller
             }
             $items[] = $entry;
         }
-        unset($rows);
 
-        return $items;
+        $from = $total === 0 ? 0 : (($safePage - 1) * $perPage) + 1;
+        $to = min($total, ($safePage - 1) * $perPage + count($items));
+
+        return [
+            'contentItems' => $items,
+            'monthOptions' => $monthOptions,
+            'kpi' => [
+                'totalPosts' => $total,
+                'measuredCount' => $measuredCount,
+                'totalReach' => $measuredCount > 0 ? $totalReach : null,
+                'totalViews' => $total > 0 ? $totalViews : null,
+                'avgEr' => $erReachSum > 0 ? round(($erInteractionSum / $erReachSum) * 100, 1) : null,
+            ],
+            'pagination' => [
+                'currentPage' => $safePage,
+                'lastPage' => $lastPage,
+                'perPage' => $perPage,
+                'total' => $total,
+                'from' => $from,
+                'to' => $to,
+            ],
+            'filters' => [
+                'q' => $q,
+                'month' => $month,
+                'format' => $format,
+                'sort' => $sort,
+            ],
+        ];
     }
 
     /**
      * Ensure the SPARC v3 operational workspace state is initialized in session.
      *
-     * @param  array{includePublications?: bool, includeRelations?: bool, liteRelations?: bool, month?: string|null, currentMonth?: string|null}  $options
+     * @param  array{includePublications?: bool, includeRelations?: bool, liteRelations?: bool, month?: string|null, currentMonth?: string|null, publishedLimit?: int|null, dateFrom?: string|null, dateTo?: string|null}  $options
      * @return array<string, mixed>
      */
     public static function hydrateWorkspace(Request $request, array $options = []): array
@@ -365,15 +568,20 @@ class WorkspaceV3Controller extends Controller
         $liteRelations = (bool) ($options['liteRelations'] ?? false);
         $scopeMonth = isset($options['month']) && is_string($options['month']) ? $options['month'] : null;
         $scopeCurrentMonth = isset($options['currentMonth']) && is_string($options['currentMonth']) ? $options['currentMonth'] : null;
+        $publishedLimit = array_key_exists('publishedLimit', $options) && $options['publishedLimit'] !== null ? (int) $options['publishedLimit'] : null;
+        $dateFrom = isset($options['dateFrom']) && is_string($options['dateFrom']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $options['dateFrom']) === 1 ? $options['dateFrom'] : null;
+        $dateTo = isset($options['dateTo']) && is_string($options['dateTo']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $options['dateTo']) === 1 ? $options['dateTo'] : null;
         $cacheAttrKey = sprintf(
-            '_sparc_hydrated_workspace_%d_%d_%d_%s_%s',
+            '_sparc_hydrated_workspace_%d_%d_%d_%s_%s_%s_%s_%s',
             $includePublications ? 1 : 0,
             $includeRelations ? 1 : 0,
             $liteRelations ? 1 : 0,
             $scopeMonth ?? 'all',
-            $scopeCurrentMonth ?? 'none'
+            $scopeCurrentMonth ?? 'none',
+            $publishedLimit !== null ? (string) $publishedLimit : 'unlim',
+            $dateFrom ?? 'none',
+            $dateTo ?? 'none'
         );
-
         if ($request->isMethodSafe() && $request->attributes->has($cacheAttrKey)) {
             /** @var array<string, mixed> $cachedState */
             $cachedState = $request->attributes->get($cacheAttrKey);
@@ -516,11 +724,38 @@ class WorkspaceV3Controller extends Controller
                         });
                     }
 
-                    $rows = $rowsQuery
-                        ->orderByDesc('publish_date')
-                        ->orderByDesc('id')
-                        ->toBase()
-                        ->get();
+                    if ($publishedLimit !== null && $scopeMonth === null) {
+                        $activeRows = (clone $rowsQuery)
+                            ->where('status', '!=', 'published')
+                            ->orderByDesc('publish_date')
+                            ->orderByDesc('id')
+                            ->toBase()
+                            ->get();
+                        if ($publishedLimit > 0) {
+                            $pubQuery = (clone $rowsQuery)->where('status', 'published');
+                            if ($dateFrom !== null) {
+                                $pubQuery->where('publish_date', '>=', $dateFrom);
+                            }
+                            if ($dateTo !== null) {
+                                $pubQuery->where('publish_date', '<=', $dateTo);
+                            }
+                            $pubRows = $pubQuery
+                                ->orderByDesc('publish_date')
+                                ->orderByDesc('id')
+                                ->limit($publishedLimit)
+                                ->toBase()
+                                ->get();
+                            $rows = $activeRows->concat($pubRows);
+                        } else {
+                            $rows = $activeRows;
+                        }
+                    } else {
+                        $rows = $rowsQuery
+                            ->orderByDesc('publish_date')
+                            ->orderByDesc('id')
+                            ->toBase()
+                            ->get();
+                    }
 
                     $tasksByItemId = [];
                     if ($liteRelations && Schema::hasTable('content_tasks')) {
@@ -1179,7 +1414,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function dashboard(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['liteRelations' => true]);
+        $state = self::hydrateWorkspace($request, ['liteRelations' => true, 'publishedLimit' => 120]);
         /** @var array<int, array<string, mixed>> $publications */
         $publications = $state['publications'];
 
@@ -1191,7 +1426,7 @@ class WorkspaceV3Controller extends Controller
             'team' => $state['team'],
             'settings' => $state['settings'],
             'incomingTickets' => self::defaultIncomingTickets($request),
-            'performanceTrend' => self::buildPerformanceTrend($publications),
+            'performanceTrend' => self::buildPerformanceTrendFromDb($request->hasSession() ? $request->session()->get('sparc_v3.publications', []) : []),
             'sessionItems' => $request->session()->get('sparc.planner_items', []),
             'itemUpdates' => $request->session()->get('sparc.planner_updates', []),
             'deletedIds' => $request->session()->get('sparc.deleted_planner_ids', []),
@@ -1378,6 +1613,82 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
+     * Build trailing 6-month performance trend directly from SQL aggregates + session publications (independent of publishedLimit).
+     *
+     * @param  array<int, array<string, mixed>>  $sessionPublications
+     * @return array<int, array<string, mixed>>
+     */
+    public static function buildPerformanceTrendFromDb(array $sessionPublications): array
+    {
+        $referenceDate = Carbon::parse(self::TODAY);
+        if (now()->gt($referenceDate)) {
+            $referenceDate = now();
+        }
+        $sixMonthsStart = $referenceDate->copy()->subMonths(5)->startOfMonth()->toDateString();
+
+        $aggregatedPubs = $sessionPublications;
+        if (Schema::hasTable('content_items')) {
+            $rows = ContentItem::query()
+                ->select(['platform', 'publish_date', 'reach', 'views', 'likes', 'comments_count', 'shares', 'saves'])
+                ->where('status', 'published')
+                ->whereNotNull('publish_date')
+                ->where('publish_date', '>=', $sixMonthsStart)
+                ->toBase()
+                ->get();
+
+            foreach ($rows as $row) {
+                $reach = $row->reach !== null ? (int) $row->reach : ((int) $row->views > 0 ? (int) $row->views : 0);
+                $aggregatedPubs[] = [
+                    'platform' => (string) $row->platform,
+                    'publishedActualAt' => substr((string) $row->publish_date, 0, 10),
+                    'metrics' => [
+                        'reach' => $reach,
+                        'likes' => (int) ($row->likes ?? 0),
+                        'comments' => (int) ($row->comments_count ?? 0),
+                        'shares' => (int) ($row->shares ?? 0),
+                        'saves' => (int) ($row->saves ?? 0),
+                        'clicks' => 0,
+                    ],
+                ];
+            }
+        }
+
+        return self::buildPerformanceTrend($aggregatedPubs);
+    }
+
+    /**
+     * Build team workload directly from active (`status != 'published'`) DB items without hydrating thousands of published posts.
+     *
+     * @param  array<int, array<string, mixed>>  $team
+     * @return array<int, array<string, mixed>>
+     */
+    public static function buildRealTeamWorkloadFromDb(array $team): array
+    {
+        if (! Schema::hasTable('content_items')) {
+            return self::buildRealTeamWorkload($team, []);
+        }
+
+        $activeRows = ContentItem::query()
+            ->select(['pic_name', 'created_by', 'status', 'production_deadline', 'publish_date'])
+            ->where('status', '!=', 'published')
+            ->toBase()
+            ->get();
+
+        $mapped = [];
+        foreach ($activeRows as $row) {
+            $mapped[] = [
+                'picName' => (string) ($row->pic_name ?? ''),
+                'createdBy' => $row->created_by ? (string) $row->created_by : '',
+                'status' => (string) $row->status,
+                'productionDeadline' => $row->production_deadline ? substr((string) $row->production_deadline, 0, 10) : '',
+                'publishDate' => $row->publish_date ? substr((string) $row->publish_date, 0, 10) : '',
+            ];
+        }
+
+        return self::buildRealTeamWorkload($team, $mapped);
+    }
+
+    /**
      * Render SPARC v3 Content Plan database table (`GET /content`).
      */
     public function contentPlan(Request $request): Response
@@ -1444,7 +1755,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function calendar(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 150]);
         $contentItems = $state['contentItems'];
         usort($contentItems, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
 
@@ -1462,7 +1773,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function publishing(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
+        $state = self::hydrateWorkspace($request, ['includeRelations' => false, 'publishedLimit' => 60]);
         $igSchedules = [];
 
         if (Schema::hasTable('instagram_schedules')) {
@@ -1508,13 +1819,22 @@ class WorkspaceV3Controller extends Controller
      */
     public function report(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includeRelations' => false]);
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
+        $hasRange = is_string($dateFrom) && $dateFrom !== '' || is_string($dateTo) && $dateTo !== '';
+
+        $state = self::hydrateWorkspace($request, [
+            'includeRelations' => false,
+            'publishedLimit' => $hasRange ? 500 : 200,
+            'dateFrom' => is_string($dateFrom) ? $dateFrom : null,
+            'dateTo' => is_string($dateTo) ? $dateTo : null,
+        ]);
 
         return Inertia::render('Report/Index', [
             'today' => now()->toDateString(),
             'contentItems' => $state['contentItems'],
             'publications' => $state['publications'],
-            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
+            'team' => self::buildRealTeamWorkloadFromDb($state['team']),
             'instagramSettings' => $state['settings']['instagram'] ?? [],
         ]);
     }
@@ -1624,7 +1944,7 @@ class WorkspaceV3Controller extends Controller
      */
     public function assets(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false]);
+        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false, 'publishedLimit' => 60]);
 
         return Inertia::render('Assets/Index', [
             'assets' => $state['assets'],
@@ -1637,10 +1957,10 @@ class WorkspaceV3Controller extends Controller
      */
     public function team(Request $request): Response
     {
-        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false]);
+        $state = self::hydrateWorkspace($request, ['includePublications' => false, 'includeRelations' => false, 'publishedLimit' => 0]);
 
         return Inertia::render('Team/Index', [
-            'team' => self::buildRealTeamWorkload($state['team'], $state['contentItems']),
+            'team' => self::buildRealTeamWorkloadFromDb($state['team']),
             'contentItems' => $state['contentItems'],
         ]);
     }

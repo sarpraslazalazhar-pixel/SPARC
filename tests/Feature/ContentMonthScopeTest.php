@@ -2,14 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\WorkspaceV3Controller;
 use App\Models\ContentItem;
 use App\Models\HaloApuConnection;
 use App\Models\InstagramConnection;
 use App\Models\User;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Testing\AssertableInertia;
 use Tests\TestCase;
 
@@ -202,17 +205,35 @@ class ContentMonthScopeTest extends TestCase
             ->assertOk()
             ->assertInertia(fn (AssertableInertia $page): AssertableInertia => $page
                 ->component('InstagramLibrary/Index')
-                ->has('contentItems', 1500)
+                ->has('contentItems', 50)
+                ->where('kpi.totalPosts', 1500)
+                ->where('pagination.currentPage', 1)
+                ->where('pagination.lastPage', 30)
                 ->where('contentItems.0.hasFullDetail', false)
             );
         $libDeltaMb = (memory_get_usage(false) - $beforeMem) / (1024 * 1024);
-        $this->assertLessThan(64, $libDeltaMb, sprintf('Memory delta too high on /instagram/library: %.2f MB', $libDeltaMb));
+        $this->assertLessThan(24, $libDeltaMb, sprintf('Memory delta too high on /instagram/library: %.2f MB', $libDeltaMb));
+
+        $this->get('/instagram/library?page=2&format=reels&sort=reach')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page): AssertableInertia => $page
+                ->component('InstagramLibrary/Index')
+                ->has('contentItems', 50)
+                ->where('kpi.totalPosts', 500)
+                ->where('pagination.currentPage', 2)
+                ->where('pagination.lastPage', 10)
+            );
 
         $this->get('/content')->assertOk();
         $this->get('/')->assertOk();
         $this->get('/report')->assertOk();
-        $this->get('/grid')->assertOk();
-
+        $this->get('/grid')
+            ->assertOk()
+            ->assertInertia(fn (AssertableInertia $page): AssertableInertia => $page
+                ->component('Grid/Index')
+                ->has('livePosts', 60)
+                ->where('totalLiveCount', 1500)
+            );
         $target = ContentItem::where('ig_media_id', '9000001')->firstOrFail();
         $target->history()->create([
             'from_status' => 'inbox',
@@ -226,5 +247,42 @@ class ContentMonthScopeTest extends TestCase
             ->assertJsonPath('id', (string) $target->id)
             ->assertJsonPath('hasFullDetail', true)
             ->assertJsonPath('history.0.note', 'Detail riwayat lengkap');
+    }
+
+    public function test_deduplicate_instagram_content_items_removes_duplicate_ig_media_id_rows(): void
+    {
+        Schema::table('content_items', function (Blueprint $table): void {
+            $table->dropUnique('content_items_ig_media_id_unique');
+        });
+
+        $first = ContentItem::factory()->create([
+            'title' => 'Post Asli',
+            'platform' => 'instagram',
+            'ig_media_id' => 'dup_180999',
+            'reach' => 500,
+            'status' => 'published',
+        ]);
+        ContentItem::factory()->create([
+            'title' => 'Post Duplikat',
+            'platform' => 'instagram',
+            'ig_media_id' => 'dup_180999',
+            'reach' => 100,
+            'status' => 'published',
+        ]);
+        ContentItem::factory()->create([
+            'title' => 'Konten Manual Tim',
+            'platform' => 'instagram',
+            'ig_media_id' => null,
+            'status' => 'briefing',
+        ]);
+
+        $stats = WorkspaceV3Controller::deduplicateInstagramContentItems();
+
+        $this->assertSame(1, $stats['duplicate_groups']);
+        $this->assertSame(1, $stats['removed_rows']);
+        $this->assertSame(1, $stats['unique_ig_posts']);
+        $this->assertSame(1, $stats['manual_non_ig_posts']);
+        $this->assertSame(1, ContentItem::where('ig_media_id', 'dup_180999')->count());
+        $this->assertDatabaseHas('content_items', ['id' => $first->id, 'title' => 'Post Asli']);
     }
 }

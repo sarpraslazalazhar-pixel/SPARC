@@ -1897,12 +1897,12 @@ class InstagramGraphService
         $slimColumns = [
             'id', 'content_id', 'title', 'status', 'published_url',
             'ig_media_id', 'ig_media_url', 'ig_thumbnail_url',
-            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves', 'metrics_synced_at',
+            'reach', 'views', 'likes', 'comments_count', 'shares', 'saves', 'metrics_synced_at', 'deleted_at',
         ];
         if (count($mediaIds) <= 500) {
             $existingItems = empty($mediaIds)
                 ? collect()
-                : ContentItem::query()
+                : ContentItem::withTrashed()
                     ->select($slimColumns)
                     ->where(function ($q) use ($mediaIds): void {
                         $q->whereIn('ig_media_id', $mediaIds)
@@ -1914,7 +1914,7 @@ class InstagramGraphService
                     })
                     ->get();
         } else {
-            $existingItems = ContentItem::query()
+            $existingItems = ContentItem::withTrashed()
                 ->select($slimColumns)
                 ->where(function ($q): void {
                     $q->whereNotNull('published_url')->where('published_url', '!=', '')
@@ -2010,6 +2010,12 @@ class InstagramGraphService
                 $views = $parsed['views'];
                 $shares = $parsed['effective_shares'];
 
+                if ($matchedItem && $matchedItem->trashed()) {
+                    $skippedCount++;
+
+                    continue;
+                }
+
                 if ($matchedItem) {
                     $hasChanged = (int) $matchedItem->views !== $views
                         || (int) $matchedItem->likes !== $likes
@@ -2081,6 +2087,27 @@ class InstagramGraphService
                         ? $cachedThumbs['media_'.$mediaId]
                         : $rawThumbUrl;
                     $hasInsight = isset($insightsByMedia[$mediaId]);
+                    if ($mediaId !== '' && ($existingInDb = ContentItem::withTrashed()->where('ig_media_id', $mediaId)->first())) {
+                        if ($existingInDb->trashed()) {
+                            $skippedCount++;
+
+                            continue;
+                        }
+                        $existingByMediaId[$mediaId] = $existingInDb;
+                        $existingInDb->update([
+                            'reach' => $hasInsight ? ($parsed['reach'] ?? $existingInDb->reach) : $existingInDb->reach,
+                            'views' => $hasInsight ? $views : (int) $existingInDb->views,
+                            'likes' => $likes,
+                            'comments_count' => $comments,
+                            'shares' => $hasInsight ? $shares : (int) $existingInDb->shares,
+                            'saves' => $hasInsight ? ($parsed['saves'] ?? $existingInDb->saves) : $existingInDb->saves,
+                            'metrics_synced_at' => $hasInsight ? now() : $existingInDb->metrics_synced_at,
+                        ]);
+                        $syncedCount++;
+
+                        continue;
+                    }
+
                     $newItem = ContentItem::create([
                         'title' => $title,
                         'status' => 'published',

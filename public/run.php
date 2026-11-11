@@ -228,6 +228,10 @@ if ($isAuthenticated && isset($_POST['command'])) {
                     <input type="hidden" name="command" value="instagram:sync-metrics">
                     <button type="submit" class="btn-success" style="width: 100%;">5. Sync Semua Konten Instagram (Tanpa Batas)</button>
                 </form>
+                <form method="POST">
+                    <input type="hidden" name="command" value="instagram:deduplicate">
+                    <button type="submit" class="btn-amber" style="width: 100%;">6. Bersihkan Duplikat IG</button>
+                </form>
 
                 <form method="POST">
                     <input type="hidden" name="command" value="key:generate --show">

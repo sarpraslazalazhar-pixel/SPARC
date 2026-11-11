@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\WorkspaceV3Controller;
 use App\Models\InstagramSchedule;
 use App\Services\HaloApuClientService;
 use App\Services\InstagramGraphService;
@@ -124,6 +125,20 @@ Artisan::command('haloapu:sync-tickets', function (HaloApuClientService $service
         return 1;
     }
 })->purpose('Sinkronisasi berkala tiket Humas dari antrean REST API HaloAPU');
+
+Artisan::command('instagram:deduplicate', function (): int {
+    $stats = WorkspaceV3Controller::deduplicateInstagramContentItems();
+    $this->info(sprintf(
+        "Deduplikasi selesai:\n- Grup duplikat ditemukan: %d\n- Baris duplikat dihapus: %d\n- Postingan IG unik di SPARC: %d\n- Konten manual/non-IG: %d\n- Total baris content_items aktif: %d",
+        $stats['duplicate_groups'],
+        $stats['removed_rows'],
+        $stats['unique_ig_posts'],
+        $stats['manual_non_ig_posts'],
+        $stats['total_posts']
+    ));
+
+    return 0;
+})->purpose('Bersihkan duplikat postingan Instagram (ig_media_id ganda) dan hitung total unik');
 
 Schedule::command('instagram:process-scheduled')->everyMinute()->withoutOverlapping();
 Schedule::command('instagram:sync-metrics')->everyThirtyMinutes()->withoutOverlapping();

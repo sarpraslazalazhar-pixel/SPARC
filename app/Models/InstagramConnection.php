@@ -89,8 +89,27 @@ class InstagramConnection extends Model
     /**
      * Get the active singleton Instagram connection for the workspace.
      */
+    protected static function booted(): void
+    {
+        $flush = static function (): void {
+            if (app()->bound('request')) {
+                request()->attributes->remove('_sparc_ig_conn_current');
+            }
+        };
+        static::saved($flush);
+        static::deleted($flush);
+    }
+
     public static function current(): self
     {
+        $hasReq = app()->bound('request');
+        if ($hasReq && request()->attributes->has('_sparc_ig_conn_current')) {
+            $cached = request()->attributes->get('_sparc_ig_conn_current');
+            if ($cached instanceof self) {
+                return $cached;
+            }
+        }
+
         /** @var self|null $connection */
         $connection = static::query()->first();
 
@@ -111,6 +130,10 @@ class InstagramConnection extends Model
                 'username' => null,
                 'last_tested_at' => now(),
             ]);
+        }
+
+        if ($hasReq) {
+            request()->attributes->set('_sparc_ig_conn_current', $connection);
         }
 
         return $connection;
