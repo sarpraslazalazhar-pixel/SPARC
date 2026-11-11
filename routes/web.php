@@ -88,6 +88,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/publishing/instagram/schedules/{schedule}', [InstagramOperationsController::class, 'cancelSchedule'])->name('publishing.instagram.cancelSchedule');
 
     Route::get('/instagram/comments', [InstagramOperationsController::class, 'commentsIndex'])->name('instagram.comments.index');
+    Route::get('/instagram/library', [InstagramOperationsController::class, 'libraryIndex'])->name('instagram.library.index');
     Route::post('/instagram/comments/sync', [InstagramOperationsController::class, 'syncComments'])->name('instagram.comments.sync');
     Route::post('/instagram/comments/{comment}/reply', [InstagramOperationsController::class, 'replyComment'])->name('instagram.comments.reply');
     Route::patch('/instagram/comments/{comment}/hide', [InstagramOperationsController::class, 'toggleHideComment'])->name('instagram.comments.hide');

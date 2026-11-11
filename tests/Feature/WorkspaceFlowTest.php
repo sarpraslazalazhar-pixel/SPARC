@@ -133,6 +133,7 @@ class WorkspaceFlowTest extends TestCase
             '/planner' => 'Planner/Index',
             '/calendar' => 'Calendar/Index',
             '/publishing' => 'Publishing/Index',
+            '/instagram/library' => 'InstagramLibrary/Index',
             '/report' => 'Report/Index',
             '/analytics' => 'Analytics/Index',
             '/studio' => 'Studio/Index',

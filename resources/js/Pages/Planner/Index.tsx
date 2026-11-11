@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { ContentDetailSheet } from '@/Components/ContentDetailSheet';
+import { MonthNavigator } from '@/Components/MonthNavigator';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
 import { DroppableColumn, SortableCardItem, useKanbanSensors } from '@/Components/UI/KanbanDnd';
@@ -53,6 +54,8 @@ import type { InstitutionalActivity, SparcContentItem, SparcTeamMember } from '@
 
 interface ProductionBoardPageProps {
     today?: string;
+    month?: string;
+    currentMonth?: string;
     contentItems?: SparcContentItem[];
     activities?: InstitutionalActivity[];
     team?: SparcTeamMember[];
@@ -82,11 +85,15 @@ function resolvePicAvatar(item: SparcContentItem, team: SparcTeamMember[] = []):
 
 export default function PlannerIndex({
     today = '2026-10-27',
+    month: monthProp,
+    currentMonth: currentMonthProp,
     contentItems = [],
     activities = [],
     team = [],
 }: ProductionBoardPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
+    const month = monthProp ?? today.slice(0, 7);
+    const currentMonth = currentMonthProp ?? today.slice(0, 7);
     const can = props.auth?.can;
     const currentRole = props.auth?.user?.role ?? 'admin';
     const { error: toastError } = useToast();
@@ -320,6 +327,11 @@ export default function PlannerIndex({
                 <div className="flex items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 min-w-0">
                         <ContentIdBadge contentId={item.contentId} />
+                        {item.isCarryOver && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                                Bulan lalu
+                            </span>
+                        )}
                         {item.ticketId && (
                             <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-primary)] truncate">
                                 {item.ticketId}
@@ -605,6 +617,13 @@ export default function PlannerIndex({
             <Head title="Production Board - SPARC" />
 
             <div className="space-y-4 min-w-0">
+                <MonthNavigator
+                    month={month}
+                    currentMonth={currentMonth}
+                    basePath="/planner"
+                    carryOverCount={items.filter((i) => i.isCarryOver).length}
+                />
+
                 {/* Role Authorization Hint Banner when non-approver views board */}
                 {!can?.approveContent && (
                     <div className="px-3.5 py-2.5 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center gap-2.5 text-xs text-[var(--md-sys-color-on-surface-variant)]">
@@ -896,6 +915,11 @@ export default function PlannerIndex({
                                                         <div className="space-y-0.5">
                                                             <div className="flex items-center gap-1.5 flex-wrap">
                                                                 <ContentIdBadge contentId={item.contentId} />
+                                                                {item.isCarryOver && (
+                                                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                                                                        Bulan lalu
+                                                                    </span>
+                                                                )}
                                                                 {item.ticketId && (
                                                                      <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-primary)]">
                                                                         {item.ticketId}

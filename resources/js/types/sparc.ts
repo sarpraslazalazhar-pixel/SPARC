@@ -256,6 +256,7 @@ export interface SparcContentItem {
     adSpend?: number | null;
     metricsSyncedAt?: string | null;
     gridPosition?: number | null;
+    isCarryOver?: boolean;
     igComments?: InstagramPublicComment[];
     tasks: ProductionTaskItem[];
     comments: ContentCommentItem[];

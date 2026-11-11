@@ -111,13 +111,12 @@ class ContentItem extends Model
         static::creating(function (ContentItem $item): void {
             if (empty($item->content_id)) {
                 $year = now()->year;
-                $seq = static::whereYear('created_at', $year)->withTrashed()->count() + 1;
-                do {
-                    $candidate = sprintf('SPARC-%d-%04d', $year, $seq);
-                    $seq++;
-                } while (static::withTrashed()->where('content_id', $candidate)->exists());
-
-                $item->content_id = $candidate;
+                $prefix = sprintf('SPARC-%d-', $year);
+                $maxCode = static::withTrashed()
+                    ->where('content_id', 'like', $prefix.'%')
+                    ->max('content_id');
+                $next = (is_string($maxCode) ? (int) substr($maxCode, strlen($prefix)) : 0) + 1;
+                $item->content_id = sprintf('SPARC-%d-%04d', $year, $next);
             }
         });
     }

@@ -166,9 +166,10 @@ class WorkspaceV3Controller extends Controller
 
         if (Schema::hasTable('content_items')) {
             try {
-                if (Schema::hasTable('haloapu_tickets')) {
+                if (Schema::hasTable('haloapu_tickets') && (app()->runningUnitTests() || Cache::add('sparc_halo_autoconvert_lock', true, now()->addSeconds(30)))) {
                     $unconverted = HaloApuTicket::whereNull('content_item_id')
                         ->where('sync_status', '!=', 'ignored')
+                        ->limit(10)
                         ->get();
                     if ($unconverted->isNotEmpty()) {
                         $haloService = app(HaloApuClientService::class);
@@ -178,9 +179,14 @@ class WorkspaceV3Controller extends Controller
                     }
                 }
 
-                $relations = ['tasks', 'comments', 'history', 'haloApuTicket'];
+                $relations = [
+                    'tasks',
+                    'comments' => static fn ($q) => $q->latest('id')->limit(20),
+                    'history' => static fn ($q) => $q->reorder('id', 'desc')->limit(15),
+                    'haloApuTicket',
+                ];
                 if (Schema::hasTable('instagram_comments')) {
-                    $relations[] = 'igComments';
+                    $relations['igComments'] = static fn ($q) => $q->limit(20);
                 }
 
                 $dbItems = ContentItem::with($relations)
@@ -372,6 +378,54 @@ class WorkspaceV3Controller extends Controller
             'published' => 'published',
             default => 'inbox',
         };
+    }
+
+    /**
+     * Resolve `?month=YYYY-MM`; invalid or missing input falls back to the current month.
+     */
+    private static function resolveRequestedMonth(Request $request): string
+    {
+        $month = (string) $request->query('month', '');
+
+        return preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month) === 1 ? $month : now()->format('Y-m');
+    }
+
+    /**
+     * Keep items whose publishDate falls in $month. When $month is the current month, also keep
+     * undated items and unpublished items from earlier months (flagged `isCarryOver`).
+     *
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private static function scopeItemsToMonth(array $items, string $month, string $currentMonth): array
+    {
+        $scoped = [];
+
+        foreach ($items as $item) {
+            $itemMonth = substr((string) ($item['publishDate'] ?? ''), 0, 7);
+            if ($itemMonth === $month) {
+                $scoped[] = $item;
+
+                continue;
+            }
+
+            if ($month !== $currentMonth) {
+                continue;
+            }
+
+            if ($itemMonth === '') {
+                $scoped[] = $item;
+
+                continue;
+            }
+
+            if ($itemMonth < $month && self::normalizeStatus((string) ($item['status'] ?? '')) !== 'published') {
+                $item['isCarryOver'] = true;
+                $scoped[] = $item;
+            }
+        }
+
+        return $scoped;
     }
 
     /**
@@ -666,11 +720,15 @@ class WorkspaceV3Controller extends Controller
         $state = self::hydrateWorkspace($request);
         $items = $state['contentItems'];
         usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
+        $currentMonth = now()->format('Y-m');
+        $month = self::resolveRequestedMonth($request);
+        $items = self::scopeItemsToMonth($items, $month, $currentMonth);
 
         return Inertia::render('Content/Index', [
             'today' => now()->toDateString(),
+            'month' => $month,
+            'currentMonth' => $currentMonth,
             'contentItems' => $items,
-            'activities' => $state['activities'],
             'team' => $state['team'],
             'filters' => [
                 'q' => (string) $request->query('q', ''),
@@ -692,11 +750,15 @@ class WorkspaceV3Controller extends Controller
         $state = self::hydrateWorkspace($request);
         $items = $state['contentItems'];
         usort($items, static fn (array $a, array $b): int => strcmp((string) ($a['publishDate'] ?? ''), (string) ($b['publishDate'] ?? '')));
+        $currentMonth = now()->format('Y-m');
+        $month = self::resolveRequestedMonth($request);
+        $items = self::scopeItemsToMonth($items, $month, $currentMonth);
 
         return Inertia::render('Planner/Index', [
             'today' => now()->toDateString(),
+            'month' => $month,
+            'currentMonth' => $currentMonth,
             'contentItems' => $items,
-            'activities' => $state['activities'],
             'team' => $state['team'],
             'sessionItems' => $request->session()->get('sparc.planner_items', []),
             'itemUpdates' => $request->session()->get('sparc.planner_updates', []),
@@ -957,12 +1019,11 @@ class WorkspaceV3Controller extends Controller
      */
     public function pollUpdates(Request $request): JsonResponse
     {
-        $state = self::hydrateWorkspace($request);
         $since = $request->query('since');
         $sinceTs = is_string($since) && $since !== '' ? strtotime($since) : false;
 
         /** @var array<int, array<string, mixed>> $notifications */
-        $notifications = $state['notifications'];
+        $notifications = $request->hasSession() ? (array) $request->session()->get('sparc_v3.notifications', []) : [];
 
         $unreadCount = count(array_filter(
             $notifications,
@@ -979,66 +1040,19 @@ class WorkspaceV3Controller extends Controller
             }
         }
 
-        $overdueCount = count(array_filter(
-            $state['contentItems'],
-            fn (array $item): bool => ($item['status'] ?? '') !== 'published'
-                && ! empty($item['productionDeadline'])
-                && $item['productionDeadline'] < self::TODAY
-        ));
+        $hasContentTable = Schema::hasTable('content_items');
+        $overdueCount = $hasContentTable
+            ? ContentItem::where('status', '!=', 'published')
+                ->whereNotNull('production_deadline')
+                ->whereDate('production_deadline', '<', self::TODAY)
+                ->count()
+            : 0;
 
-        $publishTodayCount = count(array_filter(
-            $state['publications'],
-            fn (array $pub): bool => empty($pub['publishedActualAt'])
-                && str_starts_with((string) ($pub['scheduledAt'] ?? ''), self::TODAY)
-        ));
-
-        if (! app()->runningUnitTests() && Cache::add('sparc_ig_poll_heartbeat', true, now()->addSeconds(55))) {
-            dispatch(static function (): void {
-                try {
-                    $service = new InstagramGraphService;
-                    if (! $service->isConfigured()) {
-                        return;
-                    }
-
-                    if (Schema::hasTable('instagram_schedules')) {
-                        $dueSchedules = InstagramSchedule::query()
-                            ->whereIn('status', ['queued', 'processing'])
-                            ->where(function ($q): void {
-                                $q->whereNull('scheduled_at')
-                                    ->orWhere('scheduled_at', '<=', now());
-                            })
-                            ->orderBy('scheduled_at')
-                            ->limit(3)
-                            ->get();
-
-                        foreach ($dueSchedules as $due) {
-                            $service->publishSchedule($due);
-                        }
-                    }
-
-                    if (Cache::add('sparc_ig_periodic_sync_30m', true, now()->addMinutes(30))) {
-                        $service->refreshTokenIfExpiring(14);
-                        $service->syncAndAutoImportRecentMedia(50);
-                        $service->syncRecentComments(20);
-                        $service->syncAccountProfileAndInsights();
-                    }
-                } catch (\Throwable) {
-                    // Background fallback should never disrupt request lifecycle
-                }
-            })->afterResponse();
-        }
-        if (! app()->runningUnitTests() && Cache::add('sparc_haloapu_poll_heartbeat', true, now()->addSeconds(30))) {
-            dispatch(static function (): void {
-                try {
-                    $conn = HaloApuConnection::current();
-                    if ($conn->is_enabled && ! empty($conn->base_url)) {
-                        app(HaloApuClientService::class)->syncTickets();
-                    }
-                } catch (\Throwable) {
-                    // Background fallback
-                }
-            })->afterResponse();
-        }
+        $publishTodayCount = $hasContentTable
+            ? ContentItem::where('status', 'ready_to_publish')
+                ->whereDate('publish_date', self::TODAY)
+                ->count()
+            : 0;
 
         return response()->json([
             'server_time' => now()->toIso8601String(),
@@ -1734,7 +1748,7 @@ class WorkspaceV3Controller extends Controller
             return back();
         }
 
-        $result = $service->syncAndAutoImportRecentMedia(1000, true);
+        $result = $service->syncAndAutoImportRecentMedia(250, true);
 
         if (! ($result['success'] ?? false)) {
             self::flashToast(

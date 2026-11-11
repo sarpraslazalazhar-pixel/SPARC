@@ -370,6 +370,25 @@ class InstagramOperationsController extends Controller
     }
 
     /**
+     * Render every Instagram post pulled from Meta (all months) with its performance metrics (`GET /instagram/library`).
+     */
+    public function libraryIndex(Request $request): Response
+    {
+        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $items = array_values(array_filter(
+            $state['contentItems'],
+            static fn (array $item): bool => ! empty($item['igMediaId'])
+        ));
+        usort($items, static fn (array $a, array $b): int => strcmp((string) ($b['publishDate'] ?? ''), (string) ($a['publishDate'] ?? '')));
+
+        return Inertia::render('InstagramLibrary/Index', [
+            'today' => now()->toDateString(),
+            'contentItems' => $items,
+            'team' => $state['team'],
+        ]);
+    }
+
+    /**
      * Render centralized Instagram Public Comments Moderation Inbox (`GET /instagram/comments`).
      */
     public function commentsIndex(Request $request): Response
@@ -469,7 +488,7 @@ class InstagramOperationsController extends Controller
                 ->values()
                 ->all();
 
-            $postsWithComments = InstagramComment::query()
+            $groupedRows = InstagramComment::query()
                 ->whereNull('parent_ig_comment_id')
                 ->whereNotNull('ig_media_id')
                 ->select(
@@ -482,9 +501,16 @@ class InstagramOperationsController extends Controller
                     DB::raw('SUM(CASE WHEN is_replied = 0 AND is_hidden = 0 THEN 1 ELSE 0 END) as unreplied_count')
                 )
                 ->groupBy('ig_media_id')
-                ->get()
-                ->map(function ($p): array {
-                    $item = $p->content_item_id ? ContentItem::find($p->content_item_id) : null;
+                ->get();
+
+            $linkedContentIds = $groupedRows->pluck('content_item_id')->filter()->unique()->values()->all();
+            $linkedContentMap = ! empty($linkedContentIds)
+                ? ContentItem::whereIn('id', $linkedContentIds)->get()->keyBy('id')
+                : collect();
+
+            $postsWithComments = $groupedRows
+                ->map(function ($p) use ($linkedContentMap): array {
+                    $item = $p->content_item_id ? $linkedContentMap->get((int) $p->content_item_id) : null;
 
                     return [
                         'igMediaId' => (string) $p->ig_media_id,
@@ -540,7 +566,7 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
-        $result = $service->syncRecentComments(25);
+        $result = $service->syncRecentComments(200);
 
         if (! ($result['success'] ?? false)) {
             WorkspaceV3Controller::flashToast(
@@ -773,22 +799,6 @@ class InstagramOperationsController extends Controller
         $livePosts = [];
 
         if (Schema::hasTable('content_items')) {
-            $service = new InstagramGraphService;
-            if ($service->isConfigured()) {
-                $hasRealIgPosts = ContentItem::query()
-                    ->where('platform', 'instagram')
-                    ->where('status', 'published')
-                    ->whereNotNull('ig_media_id')
-                    ->exists();
-
-                if (! $hasRealIgPosts || $request->has('sync')) {
-                    try {
-                        $service->syncAndAutoImportRecentMedia(500, true);
-                    } catch (\Throwable) {
-                        // ignore network failure
-                    }
-                }
-            }
 
             $upcomingItems = ContentItem::query()
                 ->where('platform', 'instagram')
@@ -1033,7 +1043,7 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
-        $res = $service->syncAndAutoImportRecentMedia(1000, true);
+        $res = $service->syncAndAutoImportRecentMedia(250, true);
         $service->syncAccountProfileAndInsights();
 
         if (! ($res['success'] ?? false)) {
@@ -1179,13 +1189,28 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
+        $accounts = $res['ads_data']['accounts'] ?? [];
         $summary = $res['ads_data']['summary'] ?? [];
+
+        if (empty($accounts)) {
+            WorkspaceV3Controller::flashToast(
+                $request,
+                'warning',
+                'Belum Ada Akun Iklan Meta',
+                'Izin Meta Marketing API terbaca, tetapi akun Facebook ini belum memiliki Ad Account di Meta Ads Manager (atau belum dicentang saat otorisasi).'
+            );
+
+            return back();
+        }
+
         WorkspaceV3Controller::flashToast(
             $request,
             'success',
             'Data Iklan Berhasil Disinkronkan!',
             sprintf(
-                'Performa iklan Meta Marketing API diperbarui (%s tayangan, spend %s).',
+                'Performa %s (%d kampanye, %s tayangan, spend %s).',
+                $res['ads_data']['active_account']['name'] ?? 'Akun Iklan',
+                count($res['ads_data']['campaigns'] ?? []),
                 number_format((float) ($summary['total_impressions'] ?? 0)),
                 number_format((float) ($summary['total_spend'] ?? 0), 2)
             )

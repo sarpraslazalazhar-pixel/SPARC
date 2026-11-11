@@ -636,6 +636,7 @@ class InstagramMaxIntegrationTest extends TestCase
     public function test_sync_creator_demographics_and_stories(): void
     {
         Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222/insights*follower_demographics*' => Http::response(['data' => []], 200),
             'https://graph.facebook.com/v21.0/17841400111222/insights*audience*' => Http::response([
                 'data' => [
                     [
@@ -788,5 +789,204 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802003']);
         $this->assertDatabaseHas('content_items', ['ig_media_id' => '1802004']);
         $this->assertSame(4, ContentItem::whereNotNull('ig_media_id')->count());
+    }
+
+    public function test_sync_comments_uses_two_phase_pagination_across_multiple_media_pages(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media?after=cm_cursor_2*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1809992',
+                        'caption' => 'Postingan Lama dengan Komentar',
+                        'permalink' => 'https://www.instagram.com/p/OldCommented/',
+                        'comments_count' => 1,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/media*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '1809991',
+                        'caption' => 'Postingan Tanpa Komentar',
+                        'permalink' => 'https://www.instagram.com/p/NoComments/',
+                        'comments_count' => 0,
+                    ],
+                ],
+                'paging' => [
+                    'next' => 'https://graph.facebook.com/v21.0/17841400111222/media?after=cm_cursor_2&limit=50',
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/1809992/comments*' => Http::response([
+                'data' => [
+                    [
+                        'id' => '179888001',
+                        'from' => ['id' => '991', 'username' => 'penanya_lama'],
+                        'text' => 'Izin bertanya jadwal pendaftaran gelombang kedua?',
+                        'timestamp' => '2026-10-05T09:00:00+0000',
+                        'like_count' => 4,
+                        'hidden' => false,
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->post('/instagram/comments/sync')->assertRedirect();
+
+        $this->assertDatabaseHas('instagram_comments', [
+            'ig_comment_id' => '179888001',
+            'ig_media_id' => '1809992',
+            'username' => 'penanya_lama',
+            'is_replied' => false,
+        ]);
+    }
+
+    public function test_sync_audience_demographics_uses_meta_v21_follower_demographics_breakdowns(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222/insights*breakdown=gender*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'follower_demographics',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['gender'],
+                                    'results' => [
+                                        ['dimension_values' => ['F'], 'value' => 14000],
+                                        ['dimension_values' => ['M'], 'value' => 8000],
+                                        ['dimension_values' => ['U'], 'value' => 733],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/insights*breakdown=age*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'follower_demographics',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['age'],
+                                    'results' => [
+                                        ['dimension_values' => ['25-34'], 'value' => 9500],
+                                        ['dimension_values' => ['18-24'], 'value' => 7200],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/insights*breakdown=city*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'follower_demographics',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['city'],
+                                    'results' => [
+                                        ['dimension_values' => ['Jakarta, Jakarta'], 'value' => 6200],
+                                        ['dimension_values' => ['Bekasi, West Java'], 'value' => 2400],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/17841400111222/insights*breakdown=country*' => Http::response([
+                'data' => [
+                    [
+                        'name' => 'follower_demographics',
+                        'total_value' => [
+                            'breakdowns' => [
+                                [
+                                    'dimension_keys' => ['country'],
+                                    'results' => [
+                                        ['dimension_values' => ['ID'], 'value' => 21500],
+                                        ['dimension_values' => ['MY'], 'value' => 450],
+                                    ],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->post(route('settings.instagram.syncDemographics'))->assertRedirect();
+
+        $conn = InstagramConnection::current()->fresh();
+        $this->assertTrue((bool) ($conn->demographics_data['has_data'] ?? false));
+        $this->assertEqualsWithDelta(61.6, $conn->demographics_data['gender_distribution']['female'], 0.2);
+        $this->assertSame(9500, $conn->demographics_data['gender_age']['25-34']);
+        $this->assertSame(6200, $conn->demographics_data['top_cities']['Jakarta, Jakarta']);
+        $this->assertSame(21500, $conn->demographics_data['top_countries']['ID']);
+    }
+
+    public function test_sync_ads_performance_uses_user_token_and_discovers_business_ad_accounts(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/me/adaccounts*' => Http::response(['data' => []], 200),
+            'https://graph.facebook.com/v21.0/me/businesses*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'biz-99',
+                        'name' => 'HUMAS Business',
+                        'owned_ad_accounts' => [
+                            'data' => [
+                                [
+                                    'id' => 'act_555666777',
+                                    'name' => 'Akun Iklan Portfolio Humas',
+                                    'account_id' => '555666777',
+                                    'currency' => 'IDR',
+                                    'account_status' => 1,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_555666777/campaigns*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'cmp_biz_1',
+                        'name' => 'Kampanye Zakat Portfolio',
+                        'status' => 'ACTIVE',
+                        'objective' => 'OUTCOME_AWARENESS',
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_555666777/insights*' => Http::response([
+                'data' => [
+                    [
+                        'campaign_name' => 'Kampanye Zakat Portfolio',
+                        'campaign_id' => 'cmp_biz_1',
+                        'spend' => '500000',
+                        'impressions' => '42000',
+                        'reach' => '31000',
+                        'clicks' => '1800',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->post(route('settings.instagram.syncAds'))->assertRedirect();
+
+        Http::assertSent(fn (HttpClientRequest $req): bool => str_contains($req->url(), 'adaccounts') && ($req['access_token'] ?? '') === 'EAAUserLongToken999');
+
+        $conn = InstagramConnection::current()->fresh();
+        $this->assertSame('Akun Iklan Portfolio Humas', $conn->ads_data['active_account']['name']);
+        $this->assertSame(42000, $conn->ads_data['summary']['total_impressions']);
+        $this->assertCount(1, $conn->ads_data['campaigns']);
     }
 }

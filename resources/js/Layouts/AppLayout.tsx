@@ -17,6 +17,7 @@ import {
     FileText,
     Grid3x3,
     Image as ImageIcon,
+    Images,
     Info,
     Kanban,
     LayoutDashboard,
@@ -541,6 +542,12 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         icon: MessageCircle,
                         badge: props.workspaceBadges?.unrepliedComments || undefined,
                         badgeTone: 'amber',
+                    },
+                    {
+                        href: '/instagram/library',
+                        matchHref: ['/instagram/library'],
+                        label: 'Konten Instagram',
+                        icon: Images,
                     },
                     {
                         href: '/report',

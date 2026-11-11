@@ -48,6 +48,12 @@ $output = '';
 $executedCmd = '';
 
 if ($isAuthenticated && isset($_POST['command'])) {
+    if (function_exists('ignore_user_abort')) {
+        @ignore_user_abort(true);
+    }
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(180);
+    }
     $executedCmd = trim($_POST['command']);
 
     // Bootstrap Laravel
@@ -213,6 +219,11 @@ if ($isAuthenticated && isset($_POST['command'])) {
                 <form method="POST">
                     <input type="hidden" name="command" value="optimize">
                     <button type="submit" class="btn-primary" style="width: 100%;">4. Optimize (Cache Route/Config)</button>
+                </form>
+
+                <form method="POST">
+                    <input type="hidden" name="command" value="instagram:sync-metrics">
+                    <button type="submit" class="btn-success" style="width: 100%;">5. Sync Instagram via Runner (1000 Post)</button>
                 </form>
 
                 <form method="POST">

@@ -17,11 +17,7 @@ class ContentItemFactory extends Factory
      */
     public function definition(): array
     {
-        static $seq = 1;
-        $year = now()->year;
-
         return [
-            'content_id' => sprintf('SPARC-%d-%04d', $year, $seq++),
             'title' => fake()->sentence(4),
             'priority' => fake()->randomElement(['critical', 'tinggi', 'normal', 'rendah']),
             'platform' => fake()->randomElement(['instagram', 'tiktok', 'youtube', 'website', 'whatsapp']),

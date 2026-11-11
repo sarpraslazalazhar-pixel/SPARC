@@ -100,7 +100,7 @@ class AuthenticationTest extends TestCase
         $response->assertRedirect(route('login'));
     }
 
-    public function test_user_login_automatically_discovers_and_imports_new_instagram_posts(): void
+    public function test_user_login_does_not_block_on_external_instagram_sync(): void
     {
         config([
             'services.instagram.account_id' => '17841400123456789',
@@ -115,37 +115,12 @@ class AuthenticationTest extends TestCase
             'username' => 'sparc_official',
         ]);
 
-        Http::fake([
-            'https://graph.facebook.com/v21.0/17841400123456789/media*' => Http::response([
-                'data' => [
-                    [
-                        'id' => '888999111',
-                        'caption' => "Sosialisasi SPARC 2026\nPeluncuran sistem monitoring media HUMAS terpadu.",
-                        'shortcode' => 'DFliveLogin01',
-                        'permalink' => 'https://www.instagram.com/p/DFliveLogin01/',
-                        'media_type' => 'IMAGE',
-                        'timestamp' => '2026-10-30T07:00:00+0000',
-                        'like_count' => 450,
-                        'comments_count' => 38,
-                    ],
-                ],
-            ], 200),
-            'https://graph.facebook.com/v21.0/888999111/insights*' => Http::response([
-                'data' => [
-                    ['name' => 'reach', 'values' => [['value' => 6200]]],
-                    ['name' => 'saved', 'values' => [['value' => 54]]],
-                ],
-            ], 200),
-        ]);
+        Http::fake();
 
         $user = User::factory()->create([
             'email' => 'admin@sparc.go.id',
             'password' => bcrypt('password123'),
             'role' => 'admin',
-        ]);
-
-        $this->assertDatabaseMissing('content_items', [
-            'published_url' => 'https://www.instagram.com/p/DFliveLogin01/',
         ]);
 
         $response = $this->post(route('login.store'), [
@@ -154,17 +129,6 @@ class AuthenticationTest extends TestCase
         ]);
 
         $response->assertRedirect(route('dashboard'));
-
-        $this->assertDatabaseHas('content_items', [
-            'title' => 'Sosialisasi SPARC 2026',
-            'platform' => 'instagram',
-            'format' => 'feed',
-            'status' => 'published',
-            'published_url' => 'https://www.instagram.com/p/DFliveLogin01/',
-            'likes' => 450,
-            'comments_count' => 38,
-            'views' => 6200,
-            'shares' => 54,
-        ]);
+        Http::assertNothingSent();
     }
 }

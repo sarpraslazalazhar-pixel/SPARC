@@ -12,6 +12,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -126,9 +127,34 @@ class InstagramGraphService
     }
 
     /**
+     * Configure PHP web worker budget so cPanel sync calls finish gracefully within hosting caps.
+     */
+    protected function prepareWebExecutionBudget(): void
+    {
+        if (function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(120);
+        }
+    }
+
+    /**
+     * Determine whether the soft wall-clock execution budget for a web request has elapsed.
+     */
+    protected function isTimeBudgetExceeded(float $startedAt, float $maxSeconds = 20.0): bool
+    {
+        if (app()->runningUnitTests()) {
+            return false;
+        }
+
+        return (microtime(true) - $startedAt) >= $maxSeconds;
+    }
+
+    /**
      * Build a resilient HTTP client for Meta Graph API (forces IPv4 to avoid broken IPv6 SYN stalls and retries transient connection drops).
      */
-    protected function metaHttp(int $timeout = 25, int $connectTimeout = 15, bool $retryOnConnectionError = true): PendingRequest
+    protected function metaHttp(int $timeout = 12, int $connectTimeout = 6, bool $retryOnConnectionError = true): PendingRequest
     {
         $client = Http::connectTimeout($connectTimeout)
             ->timeout($timeout)
@@ -138,8 +164,8 @@ class InstagramGraphService
 
         if ($retryOnConnectionError) {
             $client = $client->retry(
-                2,
-                400,
+                1,
+                250,
                 static fn (\Throwable $exception): bool => $exception instanceof ConnectionException,
                 throw: false
             );
@@ -1242,7 +1268,7 @@ class InstagramGraphService
      * @param  array<int, string>  $mediaIds
      * @return array<string, array{reach: int|null, views: int, saves: int|null, shares: int|null, effective_shares: int}>
      */
-    protected function fetchBatchMediaInsights(array $mediaIds): array
+    protected function fetchBatchMediaInsights(array $mediaIds, ?float $startedAt = null, float $budgetSeconds = 18.0): array
     {
         $uniqueIds = array_values(array_unique(array_filter($mediaIds)));
         if (empty($uniqueIds)) {
@@ -1253,7 +1279,7 @@ class InstagramGraphService
         $rateLimited = false;
 
         foreach (array_chunk($uniqueIds, 50) as $chunk) {
-            if ($rateLimited) {
+            if ($rateLimited || ($startedAt !== null && $this->isTimeBudgetExceeded($startedAt, $budgetSeconds))) {
                 foreach ($chunk as $mId) {
                     $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
                 }
@@ -1266,8 +1292,8 @@ class InstagramGraphService
                     $reqs = [];
                     foreach ($chunk as $mId) {
                         $reqs[] = $batch->as((string) $mId)
-                            ->connectTimeout(12)
-                            ->timeout(15)
+                            ->connectTimeout(5)
+                            ->timeout(8)
                             ->withOptions(['force_ip_resolve' => 'v4'])
                             ->get(
                                 sprintf('%s/%s/insights', $this->baseUrl, $mId),
@@ -1295,28 +1321,6 @@ class InstagramGraphService
                         $errCode = (int) ($resp->json('error.code') ?? 0);
                         if ($resp->status() === 429 || in_array($errCode, [4, 17, 32, 613], true)) {
                             $rateLimited = true;
-                            $parsedMap[$mId] = $this->parseMediaInsightsRows([]);
-
-                            continue;
-                        }
-
-                        if ($resp->status() === 400) {
-                            // Graceful fallback if `shares` or `views` was rejected on legacy media object
-                            try {
-                                $fallback = $this->metaHttp(12, 10, false)->get(sprintf('%s/%s/insights', $this->baseUrl, $mId), [
-                                    'metric' => 'reach,saved',
-                                    'access_token' => $this->accessToken,
-                                ]);
-                                if ($fallback->successful()) {
-                                    /** @var array<int, array<string, mixed>> $rows */
-                                    $rows = $fallback->json('data') ?? [];
-                                    $parsedMap[$mId] = $this->parseMediaInsightsRows($rows);
-
-                                    continue;
-                                }
-                            } catch (\Throwable) {
-                                // ignore
-                            }
                         }
                     }
 
@@ -1337,16 +1341,16 @@ class InstagramGraphService
      *
      * @return array{success: bool, data: array<int, array<string, mixed>>, response?: Response|null, error?: string}
      */
-    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500): array
+    protected function fetchPaginatedMedia(string $actualIgId, string $fields, int $maxItems = 500, ?float $startedAt = null, float $budgetSeconds = 12.0): array
     {
+        $localStart = microtime(true);
         $targetMax = max(1, min(2500, $maxItems));
-        $pageSize = min(50, $targetMax);
+        $pageSize = min(100, $targetMax);
         $collected = [];
         $seenIds = [];
         $lastResponse = null;
         $maxPages = 30;
-
-        $firstResponse = $this->metaHttp(25, 15, true)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+        $firstResponse = $this->metaHttp()->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
             'fields' => $fields,
             'limit' => $pageSize,
             'access_token' => $this->accessToken,
@@ -1384,6 +1388,9 @@ class InstagramGraphService
         $pageCount = 1;
 
         while ($nextUrl !== '' && count($collected) < $targetMax && $pageCount < $maxPages && ! isset($visitedUrls[$nextUrl])) {
+            if ($this->isTimeBudgetExceeded($startedAt ?? $localStart, $budgetSeconds)) {
+                break;
+            }
             $visitedUrls[$nextUrl] = true;
             $pageCount++;
 
@@ -1795,16 +1802,15 @@ class InstagramGraphService
 
         $actualIgId = $this->resolveActualInstagramId();
         $started = microtime(true);
-
-        if ($limit > 50 && function_exists('set_time_limit')) {
-            @set_time_limit(120);
-        }
+        $this->prepareWebExecutionBudget();
 
         try {
             $paginated = $this->fetchPaginatedMedia(
                 $actualIgId,
                 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count',
-                max(1, $limit)
+                max(1, $limit),
+                $started,
+                10.0
             );
             $mediaResponse = $paginated['response'] ?? null;
 
@@ -1845,9 +1851,19 @@ class InstagramGraphService
             ->get();
 
         $existingByMediaId = [];
+        $existingByPermalink = [];
+        $existingByShortcode = [];
         foreach ($existingItems as $ex) {
             if (! empty($ex->ig_media_id)) {
                 $existingByMediaId[(string) $ex->ig_media_id] = $ex;
+            }
+            $exUrl = trim((string) $ex->published_url);
+            if ($exUrl !== '') {
+                $existingByPermalink[strtolower($exUrl)] = $ex;
+                $exSc = $this->extractShortcode($exUrl);
+                if ($exSc !== null) {
+                    $existingByShortcode[$exSc] = $ex;
+                }
             }
         }
 
@@ -1856,24 +1872,24 @@ class InstagramGraphService
             $mediaList
         )));
 
-        // For large catalogs (>150 posts), fetch insights for newest 100 + any unsynced posts (capped at 250 per sync)
-        if (count($mediaIds) > 150) {
-            $priorityIds = array_slice($mediaIds, 0, 100);
+        // Fetch /insights for newest 30 posts + unsynced posts (capped at 80 per web sync)
+        if (count($mediaIds) > 80) {
+            $priorityIds = array_slice($mediaIds, 0, 30);
             foreach ($mediaIds as $idx => $mId) {
-                if ($idx < 100) {
+                if ($idx < 30) {
                     continue;
                 }
                 $existingMatch = $existingByMediaId[$mId] ?? null;
                 if (! $existingMatch || $existingMatch->metrics_synced_at === null) {
                     $priorityIds[] = $mId;
                 }
-                if (count($priorityIds) >= 250) {
+                if (count($priorityIds) >= 80) {
                     break;
                 }
             }
-            $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds);
+            $insightsByMedia = $this->fetchBatchMediaInsights($priorityIds, $started, 17.0);
         } else {
-            $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds);
+            $insightsByMedia = $this->fetchBatchMediaInsights($mediaIds, $started, 17.0);
         }
 
         $thumbTargets = [];
@@ -1884,158 +1900,179 @@ class InstagramGraphService
                 $thumbTargets['media_'.$mId] = $rawThumb;
             }
         }
-        $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets);
+        $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets, $started, 19.5);
         $syncedCount = 0;
         $importedCount = 0;
         $failedCount = 0;
         $skippedCount = 0;
         $syncedItems = [];
+        $updatedHistoryCount = 0;
 
-        foreach ($mediaList as $media) {
-            $mediaId = (string) ($media['id'] ?? '');
-            $permalink = (string) ($media['permalink'] ?? '');
-            $shortcode = $this->extractShortcode($permalink);
+        DB::transaction(function () use (
+            $mediaList,
+            $insightsByMedia,
+            $cachedThumbs,
+            &$existingByMediaId,
+            &$existingByPermalink,
+            &$existingByShortcode,
+            &$syncedCount,
+            &$importedCount,
+            &$syncedItems,
+            &$updatedHistoryCount
+        ): void {
+            foreach ($mediaList as $media) {
+                $mediaId = (string) ($media['id'] ?? '');
+                $permalink = (string) ($media['permalink'] ?? '');
+                $shortcode = $this->extractShortcode($permalink);
 
-            $matchedItem = $existingItems->first(function (ContentItem $item) use ($permalink, $shortcode, $mediaId): bool {
-                if ($mediaId !== '' && (string) $item->ig_media_id === $mediaId) {
-                    return true;
+                $matchedItem = null;
+                if ($mediaId !== '' && isset($existingByMediaId[$mediaId])) {
+                    $matchedItem = $existingByMediaId[$mediaId];
+                } elseif ($permalink !== '' && isset($existingByPermalink[strtolower($permalink)])) {
+                    $matchedItem = $existingByPermalink[strtolower($permalink)];
+                } elseif ($shortcode !== null && isset($existingByShortcode[$shortcode])) {
+                    $matchedItem = $existingByShortcode[$shortcode];
+                } elseif ($mediaId !== '' && isset($existingByPermalink[strtolower($mediaId)])) {
+                    $matchedItem = $existingByPermalink[strtolower($mediaId)];
                 }
-                $itemUrl = (string) $item->published_url;
-                if ($permalink !== '' && (strcasecmp($itemUrl, $permalink) === 0 || Str::startsWith($itemUrl, $permalink))) {
-                    return true;
-                }
-                if ($shortcode !== null && $this->extractShortcode($itemUrl) === $shortcode) {
-                    return true;
-                }
 
-                return $itemUrl === $mediaId;
-            });
+                $likes = (int) ($media['like_count'] ?? 0);
+                $comments = (int) ($media['comments_count'] ?? 0);
+                $parsed = $insightsByMedia[$mediaId] ?? $this->parseMediaInsightsRows([]);
+                $views = $parsed['views'];
+                $shares = $parsed['effective_shares'];
 
-            $likes = (int) ($media['like_count'] ?? 0);
-            $comments = (int) ($media['comments_count'] ?? 0);
-            $parsed = $insightsByMedia[$mediaId] ?? $this->parseMediaInsightsRows([]);
-            $views = $parsed['views'];
-            $shares = $parsed['effective_shares'];
+                if ($matchedItem) {
+                    $hasChanged = (int) $matchedItem->views !== $views
+                        || (int) $matchedItem->likes !== $likes
+                        || (int) $matchedItem->comments_count !== $comments
+                        || (int) $matchedItem->shares !== $shares;
 
-            if ($matchedItem) {
-                $hasChanged = (int) $matchedItem->views !== $views
-                    || (int) $matchedItem->likes !== $likes
-                    || (int) $matchedItem->comments_count !== $comments
-                    || (int) $matchedItem->shares !== $shares;
+                    $rawMediaUrl = $media['media_url'] ?? $matchedItem->ig_media_url;
+                    $rawThumbUrl = $media['thumbnail_url'] ?? $media['media_url'] ?? $matchedItem->ig_thumbnail_url;
+                    $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
+                        ? $cachedThumbs['media_'.$mediaId]
+                        : $rawThumbUrl;
 
-                $rawMediaUrl = $media['media_url'] ?? $matchedItem->ig_media_url;
-                $rawThumbUrl = $media['thumbnail_url'] ?? $media['media_url'] ?? $matchedItem->ig_thumbnail_url;
-                $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
-                    ? $cachedThumbs['media_'.$mediaId]
-                    : $rawThumbUrl;
-
-                $hasInsight = isset($insightsByMedia[$mediaId]);
-                $matchedItem->update([
-                    'ig_media_id' => $mediaId ?: $matchedItem->ig_media_id,
-                    'ig_media_url' => $rawMediaUrl,
-                    'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
-                    'reach' => $hasInsight ? ($parsed['reach'] ?? $matchedItem->reach) : $matchedItem->reach,
-                    'views' => $hasInsight ? $views : (int) $matchedItem->views,
-                    'likes' => $likes,
-                    'comments_count' => $comments,
-                    'shares' => $hasInsight ? $shares : (int) $matchedItem->shares,
-                    'saves' => $hasInsight ? ($parsed['saves'] ?? $matchedItem->saves) : $matchedItem->saves,
-                    'metrics_synced_at' => $hasInsight ? now() : $matchedItem->metrics_synced_at,
-                ]);
-
-                if ($hasChanged) {
-                    $matchedItem->history()->create([
-                        'from_status' => $matchedItem->status,
-                        'to_status' => $matchedItem->status,
-                        'actor' => 'System (Instagram Graph API)',
-                        'note' => sprintf(
-                            'Sinkronisasi metrik Instagram via batch: %s tayangan, %s suka, %s komentar, %s disimpan/dibagikan.',
-                            number_format((float) $views),
-                            number_format((float) $likes),
-                            number_format((float) $comments),
-                            number_format((float) $shares)
-                        ),
+                    $hasInsight = isset($insightsByMedia[$mediaId]);
+                    $matchedItem->update([
+                        'ig_media_id' => $mediaId ?: $matchedItem->ig_media_id,
+                        'ig_media_url' => $rawMediaUrl,
+                        'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
+                        'reach' => $hasInsight ? ($parsed['reach'] ?? $matchedItem->reach) : $matchedItem->reach,
+                        'views' => $hasInsight ? $views : (int) $matchedItem->views,
+                        'likes' => $likes,
+                        'comments_count' => $comments,
+                        'shares' => $hasInsight ? $shares : (int) $matchedItem->shares,
+                        'saves' => $hasInsight ? ($parsed['saves'] ?? $matchedItem->saves) : $matchedItem->saves,
+                        'metrics_synced_at' => $hasInsight ? now() : $matchedItem->metrics_synced_at,
                     ]);
+
+                    if ($hasChanged && $updatedHistoryCount < 20) {
+                        $updatedHistoryCount++;
+                        $matchedItem->history()->create([
+                            'from_status' => $matchedItem->status,
+                            'to_status' => $matchedItem->status,
+                            'actor' => 'System (Instagram Graph API)',
+                            'note' => sprintf(
+                                'Sinkronisasi metrik Instagram via batch: %s tayangan, %s suka, %s komentar, %s disimpan/dibagikan.',
+                                number_format((float) $views),
+                                number_format((float) $likes),
+                                number_format((float) $comments),
+                                number_format((float) $shares)
+                            ),
+                        ]);
+                    }
+
+                    $syncedCount++;
+                    $syncedItems[] = [
+                        'content_id' => (string) $matchedItem->content_id,
+                        'title' => (string) $matchedItem->title,
+                        'permalink' => $permalink ?: (string) $matchedItem->published_url,
+                        'reach' => $parsed['reach'] ?? $matchedItem->reach,
+                        'views' => $views,
+                        'likes' => $likes,
+                        'comments_count' => $comments,
+                        'shares' => $parsed['shares'] ?? $shares,
+                        'saves' => $parsed['saves'] ?? $matchedItem->saves,
+                    ];
+                } else {
+                    $rawCaption = trim((string) ($media['caption'] ?? ''));
+                    $firstLine = Str::before($rawCaption, "\n");
+                    $title = Str::limit(trim($firstLine), 80);
+                    if (empty($title)) {
+                        $title = sprintf('Post Instagram #%s', $shortcode ?: substr($mediaId, 0, 10));
+                    }
+
+                    $publishedAt = isset($media['timestamp']) ? Carbon::parse($media['timestamp']) : now();
+                    $mediaType = strtoupper((string) ($media['media_type'] ?? ''));
+                    $format = $mediaType === 'VIDEO' ? 'reels' : ($mediaType === 'CAROUSEL_ALBUM' ? 'carousel' : 'feed');
+                    $rawMediaUrl = $media['media_url'] ?? null;
+                    $rawThumbUrl = $media['thumbnail_url'] ?? $rawMediaUrl;
+                    $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
+                        ? $cachedThumbs['media_'.$mediaId]
+                        : $rawThumbUrl;
+                    $newItem = ContentItem::create([
+                        'title' => $title,
+                        'status' => 'published',
+                        'priority' => 'normal',
+                        'platform' => 'instagram',
+                        'format' => $format,
+                        'pillar' => 'kelembagaan',
+                        'pic_name' => 'Instagram Auto-Sync',
+                        'pic_role' => 'publisher',
+                        'production_deadline' => $publishedAt->toDateString(),
+                        'publish_date' => $publishedAt->toDateString(),
+                        'publish_time' => $publishedAt->format('H:i'),
+                        'caption' => $rawCaption ?: null,
+                        'published_url' => $permalink ?: sprintf('https://www.instagram.com/p/%s/', $shortcode),
+                        'ig_media_id' => $mediaId ?: null,
+                        'ig_media_url' => $rawMediaUrl,
+                        'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
+                        'reach' => $parsed['reach'],
+                        'views' => $views,
+                        'likes' => $likes,
+                        'comments_count' => $comments,
+                        'shares' => $shares,
+                        'saves' => $parsed['saves'],
+                        'metrics_synced_at' => now(),
+                    ]);
+
+                    $newItem->history()->create([
+                        'from_status' => 'inbox',
+                        'to_status' => 'published',
+                        'actor' => 'System (Instagram Auto-Sync)',
+                        'note' => 'Otomatis diimpor dan dipantau dari Instagram Graph API.',
+                    ]);
+
+                    if ($mediaId !== '') {
+                        $existingByMediaId[$mediaId] = $newItem;
+                    }
+                    if (! empty($newItem->published_url)) {
+                        $existingByPermalink[strtolower((string) $newItem->published_url)] = $newItem;
+                        $newSc = $this->extractShortcode((string) $newItem->published_url);
+                        if ($newSc !== null) {
+                            $existingByShortcode[$newSc] = $newItem;
+                        }
+                    }
+
+                    $importedCount++;
+                    $syncedCount++;
+                    $syncedItems[] = [
+                        'content_id' => (string) $newItem->content_id,
+                        'title' => (string) $newItem->title,
+                        'permalink' => (string) $newItem->published_url,
+                        'published_at' => $publishedAt->format('Y-m-d H:i'),
+                        'reach' => $parsed['reach'],
+                        'views' => $views,
+                        'likes' => $likes,
+                        'comments_count' => $comments,
+                        'shares' => $parsed['shares'] ?? $shares,
+                        'saves' => $parsed['saves'],
+                    ];
                 }
-
-                $syncedCount++;
-                $syncedItems[] = [
-                    'content_id' => (string) $matchedItem->content_id,
-                    'title' => (string) $matchedItem->title,
-                    'permalink' => $permalink ?: (string) $matchedItem->published_url,
-                    'reach' => $parsed['reach'] ?? $matchedItem->reach,
-                    'views' => $views,
-                    'likes' => $likes,
-                    'comments_count' => $comments,
-                    'shares' => $parsed['shares'] ?? $shares,
-                    'saves' => $parsed['saves'] ?? $matchedItem->saves,
-                ];
-            } else {
-                $rawCaption = trim((string) ($media['caption'] ?? ''));
-                $firstLine = Str::before($rawCaption, "\n");
-                $title = Str::limit(trim($firstLine), 80);
-                if (empty($title)) {
-                    $title = sprintf('Post Instagram #%s', $shortcode ?: substr($mediaId, 0, 10));
-                }
-
-                $publishedAt = isset($media['timestamp']) ? Carbon::parse($media['timestamp']) : now();
-                $mediaType = strtoupper((string) ($media['media_type'] ?? ''));
-                $format = $mediaType === 'VIDEO' ? 'reels' : ($mediaType === 'CAROUSEL_ALBUM' ? 'carousel' : 'feed');
-                $rawMediaUrl = $media['media_url'] ?? null;
-                $rawThumbUrl = $media['thumbnail_url'] ?? $rawMediaUrl;
-                $cachedThumb = $mediaId !== '' && isset($cachedThumbs['media_'.$mediaId])
-                    ? $cachedThumbs['media_'.$mediaId]
-                    : $rawThumbUrl;
-                $newItem = ContentItem::create([
-                    'title' => $title,
-                    'status' => 'published',
-                    'priority' => 'normal',
-                    'platform' => 'instagram',
-                    'format' => $format,
-                    'pillar' => 'kelembagaan',
-                    'pic_name' => 'Instagram Auto-Sync',
-                    'pic_role' => 'publisher',
-                    'production_deadline' => $publishedAt->toDateString(),
-                    'publish_date' => $publishedAt->toDateString(),
-                    'publish_time' => $publishedAt->format('H:i'),
-                    'caption' => $rawCaption ?: null,
-                    'published_url' => $permalink ?: sprintf('https://www.instagram.com/p/%s/', $shortcode),
-                    'ig_media_id' => $mediaId ?: null,
-                    'ig_media_url' => $rawMediaUrl,
-                    'ig_thumbnail_url' => $cachedThumb ?: $rawThumbUrl,
-                    'reach' => $parsed['reach'],
-                    'views' => $views,
-                    'likes' => $likes,
-                    'comments_count' => $comments,
-                    'shares' => $shares,
-                    'saves' => $parsed['saves'],
-                    'metrics_synced_at' => now(),
-                ]);
-
-                $newItem->history()->create([
-                    'from_status' => 'inbox',
-                    'to_status' => 'published',
-                    'actor' => 'System (Instagram Auto-Sync)',
-                    'note' => 'Otomatis diimpor dan dipantau dari Instagram Graph API.',
-                ]);
-
-                $existingItems->push($newItem);
-                $importedCount++;
-                $syncedCount++;
-                $syncedItems[] = [
-                    'content_id' => (string) $newItem->content_id,
-                    'title' => (string) $newItem->title,
-                    'permalink' => (string) $newItem->published_url,
-                    'published_at' => $publishedAt->format('Y-m-d H:i'),
-                    'reach' => $parsed['reach'],
-                    'views' => $views,
-                    'likes' => $likes,
-                    'comments_count' => $comments,
-                    'shares' => $parsed['shares'] ?? $shares,
-                    'saves' => $parsed['saves'],
-                ];
             }
-        }
+        });
 
         Cache::put($throttleKey, true, now()->addMinutes(5));
 
@@ -2395,15 +2432,25 @@ class InstagramGraphService
         $conn = Schema::hasTable('instagram_connections') ? InstagramConnection::current() : null;
         $ownUsername = strtolower((string) ($conn?->username ?? ''));
 
-        try {
-            $response = $this->metaHttp(25, 15)->get(sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                'fields' => 'id,caption,permalink,media_url,thumbnail_url,comments.limit(100){id,text,username,timestamp,like_count,hidden,replies{id,text,username,timestamp,like_count}}',
-                'limit' => max(1, min(50, $mediaLimit)),
-                'access_token' => $this->accessToken,
-            ]);
+        $this->prepareWebExecutionBudget();
 
-            if (! $response->successful()) {
-                $err = $response->json('error.message') ?? 'Gagal menarik daftar komentar dari Meta Graph API.';
+        try {
+            $commentFields = 'id,text,username,from{id,username},timestamp,like_count,hidden,replies{id,text,username,from{id,username},timestamp,like_count}';
+            $useTwoPhase = $mediaLimit > 50;
+
+            $paginated = $this->fetchPaginatedMedia(
+                $actualIgId,
+                $useTwoPhase
+                    ? 'id,caption,permalink,media_url,thumbnail_url,comments_count'
+                    : sprintf('id,caption,permalink,media_url,thumbnail_url,comments_count,comments.limit(100){%s}', $commentFields),
+                max(1, $mediaLimit),
+                $started,
+                8.0
+            );
+            $response = $paginated['response'] ?? null;
+
+            if (! $paginated['success']) {
+                $err = $paginated['error'] ?? 'Gagal menarik daftar komentar dari Meta Graph API.';
                 $this->captureApiTelemetry($response, 'sync_comments', $started, $err, false);
 
                 return [
@@ -2415,7 +2462,59 @@ class InstagramGraphService
             }
 
             /** @var array<int, array<string, mixed>> $mediaList */
-            $mediaList = $response->json('data') ?? [];
+            $mediaList = $paginated['data'];
+
+            // In two-phase mode, batch-fetch comments only for posts that have comments_count > 0
+            if ($useTwoPhase) {
+                $mediaIdsWithComments = [];
+                foreach ($mediaList as $idx => $m) {
+                    $mId = (string) ($m['id'] ?? '');
+                    $cCount = (int) ($m['comments_count'] ?? 0);
+                    if ($mId !== '' && empty($m['comments']['data']) && $cCount > 0) {
+                        $mediaIdsWithComments[$idx] = $mId;
+                    }
+                }
+
+                if (count($mediaIdsWithComments) > 60) {
+                    $mediaIdsWithComments = array_slice($mediaIdsWithComments, 0, 60, true);
+                }
+
+                foreach (array_chunk($mediaIdsWithComments, 40, true) as $chunk) {
+                    if ($this->isTimeBudgetExceeded($started, 16.0)) {
+                        break;
+                    }
+                    try {
+                        $batchResps = Http::batch(function (Batch $batch) use ($chunk, $commentFields): array {
+                            $reqs = [];
+                            foreach ($chunk as $idx => $mId) {
+                                $reqs[] = $batch->as((string) $idx)
+                                    ->connectTimeout(5)
+                                    ->timeout(8)
+                                    ->withOptions(['force_ip_resolve' => 'v4'])
+                                    ->get(sprintf('%s/%s/comments', $this->baseUrl, $mId), [
+                                        'fields' => $commentFields,
+                                        'limit' => 100,
+                                        'access_token' => $this->accessToken,
+                                    ]);
+                            }
+
+                            return $reqs;
+                        })->concurrency(15)->send();
+                        foreach ($chunk as $idx => $mId) {
+                            $cResp = $batchResps[(string) $idx] ?? null;
+                            if ($cResp instanceof Response && $cResp->successful()) {
+                                $mediaList[$idx]['comments'] = [
+                                    'data' => $cResp->json('data') ?? [],
+                                    'paging' => $cResp->json('paging') ?? [],
+                                ];
+                            }
+                        }
+                    } catch (\Throwable) {
+                        // Continue with partial comments
+                    }
+                }
+            }
+
             $contentItems = ContentItem::query()
                 ->where(function ($q): void {
                     $q->whereNotNull('ig_media_id')
@@ -2423,36 +2522,40 @@ class InstagramGraphService
                 })
                 ->get();
 
-            $syncedCount = 0;
-            $newUnrepliedCount = 0;
+            $ciByMediaId = [];
+            $ciByPermalink = [];
+            $ciByShortcode = [];
+            foreach ($contentItems as $ci) {
+                if (! empty($ci->ig_media_id)) {
+                    $ciByMediaId[(string) $ci->ig_media_id] = $ci;
+                }
+                if (! empty($ci->published_url)) {
+                    $ciByPermalink[strtolower((string) $ci->published_url)] = $ci;
+                    $sc = $this->extractShortcode((string) $ci->published_url);
+                    if ($sc !== null) {
+                        $ciByShortcode[$sc] = $ci;
+                    }
+                }
+            }
 
-            foreach ($mediaList as $media) {
+            // Collect comments per media first so thumbnails & existing comments are loaded in batches
+            $mediaCommentsMap = [];
+            $thumbTargets = [];
+            $allCommentIds = [];
+
+            foreach ($mediaList as $idx => $media) {
                 $mediaId = (string) ($media['id'] ?? '');
-                $permalink = (string) ($media['permalink'] ?? '');
-                $shortcode = $this->extractShortcode($permalink);
-                $captionExcerpt = Str::limit(trim((string) ($media['caption'] ?? '')), 120);
-                $thumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
-                $cachedThumb = $this->cacheThumbnailUrl($thumb, 'comm_'.($mediaId ?: 'thumb')) ?: null;
-
-                $linkedItem = $contentItems->first(function (ContentItem $ci) use ($mediaId, $permalink, $shortcode): bool {
-                    if ($mediaId !== '' && (string) $ci->ig_media_id === $mediaId) {
-                        return true;
-                    }
-                    if ($permalink !== '' && strcasecmp((string) $ci->published_url, $permalink) === 0) {
-                        return true;
-                    }
-
-                    return $shortcode !== null && $this->extractShortcode((string) $ci->published_url) === $shortcode;
-                });
-
                 /** @var array<int, array<string, mixed>> $comments */
                 $comments = $media['comments']['data'] ?? [];
                 $nextPageUrl = $media['comments']['paging']['next'] ?? null;
                 $pageGuard = 0;
-                while (is_string($nextPageUrl) && $nextPageUrl !== '' && $pageGuard < 4) {
+                while (is_string($nextPageUrl) && $nextPageUrl !== '' && $pageGuard < 3) {
+                    if ($this->isTimeBudgetExceeded($started, 17.5)) {
+                        break;
+                    }
                     $pageGuard++;
                     try {
-                        $nextResp = $this->metaHttp(15, 10)->get($nextPageUrl);
+                        $nextResp = $this->metaHttp(12, 6)->get($nextPageUrl);
                         if (! $nextResp->successful()) {
                             break;
                         }
@@ -2468,86 +2571,146 @@ class InstagramGraphService
                     }
                 }
 
-                // Collect top-level owner @mention replies sent via Instagram app
-                /** @var array<string, array<int, array<string, mixed>>> $ownerMentionRepliesByTarget */
-                $ownerMentionRepliesByTarget = [];
-                foreach ($comments as $cm) {
-                    $cmUsername = strtolower((string) ($cm['username'] ?? ''));
-                    if ($ownUsername !== '' && $cmUsername === $ownUsername) {
-                        $cmText = trim((string) ($cm['text'] ?? ''));
-                        if (preg_match('/^@([a-zA-Z0-9._]+)\b/u', $cmText, $m)) {
-                            $targetUser = strtolower($m[1]);
-                            $ownerMentionRepliesByTarget[$targetUser][] = $cm;
-                        }
-                    }
+                if (empty($comments)) {
+                    continue;
                 }
 
+                $mediaCommentsMap[$idx] = $comments;
+                $thumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
+                if ($mediaId !== '' && $thumb !== '') {
+                    $thumbTargets['comm_'.$mediaId] = $thumb;
+                }
                 foreach ($comments as $cm) {
-                    $igCommentId = (string) ($cm['id'] ?? '');
-                    if ($igCommentId === '') {
-                        continue;
+                    $cId = (string) ($cm['id'] ?? '');
+                    if ($cId !== '') {
+                        $allCommentIds[] = $cId;
+                    }
+                }
+            }
+
+            $cachedThumbs = $this->cacheThumbnailsBatch($thumbTargets, $started, 19.0);
+            $existingCommentsMap = ! empty($allCommentIds)
+                ? InstagramComment::whereIn('ig_comment_id', array_values(array_unique($allCommentIds)))->get()->keyBy('ig_comment_id')
+                : collect();
+
+            $syncedCount = 0;
+            $newUnrepliedCount = 0;
+
+            DB::transaction(function () use (
+                $mediaCommentsMap,
+                $mediaList,
+                $cachedThumbs,
+                $ciByMediaId,
+                $ciByPermalink,
+                $ciByShortcode,
+                $ownUsername,
+                $existingCommentsMap,
+                $conn,
+                &$syncedCount,
+                &$newUnrepliedCount
+            ): void {
+                foreach ($mediaCommentsMap as $idx => $comments) {
+                    $media = $mediaList[$idx];
+                    $mediaId = (string) ($media['id'] ?? '');
+                    $permalink = (string) ($media['permalink'] ?? '');
+                    $shortcode = $this->extractShortcode($permalink);
+                    $captionExcerpt = Str::limit(trim((string) ($media['caption'] ?? '')), 120);
+                    $thumb = (string) ($media['thumbnail_url'] ?? $media['media_url'] ?? '');
+                    $cachedThumb = ($mediaId !== '' && isset($cachedThumbs['comm_'.$mediaId]))
+                        ? $cachedThumbs['comm_'.$mediaId]
+                        : ($thumb ?: null);
+
+                    $linkedItem = null;
+                    if ($mediaId !== '' && isset($ciByMediaId[$mediaId])) {
+                        $linkedItem = $ciByMediaId[$mediaId];
+                    } elseif ($permalink !== '' && isset($ciByPermalink[strtolower($permalink)])) {
+                        $linkedItem = $ciByPermalink[strtolower($permalink)];
+                    } elseif ($shortcode !== null && isset($ciByShortcode[$shortcode])) {
+                        $linkedItem = $ciByShortcode[$shortcode];
                     }
 
-                    $cmUsername = (string) ($cm['username'] ?? 'pengguna_ig');
-                    $cmUsernameLower = strtolower($cmUsername);
-                    if ($ownUsername !== '' && $cmUsernameLower === $ownUsername) {
-                        continue;
-                    }
-
-                    /** @var array<int, array<string, mixed>> $replies */
-                    $replies = $cm['replies']['data'] ?? [];
-                    $officialReply = null;
-                    foreach ($replies as $rep) {
-                        $repUser = strtolower((string) ($rep['username'] ?? ''));
-                        if ($ownUsername === '' || $repUser === $ownUsername) {
-                            $officialReply = $rep;
-                            break;
-                        }
-                    }
-
-                    if ($officialReply === null && ! empty($ownerMentionRepliesByTarget[$cmUsernameLower])) {
-                        $commentTs = isset($cm['timestamp']) ? Carbon::parse((string) $cm['timestamp'])->getTimestamp() : 0;
-                        foreach ($ownerMentionRepliesByTarget[$cmUsernameLower] as $idx => $candidateReply) {
-                            $replyTs = isset($candidateReply['timestamp']) ? Carbon::parse((string) $candidateReply['timestamp'])->getTimestamp() : 0;
-                            if ($replyTs >= $commentTs) {
-                                $officialReply = $candidateReply;
-                                unset($ownerMentionRepliesByTarget[$cmUsernameLower][$idx]);
-                                break;
+                    // Collect top-level owner @mention replies sent via Instagram app
+                    /** @var array<string, array<int, array<string, mixed>>> $ownerMentionRepliesByTarget */
+                    $ownerMentionRepliesByTarget = [];
+                    foreach ($comments as $cm) {
+                        $cmUsername = strtolower((string) ($cm['username'] ?? ($cm['from']['username'] ?? '')));
+                        if ($ownUsername !== '' && $cmUsername === $ownUsername) {
+                            $cmText = trim((string) ($cm['text'] ?? ''));
+                            if (preg_match('/^@([a-zA-Z0-9._]+)\b/u', $cmText, $m)) {
+                                $targetUser = strtolower($m[1]);
+                                $ownerMentionRepliesByTarget[$targetUser][] = $cm;
                             }
                         }
                     }
 
-                    $existing = InstagramComment::where('ig_comment_id', $igCommentId)->first();
-                    $isReplied = ($existing?->is_replied ?? false) || $officialReply !== null;
+                    foreach ($comments as $cm) {
+                        $igCommentId = (string) ($cm['id'] ?? '');
+                        if ($igCommentId === '') {
+                            continue;
+                        }
 
-                    $record = InstagramComment::updateOrCreate(
-                        ['ig_comment_id' => $igCommentId],
-                        [
-                            'ig_media_id' => $mediaId,
-                            'media_permalink' => $permalink ?: null,
-                            'media_caption_excerpt' => $captionExcerpt ?: null,
-                            'media_thumbnail_url' => $cachedThumb,
-                            'content_item_id' => $linkedItem?->id,
-                            'username' => $cmUsername,
-                            'text' => (string) ($cm['text'] ?? ''),
-                            'like_count' => (int) ($cm['like_count'] ?? 0),
-                            'is_hidden' => (bool) ($cm['hidden'] ?? ($existing?->is_hidden ?? false)),
-                            'is_replied' => $isReplied,
-                            'reply_text' => $officialReply ? (string) ($officialReply['text'] ?? '') : $existing?->reply_text,
-                            'replied_by' => $officialReply ? ('@'.($officialReply['username'] ?? $conn?->username)) : $existing?->replied_by,
-                            'replied_at' => $officialReply && isset($officialReply['timestamp'])
-                                ? Carbon::parse((string) $officialReply['timestamp'])
-                                : $existing?->replied_at,
-                            'commented_at' => isset($cm['timestamp']) ? Carbon::parse((string) $cm['timestamp']) : now(),
-                        ]
-                    );
+                        $cmUsername = (string) ($cm['username'] ?? ($cm['from']['username'] ?? 'pengguna_ig'));
+                        $cmUsernameLower = strtolower($cmUsername);
+                        if ($ownUsername !== '' && $cmUsernameLower === $ownUsername) {
+                            continue;
+                        }
 
-                    if ($record->wasRecentlyCreated && ! $isReplied) {
-                        $newUnrepliedCount++;
+                        /** @var array<int, array<string, mixed>> $replies */
+                        $replies = $cm['replies']['data'] ?? [];
+                        $officialReply = null;
+                        foreach ($replies as $rep) {
+                            $repUser = strtolower((string) ($rep['username'] ?? ($rep['from']['username'] ?? '')));
+                            if ($ownUsername === '' || $repUser === $ownUsername) {
+                                $officialReply = $rep;
+                                break;
+                            }
+                        }
+
+                        if ($officialReply === null && ! empty($ownerMentionRepliesByTarget[$cmUsernameLower])) {
+                            $commentTs = isset($cm['timestamp']) ? Carbon::parse((string) $cm['timestamp'])->getTimestamp() : 0;
+                            foreach ($ownerMentionRepliesByTarget[$cmUsernameLower] as $rIdx => $candidateReply) {
+                                $replyTs = isset($candidateReply['timestamp']) ? Carbon::parse((string) $candidateReply['timestamp'])->getTimestamp() : 0;
+                                if ($replyTs >= $commentTs) {
+                                    $officialReply = $candidateReply;
+                                    unset($ownerMentionRepliesByTarget[$cmUsernameLower][$rIdx]);
+                                    break;
+                                }
+                            }
+                        }
+
+                        /** @var InstagramComment|null $existing */
+                        $existing = $existingCommentsMap->get($igCommentId);
+                        $isReplied = ($existing?->is_replied ?? false) || $officialReply !== null;
+
+                        $record = InstagramComment::updateOrCreate(
+                            ['ig_comment_id' => $igCommentId],
+                            [
+                                'ig_media_id' => $mediaId,
+                                'media_permalink' => $permalink ?: null,
+                                'media_caption_excerpt' => $captionExcerpt ?: null,
+                                'media_thumbnail_url' => $cachedThumb,
+                                'content_item_id' => $linkedItem?->id,
+                                'username' => $cmUsername,
+                                'text' => (string) ($cm['text'] ?? ''),
+                                'like_count' => (int) ($cm['like_count'] ?? 0),
+                                'is_hidden' => (bool) ($cm['hidden'] ?? ($existing?->is_hidden ?? false)),
+                                'is_replied' => $isReplied,
+                                'reply_text' => $officialReply ? (string) ($officialReply['text'] ?? '') : $existing?->reply_text,
+                                'replied_by' => $officialReply ? ('@'.($officialReply['username'] ?? ($officialReply['from']['username'] ?? $conn?->username))) : $existing?->replied_by,
+                                'replied_at' => $officialReply && isset($officialReply['timestamp'])
+                                    ? Carbon::parse((string) $officialReply['timestamp'])
+                                    : $existing?->replied_at,
+                                'commented_at' => isset($cm['timestamp']) ? Carbon::parse((string) $cm['timestamp']) : now(),
+                            ]
+                        );
+
+                        if ($record->wasRecentlyCreated && ! $isReplied) {
+                            $newUnrepliedCount++;
+                        }
+                        $syncedCount++;
                     }
-                    $syncedCount++;
                 }
-            }
+            });
 
             if ($conn) {
                 $conn->update(['comments_synced_at' => now()]);
@@ -2589,7 +2752,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $response = Http::timeout(15)->post(sprintf('%s/%s/replies', $this->baseUrl, $comment->ig_comment_id), [
+            $response = $this->metaHttp(15, 10)->post(sprintf('%s/%s/replies', $this->baseUrl, $comment->ig_comment_id), [
                 'message' => $message,
                 'access_token' => $this->accessToken,
             ]);
@@ -2634,7 +2797,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $response = Http::timeout(10)->post(sprintf('%s/%s', $this->baseUrl, $comment->ig_comment_id), [
+            $response = $this->metaHttp(15, 10)->post(sprintf('%s/%s', $this->baseUrl, $comment->ig_comment_id), [
                 'hide' => $hide ? 'true' : 'false',
                 'access_token' => $this->accessToken,
             ]);
@@ -2674,7 +2837,7 @@ class InstagramGraphService
         $started = microtime(true);
 
         try {
-            $response = Http::timeout(10)->delete(sprintf('%s/%s', $this->baseUrl, $comment->ig_comment_id), [
+            $response = $this->metaHttp(15, 10)->delete(sprintf('%s/%s', $this->baseUrl, $comment->ig_comment_id), [
                 'access_token' => $this->accessToken,
             ]);
 
@@ -2739,7 +2902,7 @@ class InstagramGraphService
      * @param  array<string, string>  $urlByPrefix
      * @return array<string, string>
      */
-    protected function cacheThumbnailsBatch(array $urlByPrefix): array
+    protected function cacheThumbnailsBatch(array $urlByPrefix, ?float $startedAt = null, float $budgetSeconds = 19.5): array
     {
         $result = [];
         $toFetch = [];
@@ -2767,7 +2930,11 @@ class InstagramGraphService
             }
         }
 
-        if (empty($toFetch) || (app()->runningUnitTests() && ! Http::hasFakes())) {
+        if (
+            empty($toFetch)
+            || (app()->runningUnitTests() && ! Http::hasFakes())
+            || ($startedAt !== null && $this->isTimeBudgetExceeded($startedAt, $budgetSeconds))
+        ) {
             foreach ($toFetch as $prefix => $info) {
                 $result[$prefix] = $info['url'];
             }
@@ -2775,20 +2942,27 @@ class InstagramGraphService
             return $result;
         }
 
-        $fetchSlice = array_slice($toFetch, 0, 120, true);
-        $remainder = array_slice($toFetch, 120, null, true);
+        $fetchSlice = array_slice($toFetch, 0, 25, true);
+        $remainder = array_slice($toFetch, 25, null, true);
         foreach ($remainder as $prefix => $info) {
             $result[$prefix] = $info['url'];
         }
+        foreach ($fetchSlice as $prefix => $info) {
+            $result[$prefix] = $info['url'];
+        }
 
-        foreach (array_chunk($fetchSlice, 40, true) as $chunk) {
+        foreach (array_chunk($fetchSlice, 25, true) as $chunk) {
+            if ($startedAt !== null && $this->isTimeBudgetExceeded($startedAt, $budgetSeconds)) {
+                break;
+            }
+
             try {
                 $responses = Http::batch(function (Batch $batch) use ($chunk): array {
                     $reqs = [];
                     foreach ($chunk as $prefix => $info) {
                         $reqs[] = $batch->as((string) $prefix)
-                            ->connectTimeout(6)
-                            ->timeout(8)
+                            ->connectTimeout(3)
+                            ->timeout(5)
                             ->withOptions(['force_ip_resolve' => 'v4'])
                             ->get($info['url']);
                     }
@@ -2802,18 +2976,13 @@ class InstagramGraphService
                         try {
                             Storage::disk('public')->put($info['filename'], $resp->body());
                             $result[$prefix] = Storage::disk('public')->url($info['filename']);
-
-                            continue;
                         } catch (\Throwable) {
-                            // fallback below
+                            // Keep CDN URL fallback already populated
                         }
                     }
-                    $result[$prefix] = $info['url'];
                 }
             } catch (\Throwable) {
-                foreach ($chunk as $prefix => $info) {
-                    $result[$prefix] = $info['url'];
-                }
+                // Keep CDN URL fallbacks already populated
             }
         }
 
@@ -2821,7 +2990,26 @@ class InstagramGraphService
     }
 
     /**
-     * Fetch all Meta Ad Accounts accessible by the configured access token.
+     * Resolve the User Access Token required by Meta Marketing API endpoints (`/me/adaccounts`, `/act_.../campaigns`, `/act_.../insights`).
+     */
+    protected function resolveAdAccessToken(): string
+    {
+        try {
+            if (Schema::hasTable('instagram_connections')) {
+                $conn = InstagramConnection::current();
+                if (! empty($conn->user_access_token)) {
+                    return (string) $conn->user_access_token;
+                }
+            }
+        } catch (\Throwable) {
+            // Fallback below
+        }
+
+        return (string) $this->accessToken;
+    }
+
+    /**
+     * Fetch all Meta Ad Accounts accessible by the configured User Access Token.
      *
      * @return array{success: bool, accounts?: array<int, array<string, mixed>>, error?: string}
      */
@@ -2831,29 +3019,80 @@ class InstagramGraphService
             return ['success' => false, 'error' => 'Kredensial Meta belum terhubung.'];
         }
 
+        $adToken = $this->resolveAdAccessToken();
+        $adFields = 'id,name,account_id,account_status,currency,amount_spent,spend_cap,balance';
+
         try {
-            $resp = Http::timeout(10)->get(sprintf('%s/me/adaccounts', $this->baseUrl), [
-                'fields' => 'id,name,account_id,account_status,currency,amount_spent,spend_cap,balance',
-                'access_token' => $this->accessToken,
+            $resp = $this->metaHttp(18, 12)->get(sprintf('%s/me/adaccounts', $this->baseUrl), [
+                'fields' => $adFields,
+                'limit' => 100,
+                'access_token' => $adToken,
             ]);
 
-            if (! $resp->successful()) {
-                if ($resp->json('error.code') === 100) {
+            $accounts = [];
+            $seenIds = [];
+
+            if ($resp->successful()) {
+                foreach ((array) ($resp->json('data') ?? []) as $acc) {
+                    $accId = (string) ($acc['id'] ?? $acc['account_id'] ?? '');
+                    if ($accId !== '' && ! isset($seenIds[$accId])) {
+                        $seenIds[$accId] = true;
+                        $accounts[] = $acc;
+                    }
+                }
+            }
+
+            // Fallback: discover Ad Accounts owned/managed inside Business Portfolio when `/me/adaccounts` returns none
+            if (empty($accounts)) {
+                try {
+                    $bizResp = $this->metaHttp(18, 12)->get(sprintf('%s/me/businesses', $this->baseUrl), [
+                        'fields' => sprintf('id,name,owned_ad_accounts{%s},client_ad_accounts{%s}', $adFields, $adFields),
+                        'limit' => 50,
+                        'access_token' => $adToken,
+                    ]);
+                    if ($bizResp->successful()) {
+                        foreach ((array) ($bizResp->json('data') ?? []) as $biz) {
+                            foreach (['owned_ad_accounts', 'client_ad_accounts'] as $edge) {
+                                foreach ((array) ($biz[$edge]['data'] ?? []) as $bAcc) {
+                                    $accId = (string) ($bAcc['id'] ?? $bAcc['account_id'] ?? '');
+                                    if ($accId !== '' && ! isset($seenIds[$accId])) {
+                                        $seenIds[$accId] = true;
+                                        $accounts[] = $bAcc;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (\Throwable) {
+                    // Ignore if business_management scope is unavailable
+                }
+            }
+
+            if (! $resp->successful() && empty($accounts)) {
+                $errCode = (int) ($resp->json('error.code') ?? 0);
+                $rawErr = (string) ($resp->json('error.message') ?? '');
+                if ($errCode === 100 && str_contains(strtolower($rawErr), 'page')) {
                     return [
-                        'success' => true,
-                        'accounts' => [],
+                        'success' => false,
+                        'error' => 'Endpoint Meta Ads memerlukan User Access Token (bukan Page Token). Silakan hubungkan ulang via Pengaturan → Perbarui Otorisasi Meta dengan scope ads_read aktif.',
+                    ];
+                }
+                if (in_array($errCode, [10, 200], true) || str_contains(strtolower($rawErr), 'ads_read')) {
+                    return [
+                        'success' => false,
+                        'error' => 'Izin ads_read belum aktif pada token Meta. Centang "Meta Marketing API (ads_read)" di Pengaturan → Smart Scopes lalu klik Perbarui Otorisasi Meta.',
                     ];
                 }
 
                 return [
                     'success' => false,
-                    'error' => $resp->json('error.message') ?? sprintf('HTTP %d: Gagal memuat akun iklan.', $resp->status()),
+                    'error' => $rawErr ?: sprintf('HTTP %d: Gagal memuat akun iklan.', $resp->status()),
                 ];
             }
 
             return [
                 'success' => true,
-                'accounts' => $resp->json('data') ?? [],
+                'accounts' => $accounts,
             ];
         } catch (\Throwable $e) {
             return ['success' => false, 'error' => $e->getMessage()];
@@ -2872,11 +3111,13 @@ class InstagramGraphService
         }
 
         $formattedId = Str::startsWith($adAccountId, 'act_') ? $adAccountId : 'act_'.$adAccountId;
+        $adToken = $this->resolveAdAccessToken();
 
         try {
-            $resp = Http::timeout(10)->get(sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
+            $resp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
                 'fields' => 'id,name,status,objective,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
-                'access_token' => $this->accessToken,
+                'limit' => 100,
+                'access_token' => $adToken,
             ]);
 
             if (! $resp->successful()) {
@@ -2907,13 +3148,15 @@ class InstagramGraphService
         }
 
         $formattedId = Str::startsWith($adAccountId, 'act_') ? $adAccountId : 'act_'.$adAccountId;
+        $adToken = $this->resolveAdAccessToken();
 
         try {
-            $resp = Http::timeout(12)->get(sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+            $resp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
                 'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,cpc,cpm,ctr,actions,cost_per_action_type',
                 'date_preset' => $datePreset,
                 'level' => 'campaign',
-                'access_token' => $this->accessToken,
+                'limit' => 100,
+                'access_token' => $adToken,
             ]);
 
             if (! $resp->successful()) {
@@ -2922,7 +3165,6 @@ class InstagramGraphService
                     'error' => $resp->json('error.message') ?? sprintf('HTTP %d: Gagal memuat insights iklan.', $resp->status()),
                 ];
             }
-
             /** @var array<int, array<string, mixed>> $rows */
             $rows = $resp->json('data') ?? [];
             $totalSpend = 0.0;
@@ -3002,6 +3244,8 @@ class InstagramGraphService
                 InstagramConnection::current()->update(['ads_data' => $emptyPayload]);
             }
 
+            $this->captureApiTelemetry(null, 'sync_ads', $started, 'Tidak ada Ad Account ditemukan di Meta Ads Manager.');
+
             return ['success' => true, 'ads_data' => $emptyPayload];
         }
 
@@ -3019,6 +3263,15 @@ class InstagramGraphService
         $campaignsResult = $this->fetchAdCampaigns($selectedId);
         $insightsResult = $this->fetchAdInsights($selectedId, $datePreset);
 
+        if (! ($campaignsResult['success'] ?? false) && ! ($insightsResult['success'] ?? false)) {
+            $err = $campaignsResult['error'] ?? $insightsResult['error'] ?? 'Gagal menarik kampanye dan insights iklan dari Meta Marketing API.';
+            $this->captureApiTelemetry(null, 'sync_ads', $started, $err, false);
+
+            return [
+                'success' => false,
+                'error' => $err,
+            ];
+        }
         $adsPayload = [
             'accounts' => $accounts,
             'active_account' => $selectedAccount,
@@ -3041,6 +3294,18 @@ class InstagramGraphService
             InstagramConnection::current()->update(['ads_data' => $adsPayload]);
         }
 
+        $this->captureApiTelemetry(
+            null,
+            'sync_ads',
+            $started,
+            sprintf(
+                'Ads disinkronkan (%s: %d kampanye, %d impresi).',
+                $selectedAccount['name'] ?? $selectedId,
+                count($adsPayload['campaigns']),
+                $adsPayload['summary']['total_impressions'] ?? 0
+            )
+        );
+
         return ['success' => true, 'ads_data' => $adsPayload];
     }
 
@@ -3056,14 +3321,9 @@ class InstagramGraphService
         }
 
         $actualIgId = $this->resolveActualInstagramId();
+        $started = microtime(true);
 
         try {
-            $resp = Http::timeout(10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
-                'metric' => 'audience_gender_age,audience_country,audience_city,audience_locale',
-                'period' => 'lifetime',
-                'access_token' => $this->accessToken,
-            ]);
-
             $payload = [
                 'gender_age' => [],
                 'gender_distribution' => ['male' => 0, 'female' => 0, 'unspecified' => 0],
@@ -3074,55 +3334,208 @@ class InstagramGraphService
                 'synced_at' => now()->format('d M Y, H:i').' WIB',
             ];
 
-            if ($resp->successful()) {
-                /** @var array<int, array<string, mixed>> $data */
-                $data = $resp->json('data') ?? [];
-                foreach ($data as $metricRow) {
-                    $mName = (string) ($metricRow['name'] ?? '');
-                    $valMap = $metricRow['values'][0]['value'] ?? ($metricRow['total_value']['value'] ?? []);
-
-                    if (! is_array($valMap) || empty($valMap)) {
-                        continue;
-                    }
-
-                    $payload['has_data'] = true;
-
-                    if ($mName === 'audience_gender_age') {
-                        $payload['gender_age'] = $valMap;
-                        $mTotal = 0;
-                        $fTotal = 0;
-                        $uTotal = 0;
-                        foreach ($valMap as $k => $count) {
-                            if (Str::startsWith($k, 'M.')) {
-                                $mTotal += (int) $count;
-                            } elseif (Str::startsWith($k, 'F.')) {
-                                $fTotal += (int) $count;
-                            } else {
-                                $uTotal += (int) $count;
+            $extractBreakdownMap = static function (?Response $resp, string $targetKey): array {
+                if (! $resp instanceof Response || ! $resp->successful()) {
+                    return [];
+                }
+                $out = [];
+                foreach ((array) ($resp->json('data') ?? []) as $row) {
+                    foreach ((array) ($row['total_value']['breakdowns'] ?? []) as $bd) {
+                        $dimKeys = (array) ($bd['dimension_keys'] ?? []);
+                        $keyIdx = array_search($targetKey, $dimKeys, true);
+                        foreach ((array) ($bd['results'] ?? []) as $resRow) {
+                            $dimVals = (array) ($resRow['dimension_values'] ?? []);
+                            $label = $keyIdx !== false && isset($dimVals[$keyIdx])
+                                ? (string) $dimVals[$keyIdx]
+                                : (string) (end($dimVals) ?: '');
+                            $val = (int) ($resRow['value'] ?? 0);
+                            if ($label !== '' && $val > 0) {
+                                $out[$label] = ($out[$label] ?? 0) + $val;
                             }
                         }
-                        $all = max(1, $mTotal + $fTotal + $uTotal);
-                        $payload['gender_distribution'] = [
-                            'male' => round(($mTotal / $all) * 100, 1),
-                            'female' => round(($fTotal / $all) * 100, 1),
-                            'unspecified' => round(($uTotal / $all) * 100, 1),
-                        ];
-                    } elseif ($mName === 'audience_country') {
-                        arsort($valMap);
-                        $payload['top_countries'] = array_slice($valMap, 0, 5, true);
-                    } elseif ($mName === 'audience_city') {
-                        arsort($valMap);
-                        $payload['top_cities'] = array_slice($valMap, 0, 5, true);
-                    } elseif ($mName === 'audience_locale') {
-                        arsort($valMap);
-                        $payload['top_locales'] = array_slice($valMap, 0, 5, true);
                     }
                 }
+
+                return $out;
+            };
+
+            $permissionError = null;
+            $lastApiError = null;
+            $fetchBreakdowns = function (string $metric) use ($actualIgId, &$permissionError, &$lastApiError): array {
+                try {
+                    $responses = Http::batch(function (Batch $batch) use ($actualIgId, $metric): array {
+                        $reqs = [];
+                        foreach (['gender', 'age', 'city', 'country'] as $bd) {
+                            $reqs[] = $batch->as($bd)
+                                ->connectTimeout(10)
+                                ->timeout(15)
+                                ->withOptions(['force_ip_resolve' => 'v4'])
+                                ->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+                                    'metric' => $metric,
+                                    'period' => 'lifetime',
+                                    'timeframe' => 'this_month',
+                                    'metric_type' => 'total_value',
+                                    'breakdown' => $bd,
+                                    'access_token' => $this->accessToken,
+                                ]);
+                        }
+
+                        return $reqs;
+                    })->concurrency(4)->send();
+
+                    foreach (['gender', 'age', 'city', 'country'] as $bd) {
+                        $r = $responses[$bd] ?? null;
+                        if ($r instanceof Response && ! $r->successful()) {
+                            $code = (int) ($r->json('error.code') ?? 0);
+                            $msg = (string) ($r->json('error.message') ?? '');
+                            if ($msg !== '') {
+                                $lastApiError = $msg;
+                            }
+                            if (in_array($code, [10, 190, 200], true)) {
+                                $permissionError = $msg;
+                            }
+                        }
+                    }
+
+                    return is_array($responses) ? $responses : [];
+                } catch (\Throwable) {
+                    return [];
+                }
+            };
+
+            // 1. Primary Meta Graph API v20+/v21+ follower_demographics
+            $v21Resps = $fetchBreakdowns('follower_demographics');
+            $genderMap = $extractBreakdownMap($v21Resps['gender'] ?? null, 'gender');
+            $ageMap = $extractBreakdownMap($v21Resps['age'] ?? null, 'age');
+            $cityMap = $extractBreakdownMap($v21Resps['city'] ?? null, 'city');
+            $countryMap = $extractBreakdownMap($v21Resps['country'] ?? null, 'country');
+
+            // 2. Secondary v21+ fallback: engaged_audience_demographics if follower_demographics is empty
+            if (empty($genderMap) && empty($ageMap) && empty($cityMap) && empty($countryMap)) {
+                $engagedResps = $fetchBreakdowns('engaged_audience_demographics');
+                $genderMap = $extractBreakdownMap($engagedResps['gender'] ?? null, 'gender');
+                $ageMap = $extractBreakdownMap($engagedResps['age'] ?? null, 'age');
+                $cityMap = $extractBreakdownMap($engagedResps['city'] ?? null, 'city');
+                $countryMap = $extractBreakdownMap($engagedResps['country'] ?? null, 'country');
+            }
+
+            if (! empty($genderMap)) {
+                $payload['has_data'] = true;
+                $mTotal = 0;
+                $fTotal = 0;
+                $uTotal = 0;
+                foreach ($genderMap as $k => $count) {
+                    $upper = strtoupper((string) $k);
+                    if ($upper === 'M' || $upper === 'MALE') {
+                        $mTotal += (int) $count;
+                    } elseif ($upper === 'F' || $upper === 'FEMALE') {
+                        $fTotal += (int) $count;
+                    } else {
+                        $uTotal += (int) $count;
+                    }
+                }
+                $all = max(1, $mTotal + $fTotal + $uTotal);
+                $payload['gender_distribution'] = [
+                    'male' => round(($mTotal / $all) * 100, 1),
+                    'female' => round(($fTotal / $all) * 100, 1),
+                    'unspecified' => round(($uTotal / $all) * 100, 1),
+                ];
+            }
+
+            if (! empty($ageMap)) {
+                $payload['has_data'] = true;
+                ksort($ageMap);
+                $payload['gender_age'] = $ageMap;
+            }
+
+            if (! empty($cityMap)) {
+                $payload['has_data'] = true;
+                arsort($cityMap);
+                $payload['top_cities'] = array_slice($cityMap, 0, 5, true);
+            }
+
+            if (! empty($countryMap)) {
+                $payload['has_data'] = true;
+                arsort($countryMap);
+                $payload['top_countries'] = array_slice($countryMap, 0, 5, true);
+            }
+
+            // 3. Legacy fallback (pre-v20 `audience_*` metrics & backwards compatibility)
+            if (! $payload['has_data']) {
+                $resp = $this->metaHttp(15, 10)->get(sprintf('%s/%s/insights', $this->baseUrl, $actualIgId), [
+                    'metric' => 'audience_gender_age,audience_country,audience_city,audience_locale',
+                    'period' => 'lifetime',
+                    'access_token' => $this->accessToken,
+                ]);
+
+                if ($resp->successful()) {
+                    /** @var array<int, array<string, mixed>> $data */
+                    $data = $resp->json('data') ?? [];
+                    foreach ($data as $metricRow) {
+                        $mName = (string) ($metricRow['name'] ?? '');
+                        $valMap = $metricRow['values'][0]['value'] ?? ($metricRow['total_value']['value'] ?? []);
+
+                        if (! is_array($valMap) || empty($valMap)) {
+                            continue;
+                        }
+
+                        $payload['has_data'] = true;
+
+                        if ($mName === 'audience_gender_age') {
+                            $payload['gender_age'] = $valMap;
+                            $mTotal = 0;
+                            $fTotal = 0;
+                            $uTotal = 0;
+                            foreach ($valMap as $k => $count) {
+                                if (Str::startsWith($k, 'M.')) {
+                                    $mTotal += (int) $count;
+                                } elseif (Str::startsWith($k, 'F.')) {
+                                    $fTotal += (int) $count;
+                                } else {
+                                    $uTotal += (int) $count;
+                                }
+                            }
+                            $all = max(1, $mTotal + $fTotal + $uTotal);
+                            $payload['gender_distribution'] = [
+                                'male' => round(($mTotal / $all) * 100, 1),
+                                'female' => round(($fTotal / $all) * 100, 1),
+                                'unspecified' => round(($uTotal / $all) * 100, 1),
+                            ];
+                        } elseif ($mName === 'audience_country') {
+                            arsort($valMap);
+                            $payload['top_countries'] = array_slice($valMap, 0, 5, true);
+                        } elseif ($mName === 'audience_city') {
+                            arsort($valMap);
+                            $payload['top_cities'] = array_slice($valMap, 0, 5, true);
+                        } elseif ($mName === 'audience_locale') {
+                            arsort($valMap);
+                            $payload['top_locales'] = array_slice($valMap, 0, 5, true);
+                        }
+                    }
+                }
+            }
+
+            if (! $payload['has_data'] && ! empty($permissionError)) {
+                $this->captureApiTelemetry(null, 'sync_demographics', $started, 'Meta menolak akses Demografi: '.$permissionError, false);
+
+                return [
+                    'success' => false,
+                    'error' => 'Meta menolak akses Demografi: '.$permissionError,
+                ];
             }
 
             if (Schema::hasTable('instagram_connections')) {
                 InstagramConnection::current()->update(['demographics_data' => $payload]);
             }
+
+            $this->captureApiTelemetry(
+                null,
+                'sync_demographics',
+                $started,
+                $payload['has_data']
+                    ? 'Demografi audiens (gender, usia, kota, negara) disinkronkan.'
+                    : ('Demografi kosong dari Meta.'.($lastApiError ? ' Catatan Meta: '.$lastApiError : ''))
+            );
 
             return ['success' => true, 'demographics' => $payload];
         } catch (\Throwable $e) {
@@ -3144,7 +3557,7 @@ class InstagramGraphService
         $actualIgId = $this->resolveActualInstagramId();
 
         try {
-            $resp = Http::timeout(10)->get(sprintf('%s/%s/stories', $this->baseUrl, $actualIgId), [
+            $resp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/stories', $this->baseUrl, $actualIgId), [
                 'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp',
                 'access_token' => $this->accessToken,
             ]);
@@ -3170,14 +3583,14 @@ class InstagramGraphService
 
                     try {
                         // Meta Graph API v22.0+ story metrics
-                        $sInsight = Http::timeout(6)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
+                        $sInsight = $this->metaHttp(10, 8)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
                             'metric' => 'reach,views,replies,shares,navigation,profile_visits',
                             'access_token' => $this->accessToken,
                         ]);
 
                         if (! $sInsight->successful()) {
                             // Fallback to older Graph API format
-                            $sInsight = Http::timeout(6)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
+                            $sInsight = $this->metaHttp(10, 8)->get(sprintf('%s/%s/insights', $this->baseUrl, $storyId), [
                                 'metric' => 'reach,views,replies,navigation',
                                 'access_token' => $this->accessToken,
                             ]);
@@ -3240,13 +3653,13 @@ class InstagramGraphService
         $actualIgId = $this->resolveActualInstagramId();
 
         try {
-            $tagsResp = Http::timeout(10)->get(sprintf('%s/%s/tags', $this->baseUrl, $actualIgId), [
+            $tagsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/tags', $this->baseUrl, $actualIgId), [
                 'fields' => 'id,caption,media_type,media_url,permalink,timestamp,username,like_count,comments_count',
                 'limit' => 20,
                 'access_token' => $this->accessToken,
             ]);
 
-            $mentionsResp = Http::timeout(10)->get(sprintf('%s/%s/mentioned_media', $this->baseUrl, $actualIgId), [
+            $mentionsResp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/mentioned_media', $this->baseUrl, $actualIgId), [
                 'fields' => 'id,caption,media_type,media_url,permalink,timestamp',
                 'limit' => 20,
                 'access_token' => $this->accessToken,

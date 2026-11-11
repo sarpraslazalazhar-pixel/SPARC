@@ -72,6 +72,12 @@ export type ContentPillarKey =
 
 export type UserRoleKey = 'admin' | 'manager' | 'planner' | 'creator' | 'publisher' | 'viewer';
 
+
+export const FORMAT_GROUPS: Record<'reels' | 'feed' | 'carousel', string[]> = {
+    reels: ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
+    carousel: ['carousel', 'carousel_feed'],
+    feed: ['feed', 'single', 'single_image', 'single_feed'],
+};
 export function normalizeWorkflowStatus(status?: string): CanonicalWorkflowStatus {
     switch (status) {
         case 'inbox':

@@ -23,3 +23,15 @@
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
 </IfModule>
+
+<IfModule mod_php.c>
+    php_value max_execution_time 120
+    php_value max_input_time 120
+    php_value memory_limit 256M
+</IfModule>
+
+<IfModule lsapi_module>
+    php_value max_execution_time 120
+    php_value max_input_time 120
+    php_value memory_limit 256M
+</IfModule>

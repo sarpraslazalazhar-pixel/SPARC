@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { ContentDetailSheet } from '@/Components/ContentDetailSheet';
+import { MonthNavigator } from '@/Components/MonthNavigator';
 import { DroppableColumn, SortableCardItem, useKanbanSensors } from '@/Components/UI/KanbanDnd';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
@@ -59,6 +60,8 @@ import type { InstitutionalActivity, SparcContentItem, SparcTeamMember } from '@
 
 interface ContentPlanPageProps {
     today?: string;
+    month?: string;
+    currentMonth?: string;
     contentItems?: SparcContentItem[];
     activities?: InstitutionalActivity[];
     team?: SparcTeamMember[];
@@ -97,12 +100,16 @@ function resolvePicAvatar(item: SparcContentItem, team: SparcTeamMember[] = []):
 
 export default function ContentPlanIndex({
     today = '2026-10-27',
+    month: monthProp,
+    currentMonth: currentMonthProp,
     contentItems = [],
     activities = [],
     team = [],
     filters = {},
 }: ContentPlanPageProps) {
     const { props } = usePage<SharedWorkspaceProps>();
+    const month = monthProp ?? today.slice(0, 7);
+    const currentMonth = currentMonthProp ?? today.slice(0, 7);
     const can = props.auth?.can;
     const currentRole = props.auth?.user?.role ?? 'admin';
     const { error: toastError } = useToast();
@@ -444,6 +451,11 @@ export default function ContentPlanIndex({
                 <div className="flex items-center justify-between gap-1.5">
                     <div className="flex items-center gap-1.5 min-w-0">
                         <ContentIdBadge contentId={item.contentId} />
+                        {item.isCarryOver && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                                Bulan lalu
+                            </span>
+                        )}
                         {item.ticketId && (
                             <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-primary)] truncate">
                                 {item.ticketId}
@@ -729,6 +741,14 @@ export default function ContentPlanIndex({
             <Head title="Content Planner — SPARC" />
 
             <div className="space-y-5 min-w-0">
+                <MonthNavigator
+                    month={month}
+                    currentMonth={currentMonth}
+                    basePath="/content"
+                    extraQuery={{ view: viewMode }}
+                    carryOverCount={items.filter((i) => i.isCarryOver).length}
+                />
+
                 {/* Operational Summary Strip */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <button
@@ -1074,6 +1094,11 @@ export default function ContentPlanIndex({
                                                 <td className="py-3 px-3.5 min-w-[260px] max-w-sm">
                                                     <div className="flex items-center gap-1.5 mb-1">
                                                         <ContentIdBadge contentId={item.contentId} />
+                                                        {item.isCarryOver && (
+                                                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 whitespace-nowrap">
+                                                                Bulan lalu
+                                                            </span>
+                                                        )}
                                                         {item.ticketId && (
                                                             <span className="sparc-code-id text-[10px] font-semibold text-[var(--md-sys-color-primary)] bg-[var(--md-sys-color-primary-container)]/50 px-1.5 py-0.5 rounded">
                                                                 {item.ticketId}

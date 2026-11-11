@@ -35,6 +35,7 @@ import { Modal } from '@/Components/UI/Modal';
 import { Select } from '@/Components/UI/Select';
 import {
     ContentIdBadge,
+    FORMAT_GROUPS,
     normalizeWorkflowStatus,
     PillarTag,
     PlatformChip,
@@ -72,11 +73,6 @@ function formatNullableMetric(value: number | null | undefined): string {
     }
     return value.toLocaleString('id-ID');
 }
-const FORMAT_GROUPS: Record<'reels' | 'feed' | 'carousel', string[]> = {
-    reels: ['reels', 'reels_shorts', 'video_reels', 'video_short', 'video'],
-    carousel: ['carousel', 'carousel_feed'],
-    feed: ['feed', 'single', 'single_image', 'single_feed'],
-};
 
 function publicationDate(pub: SparcPublication): string {
     const raw = pub.publishedActualAt || pub.scheduledAt || '';
@@ -106,6 +102,8 @@ export default function ReportIndex({
 
     const [activeLayer, setActiveLayer] = useState<'content' | 'ads' | 'creator' | 'operational' | 'team'>('content');
     const [isSyncingAds, setIsSyncingAds] = useState(false);
+    const [selectedAdAccountId, setSelectedAdAccountId] = useState('');
+    const [adsDatePreset, setAdsDatePreset] = useState('last_30d');
     const [isSyncingDemographics, setIsSyncingDemographics] = useState(false);
     const [isSyncingStories, setIsSyncingStories] = useState(false);
     const [isSyncingMentions, setIsSyncingMentions] = useState(false);
@@ -144,11 +142,18 @@ export default function ReportIndex({
             }
         );
     };
-    const handleSyncAds = () => {
+    const handleSyncAds = (overrideAccountId?: string, overridePreset?: string) => {
         setIsSyncingAds(true);
+        const payload: Record<string, string> = {
+            date_preset: overridePreset ?? adsDatePreset,
+        };
+        const targetAcc = overrideAccountId ?? (selectedAdAccountId || igAccount?.adsData?.active_account?.account_id || '');
+        if (targetAcc) {
+            payload.ad_account_id = targetAcc;
+        }
         router.post(
             '/settings/instagram/sync-ads',
-            {},
+            payload,
             {
                 preserveScroll: true,
                 onFinish: () => setIsSyncingAds(false),
@@ -1065,9 +1070,19 @@ export default function ReportIndex({
                                 </div>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
                                     Akun Iklan Terhubung:{' '}
-                                    <strong className="text-[var(--md-sys-color-on-surface)]">
-                                        {igAccount?.adsData?.active_account?.name || 'Semua Akun Iklan'} (ID: {igAccount?.adsData?.active_account?.account_id || 'act_default'})
-                                    </strong>
+                                    {igAccount?.adsData?.active_account ? (
+                                        <strong className="text-[var(--md-sys-color-on-surface)]">
+                                            {igAccount.adsData.active_account.name} (ID: act_{igAccount.adsData.active_account.account_id})
+                                        </strong>
+                                    ) : igAccount?.adsData?.synced_at ? (
+                                        <strong className="text-amber-700 dark:text-amber-300">
+                                            Belum ada Ad Account ditemukan di Meta Ads Manager
+                                        </strong>
+                                    ) : (
+                                        <strong className="text-[var(--md-sys-color-on-surface)]">
+                                            Belum disinkronkan
+                                        </strong>
+                                    )}
                                     {igAccount?.adsData?.synced_at && (
                                         <span className="ml-2 text-[var(--md-sys-color-on-surface-muted)]">
                                             • Terakhir disinkronkan: {igAccount.adsData.synced_at}
@@ -1075,16 +1090,49 @@ export default function ReportIndex({
                                     )}
                                 </p>
                             </div>
-                            <Button
-                                type="button"
-                                variant="primary"
-                                size="sm"
-                                isLoading={isSyncingAds}
-                                icon={<RefreshCw className="w-3.5 h-3.5" />}
-                                onClick={handleSyncAds}
-                            >
-                                Tarik Data Iklan Meta
-                            </Button>
+                            <div className="flex flex-wrap items-center gap-2">
+                                {(igAccount?.adsData?.accounts?.length ?? 0) > 1 && (
+                                    <select
+                                        aria-label="Pilih Akun Iklan Meta"
+                                        value={selectedAdAccountId || igAccount?.adsData?.active_account?.account_id || ''}
+                                        onChange={(e) => {
+                                            setSelectedAdAccountId(e.target.value);
+                                            handleSyncAds(e.target.value, adsDatePreset);
+                                        }}
+                                        className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none"
+                                    >
+                                        {igAccount?.adsData?.accounts?.map((acc) => (
+                                            <option key={acc.id} value={acc.account_id}>
+                                                {acc.name} (act_{acc.account_id})
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+                                <select
+                                    aria-label="Periode Data Iklan Meta"
+                                    value={adsDatePreset}
+                                    onChange={(e) => {
+                                        setAdsDatePreset(e.target.value);
+                                        handleSyncAds(undefined, e.target.value);
+                                    }}
+                                    className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none"
+                                >
+                                    <option value="last_7d">7 Hari Terakhir</option>
+                                    <option value="last_30d">30 Hari Terakhir</option>
+                                    <option value="last_90d">90 Hari Terakhir</option>
+                                    <option value="this_month">Bulan Ini</option>
+                                </select>
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="sm"
+                                    isLoading={isSyncingAds}
+                                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                                    onClick={() => handleSyncAds()}
+                                >
+                                    Tarik Data Iklan Meta
+                                </Button>
+                            </div>
                         </div>
 
                         {/* Ads KPI Summary Cards */}
@@ -1305,19 +1353,37 @@ export default function ReportIndex({
                             <div className="p-8 text-center rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-2">
                                 <Users className="w-8 h-8 text-[var(--md-sys-color-on-surface-muted)] mx-auto" />
                                 <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)]">
-                                    Demografi Audiens Belum Terbuka dari Meta
+                                    {(igAccount?.followersCount ?? 0) >= 100
+                                        ? igAccount?.demographicsData?.synced_at
+                                            ? 'Data Demografi Belum Dikembalikan oleh Meta'
+                                            : 'Data Demografi Pengikut Belum Ditarik'
+                                        : 'Demografi Audiens Belum Terbuka dari Meta'}
                                 </h4>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-muted)] max-w-lg mx-auto leading-relaxed">
-                                    Sesuai kebijakan privasi Meta Graph API, rincian sebaran gender, usia, kota, dan negara baru dapat diakses setelah akun mencapai minimal <strong>100 pengikut</strong> (saat ini akun memiliki {igAccount?.followersCount ?? 0} pengikut).
+                                    {(igAccount?.followersCount ?? 0) >= 100 ? (
+                                        igAccount?.demographicsData?.synced_at ? (
+                                            <>
+                                                Akun memiliki <strong>{(igAccount?.followersCount ?? 0).toLocaleString('id-ID')} pengikut</strong> (sinkron terakhir: {igAccount.demographicsData.synced_at}), namun Meta Graph API belum mengembalikan sebaran pengikut. Pastikan izin <code>instagram_manage_insights</code> aktif di menu Pengaturan lalu klik <strong>Tarik Demografi</strong>.
+                                            </>
+                                        ) : (
+                                            <>
+                                                Akun Anda memiliki <strong>{(igAccount?.followersCount ?? 0).toLocaleString('id-ID')} pengikut</strong> dan sudah memenuhi syarat Meta. Klik tombol <strong>Tarik Demografi</strong> di kanan atas untuk memuat sebaran gender, rentang usia, kota, dan negara audiens.
+                                            </>
+                                        )
+                                    ) : (
+                                        <>
+                                            Sesuai kebijakan privasi Meta Graph API, rincian sebaran gender, usia, kota, dan negara baru dapat diakses setelah akun mencapai minimal <strong>100 pengikut</strong> (saat ini akun memiliki {igAccount?.followersCount ?? 0} pengikut).
+                                        </>
+                                    )}
                                 </p>
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                {/* Gender Distribution */}
+                                {/* Gender & Age Distribution */}
                                 <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
                                     <div className="flex items-center justify-between">
                                         <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
-                                            Komposisi Gender
+                                            Komposisi Gender & Usia
                                         </h4>
                                         <Users className="w-4 h-4 text-purple-500" />
                                     </div>
@@ -1342,6 +1408,40 @@ export default function ReportIndex({
                                                 style={{ width: `${igAccount?.demographicsData?.gender_distribution?.female ?? 0}%` }}
                                             />
                                         </div>
+                                        {Object.keys(igAccount?.demographicsData?.gender_age ?? {}).length > 0 && (() => {
+                                            const ageTotals: Record<string, number> = {};
+                                            Object.entries(igAccount?.demographicsData?.gender_age ?? {}).forEach(([k, v]) => {
+                                                const bracket = k.includes('.') ? k.split('.').slice(1).join('.') : k;
+                                                ageTotals[bracket] = (ageTotals[bracket] ?? 0) + Number(v || 0);
+                                            });
+                                            const ageEntries = Object.entries(ageTotals)
+                                                .sort((a, b) => b[1] - a[1])
+                                                .slice(0, 5);
+                                            const maxAge = Math.max(1, ...ageEntries.map(([, cnt]) => cnt));
+                                            return (
+                                                <div className="pt-2.5 mt-2.5 border-t border-[var(--md-sys-color-outline-variant)]/60 space-y-1.5">
+                                                    <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--md-sys-color-on-surface-muted)] block">
+                                                        Rentang Usia Dominan
+                                                    </span>
+                                                    {ageEntries.map(([bracket, cnt]) => (
+                                                        <div key={bracket} className="flex items-center gap-2 text-[11px]">
+                                                            <span className="sparc-code-id w-11 text-[var(--md-sys-color-on-surface)] font-semibold shrink-0">
+                                                                {bracket}
+                                                            </span>
+                                                            <div className="flex-1 h-1.5 rounded-full bg-[var(--md-sys-color-surface-container-highest)] overflow-hidden">
+                                                                <div
+                                                                    className="h-full bg-purple-500 rounded-full"
+                                                                    style={{ width: `${Math.round((cnt / maxAge) * 100)}%` }}
+                                                                />
+                                                            </div>
+                                                            <span className="sparc-code-id text-[10px] text-[var(--md-sys-color-on-surface-muted)] shrink-0">
+                                                                {cnt.toLocaleString('id-ID')}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
 

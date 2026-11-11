@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\WorkspaceV3Controller;
 use App\Models\User;
-use App\Services\InstagramGraphService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -64,16 +63,6 @@ class AuthenticatedSessionController extends Controller
         $user = Auth::user();
         if ($user && ! empty($user->role)) {
             $request->session()->put('sparc_v3.active_role', $user->role);
-        }
-        try {
-            $igService = new InstagramGraphService;
-            if ($igService->isConfigured()) {
-                dispatch(function () use ($igService): void {
-                    $igService->syncAndAutoImportRecentMedia(50);
-                })->afterResponse();
-            }
-        } catch (\Throwable) {
-            // Non-blocking auto-sync: login stays instantaneous (<50ms)
         }
 
         WorkspaceV3Controller::flashToast(
