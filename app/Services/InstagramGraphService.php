@@ -3506,7 +3506,7 @@ class InstagramGraphService
      *
      * @return array{success: bool, accounts?: array<int, array<string, mixed>>, error?: string}
      */
-    public function fetchAdAccounts(): array
+    public function fetchAdAccounts(bool $probeIgLink = true): array
     {
         if (! $this->isConfigured()) {
             return ['success' => false, 'error' => 'Kredensial Meta belum terhubung.'];
@@ -3516,9 +3516,9 @@ class InstagramGraphService
         $adFields = 'id,name,account_id,account_status,currency,amount_spent,spend_cap,balance';
 
         try {
-            $resp = $this->metaHttp(18, 12)->get(sprintf('%s/me/adaccounts', $this->baseUrl), [
+            $resp = $this->metaHttp(8, 5, false)->get(sprintf('%s/me/adaccounts', $this->baseUrl), [
                 'fields' => $adFields,
-                'limit' => 100,
+                'limit' => 50,
                 'access_token' => $adToken,
             ]);
 
@@ -3538,9 +3538,9 @@ class InstagramGraphService
             // Fallback: discover Ad Accounts owned/managed inside Business Portfolio when `/me/adaccounts` returns none
             if (empty($accounts)) {
                 try {
-                    $bizResp = $this->metaHttp(18, 12)->get(sprintf('%s/me/businesses', $this->baseUrl), [
+                    $bizResp = $this->metaHttp(8, 5, false)->get(sprintf('%s/me/businesses', $this->baseUrl), [
                         'fields' => sprintf('id,name,owned_ad_accounts{%s},client_ad_accounts{%s}', $adFields, $adFields),
-                        'limit' => 50,
+                        'limit' => 30,
                         'access_token' => $adToken,
                     ]);
                     if ($bizResp->successful()) {
@@ -3585,7 +3585,7 @@ class InstagramGraphService
 
             $actualIgId = $this->resolveActualInstagramId();
             $connectedIgMap = [];
-            $probeSlice = array_slice($accounts, 0, 12);
+            $probeSlice = ($probeIgLink && count($accounts) > 1) ? array_slice($accounts, 0, 5) : [];
 
             if (! empty($probeSlice)) {
                 try {
@@ -3598,8 +3598,8 @@ class InstagramGraphService
                             }
                             $formattedId = Str::startsWith($rawId, 'act_') ? $rawId : 'act_'.$rawId;
                             $reqs[] = $batch->as($formattedId)
-                                ->connectTimeout(6)
-                                ->timeout(10)
+                                ->connectTimeout(3)
+                                ->timeout(4)
                                 ->withOptions(['force_ip_resolve' => 'v4'])
                                 ->get(sprintf('%s/%s/connected_instagram_accounts', $this->baseUrl, $formattedId), [
                                     'fields' => 'id,username',
@@ -3777,7 +3777,9 @@ class InstagramGraphService
         }
 
         $started = microtime(true);
-        $accountsResult = $this->fetchAdAccounts();
+        $this->prepareWebExecutionBudget();
+
+        $accountsResult = $this->fetchAdAccounts($targetAdAccountId === null);
         if (! $accountsResult['success']) {
             return ['success' => false, 'error' => $accountsResult['error'] ?? 'Gagal memuat akun iklan.'];
         }
@@ -3862,82 +3864,52 @@ class InstagramGraphService
         $adToken = $this->resolveAdAccessToken();
         $actualIgId = $this->resolveActualInstagramId();
 
-        $batchResponses = Http::batch(function (Batch $batch) use ($formattedId, $datePreset, $adToken, $actualIgId): array {
-            $makeReq = static fn (string $key, string $url, array $params) => $batch->as($key)
-                ->connectTimeout(12)
-                ->timeout(18)
-                ->withOptions(['force_ip_resolve' => 'v4'])
-                ->get($url, $params);
+        // Stage 1: Core fast batch (within cPanel web timeout budget)
+        $coreResponses = [];
+        try {
+            $coreResponses = Http::batch(function (Batch $batch) use ($formattedId, $datePreset, $adToken): array {
+                $makeReq = static fn (string $key, string $url, array $params) => $batch->as($key)
+                    ->connectTimeout(4)
+                    ->timeout(8)
+                    ->withOptions(['force_ip_resolve' => 'v4'])
+                    ->get($url, $params);
 
-            $reqs = [
-                $makeReq('campaigns', sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
-                    'fields' => 'id,name,status,effective_status,objective,buying_type,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
-                    'limit' => 100,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('adsets', sprintf('%s/%s/adsets', $this->baseUrl, $formattedId), [
-                    'fields' => 'id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,optimization_goal,targeting,start_time,end_time',
-                    'limit' => 150,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('ads', sprintf('%s/%s/ads', $this->baseUrl, $formattedId), [
-                    'fields' => 'id,name,status,effective_status,campaign_id,adset_id,created_time,updated_time,creative{id,name,instagram_user_id,source_instagram_media_id,effective_instagram_media_id,instagram_permalink_url,thumbnail_url,image_url,object_story_id,body,title,call_to_action_type}',
-                    'limit' => 150,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                    'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
-                    'date_preset' => $datePreset,
-                    'level' => 'campaign',
-                    'limit' => 100,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('platform_campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                    'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
-                    'date_preset' => $datePreset,
-                    'level' => 'campaign',
-                    'breakdowns' => 'publisher_platform',
-                    'limit' => 250,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('platform_account_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                    'fields' => 'spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
-                    'date_preset' => $datePreset,
-                    'level' => 'account',
-                    'breakdowns' => 'publisher_platform',
-                    'limit' => 20,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('ad_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                    'fields' => 'ad_id,ad_name,adset_id,campaign_id,campaign_name,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
-                    'date_preset' => $datePreset,
-                    'level' => 'ad',
-                    'limit' => 150,
-                    'access_token' => $adToken,
-                ]),
-                $makeReq('ad_platform_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                    'fields' => 'ad_id,ad_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
-                    'date_preset' => $datePreset,
-                    'level' => 'ad',
-                    'breakdowns' => 'publisher_platform',
-                    'limit' => 300,
-                    'access_token' => $adToken,
-                ]),
-            ];
+                return [
+                    $makeReq('campaigns', sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
+                        'fields' => 'id,name,status,effective_status,objective,buying_type,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
+                        'limit' => 50,
+                        'access_token' => $adToken,
+                    ]),
+                    $makeReq('campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                        'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
+                        'date_preset' => $datePreset,
+                        'level' => 'campaign',
+                        'limit' => 50,
+                        'access_token' => $adToken,
+                    ]),
+                    $makeReq('platform_account_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                        'fields' => 'spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                        'date_preset' => $datePreset,
+                        'level' => 'account',
+                        'breakdowns' => 'publisher_platform',
+                        'limit' => 10,
+                        'access_token' => $adToken,
+                    ]),
+                    $makeReq('ads', sprintf('%s/%s/ads', $this->baseUrl, $formattedId), [
+                        'fields' => 'id,name,status,effective_status,campaign_id,adset_id,created_time,updated_time,creative{id,name,instagram_user_id,source_instagram_media_id,effective_instagram_media_id,instagram_permalink_url,thumbnail_url,image_url,body,title,call_to_action_type}',
+                        'limit' => 50,
+                        'access_token' => $adToken,
+                    ]),
+                ];
+            })->concurrency(4)->send();
+        } catch (\Throwable $e) {
+            $this->captureApiTelemetry(null, 'sync_ads', $started, $e->getMessage(), false);
 
-            if ($actualIgId !== '' && ! empty($this->accessToken)) {
-                $reqs[] = $makeReq('ig_boost_media', sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
-                    'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,boost_ads_list,boost_eligibility_info',
-                    'limit' => 25,
-                    'access_token' => $this->accessToken,
-                ]);
-            }
+            return ['success' => false, 'error' => 'Koneksi ke Meta Marketing API timeout. Silakan coba lagi.'];
+        }
 
-            return $reqs;
-        })->concurrency(6)->send();
-
-        $campaignsResp = $batchResponses['campaigns'] ?? null;
-        $campaignInsightsResp = $batchResponses['campaign_insights'] ?? null;
+        $campaignsResp = $coreResponses['campaigns'] ?? null;
+        $campaignInsightsResp = $coreResponses['campaign_insights'] ?? null;
 
         $campaignsOk = $campaignsResp instanceof Response && $campaignsResp->successful();
         $insightsOk = $campaignInsightsResp instanceof Response && $campaignInsightsResp->successful();
@@ -3954,10 +3926,89 @@ class InstagramGraphService
             ];
         }
 
+        // Stage 2: Optional enrichment batch only when cPanel wall-clock budget remains (< 11s elapsed)
+        $enrichResponses = [];
+        if (! $this->isTimeBudgetExceeded($started, 11.0)) {
+            try {
+                $enrichResponses = Http::batch(function (Batch $batch) use ($formattedId, $datePreset, $adToken, $actualIgId, $selectedAccount): array {
+                    $makeReq = static fn (string $key, string $url, array $params) => $batch->as($key)
+                        ->connectTimeout(3)
+                        ->timeout(6)
+                        ->withOptions(['force_ip_resolve' => 'v4'])
+                        ->get($url, $params);
+
+                    $reqs = [
+                        $makeReq('adsets', sprintf('%s/%s/adsets', $this->baseUrl, $formattedId), [
+                            'fields' => 'id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,optimization_goal,targeting',
+                            'limit' => 80,
+                            'access_token' => $adToken,
+                        ]),
+                        $makeReq('platform_campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                            'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                            'date_preset' => $datePreset,
+                            'level' => 'campaign',
+                            'breakdowns' => 'publisher_platform',
+                            'limit' => 100,
+                            'access_token' => $adToken,
+                        ]),
+                        $makeReq('ad_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                            'fields' => 'ad_id,ad_name,adset_id,campaign_id,campaign_name,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                            'date_preset' => $datePreset,
+                            'level' => 'ad',
+                            'limit' => 50,
+                            'access_token' => $adToken,
+                        ]),
+                    ];
+
+                    if (empty($selectedAccount['is_ig_linked'])) {
+                        $reqs[] = $makeReq('selected_ig_link', sprintf('%s/%s/connected_instagram_accounts', $this->baseUrl, $formattedId), [
+                            'fields' => 'id,username',
+                            'limit' => 15,
+                            'access_token' => $adToken,
+                        ]);
+                    }
+
+                    if ($actualIgId !== '' && ! empty($this->accessToken)) {
+                        $reqs[] = $makeReq('ig_boost_media', sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+                            'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,boost_ads_list',
+                            'limit' => 15,
+                            'access_token' => $this->accessToken,
+                        ]);
+                    }
+
+                    return $reqs;
+                })->concurrency(4)->send();
+            } catch (\Throwable) {
+                // Non-fatal: keep Stage 1 results if Meta enrichment batch stalls
+            }
+        }
+
+        $batchResponses = array_merge($coreResponses, $enrichResponses);
+
         /** @var array<int, array<string, mixed>> $rawCampaigns */
         $rawCampaigns = $campaignsOk ? (array) ($campaignsResp->json('data') ?? []) : [];
         /** @var array<int, array<string, mixed>> $rawCampaignInsights */
         $rawCampaignInsights = $insightsOk ? (array) ($campaignInsightsResp->json('data') ?? []) : [];
+
+        $selectedIgLinkResp = $batchResponses['selected_ig_link'] ?? null;
+        if ($selectedIgLinkResp instanceof Response && $selectedIgLinkResp->successful()) {
+            $linkedList = [];
+            foreach ((array) ($selectedIgLinkResp->json('data') ?? []) as $igRow) {
+                if (! empty($igRow['id'])) {
+                    $linkedList[] = [
+                        'id' => (string) $igRow['id'],
+                        'username' => isset($igRow['username']) ? (string) $igRow['username'] : null,
+                    ];
+                }
+            }
+            $selectedAccount['connected_ig_accounts'] = $linkedList;
+            foreach ($linkedList as $igNode) {
+                if ($actualIgId !== '' && $igNode['id'] === $actualIgId) {
+                    $selectedAccount['is_ig_linked'] = true;
+                    break;
+                }
+            }
+        }
 
         $adsetsResp = $batchResponses['adsets'] ?? null;
         /** @var array<int, array<string, mixed>> $rawAdsets */
@@ -3984,11 +4035,6 @@ class InstagramGraphService
         $adInsightsResp = $batchResponses['ad_insights'] ?? null;
         $rawAdInsights = ($adInsightsResp instanceof Response && $adInsightsResp->successful())
             ? (array) ($adInsightsResp->json('data') ?? [])
-            : [];
-
-        $adPlatformResp = $batchResponses['ad_platform_insights'] ?? null;
-        $rawAdPlatformInsights = ($adPlatformResp instanceof Response && $adPlatformResp->successful())
-            ? (array) ($adPlatformResp->json('data') ?? [])
             : [];
 
         // Group adsets by campaign & ID
@@ -4071,7 +4117,7 @@ class InstagramGraphService
             $igSum = $this->summarizeInsightRows($platformBreakdownRows['instagram']);
         }
 
-        // Ad-level insights (prefer Instagram placement when present)
+        // Ad-level insights
         $adInsightsById = [];
         foreach ($rawAdInsights as $row) {
             $adId = (string) ($row['ad_id'] ?? '');
@@ -4079,16 +4125,7 @@ class InstagramGraphService
                 $adInsightsById[$adId] = $this->summarizeInsightRows([$row]);
             }
         }
-
         $igAdInsightsById = [];
-        foreach ($rawAdPlatformInsights as $row) {
-            if (! isset($row['publisher_platform']) || empty($row['ad_id'])) {
-                continue;
-            }
-            if (strtolower((string) $row['publisher_platform']) === 'instagram') {
-                $igAdInsightsById[(string) $row['ad_id']] = $this->summarizeInsightRows([$row]);
-            }
-        }
 
         $campaignNameMap = [];
         foreach ($rawCampaigns as $c) {
@@ -4097,16 +4134,57 @@ class InstagramGraphService
             }
         }
 
-        // Load SPARC ContentItems to match boosted IG posts
+        // Targeted zero-OOM ContentItem lookup (only for media IDs/shortcodes seen in ads/boosts)
         $contentItemsByMediaId = [];
         $contentItemsByShortcode = [];
-        if (Schema::hasTable('content_items')) {
-            $igItems = ContentItem::query()
+        $igBoostMediaResp = $batchResponses['ig_boost_media'] ?? null;
+        $rawIgBoostMedia = ($igBoostMediaResp instanceof Response && $igBoostMediaResp->successful())
+            ? (array) ($igBoostMediaResp->json('data') ?? [])
+            : [];
+
+        $lookupMediaIds = [];
+        $lookupShortcodes = [];
+        foreach ($rawAds as $adRow) {
+            $cr = is_array($adRow['creative'] ?? null) ? $adRow['creative'] : [];
+            foreach (['source_instagram_media_id', 'effective_instagram_media_id'] as $k) {
+                if (! empty($cr[$k])) {
+                    $lookupMediaIds[] = (string) $cr[$k];
+                }
+            }
+            if (! empty($cr['instagram_permalink_url'])) {
+                $sc = $this->extractShortcode((string) $cr['instagram_permalink_url']);
+                if ($sc !== null) {
+                    $lookupShortcodes[] = $sc;
+                }
+            }
+        }
+        foreach ($rawIgBoostMedia as $bmRow) {
+            if (! empty($bmRow['id'])) {
+                $lookupMediaIds[] = (string) $bmRow['id'];
+            }
+            if (! empty($bmRow['permalink'])) {
+                $sc = $this->extractShortcode((string) $bmRow['permalink']);
+                if ($sc !== null) {
+                    $lookupShortcodes[] = $sc;
+                }
+            }
+        }
+        $lookupMediaIds = array_values(array_unique($lookupMediaIds));
+        $lookupShortcodes = array_values(array_unique($lookupShortcodes));
+
+        if ((! empty($lookupMediaIds) || ! empty($lookupShortcodes)) && Schema::hasTable('content_items')) {
+            $igItems = DB::table('content_items')
                 ->select(['id', 'content_id', 'title', 'ig_media_id', 'published_url', 'is_ad_boosted', 'ad_spend'])
-                ->where(function ($q): void {
-                    $q->where('platform', 'instagram')
-                        ->orWhereNotNull('ig_media_id');
+                ->whereNull('deleted_at')
+                ->where(function ($q) use ($lookupMediaIds, $lookupShortcodes): void {
+                    if (! empty($lookupMediaIds)) {
+                        $q->whereIn('ig_media_id', $lookupMediaIds);
+                    }
+                    foreach (array_slice($lookupShortcodes, 0, 20) as $sc) {
+                        $q->orWhere('published_url', 'like', '%'.$sc.'%');
+                    }
                 })
+                ->limit(150)
                 ->get();
 
             foreach ($igItems as $ci) {

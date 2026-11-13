@@ -1125,7 +1125,7 @@ class InstagramOperationsController extends Controller
      */
     public function syncProfileAndInsights(Request $request): RedirectResponse
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::resolveAuthContextData($request);
         if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan profil & wawasan akun Instagram.');
         }
@@ -1171,7 +1171,7 @@ class InstagramOperationsController extends Controller
      */
     public function syncAds(Request $request): RedirectResponse
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::resolveAuthContextData($request);
         if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan data iklan Meta.');
         }
@@ -1249,7 +1249,7 @@ class InstagramOperationsController extends Controller
      */
     public function syncDemographics(Request $request): RedirectResponse
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::resolveAuthContextData($request);
         if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan demografi audiens.');
         }
@@ -1278,7 +1278,7 @@ class InstagramOperationsController extends Controller
      */
     public function syncStories(Request $request): RedirectResponse
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::resolveAuthContextData($request);
         if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan data stories.');
         }
@@ -1308,7 +1308,7 @@ class InstagramOperationsController extends Controller
      */
     public function syncMentions(Request $request): RedirectResponse
     {
-        $state = WorkspaceV3Controller::hydrateWorkspace($request);
+        $state = WorkspaceV3Controller::resolveAuthContextData($request);
         if (! ($state['can']['manageSettings'] || $state['can']['managePublishing'] || $state['can']['editContent'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan mentions.');
         }
