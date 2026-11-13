@@ -1639,7 +1639,7 @@ class InstagramMaxIntegrationTest extends TestCase
 
         $boostedItem->refresh();
         $this->assertTrue($boostedItem->is_ad_boosted);
-        $this->assertEquals(500000.0, (float) $boostedItem->ad_spend);
+        $this->assertEquals(350000.0, (float) $boostedItem->ad_spend);
     }
 
     public function test_sync_ads_normalizes_usd_currency_offset_and_adset_budgets(): void

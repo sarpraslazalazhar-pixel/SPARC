@@ -152,7 +152,7 @@ export default function ReportIndex({
     const [isSyncingAds, setIsSyncingAds] = useState(false);
     const [selectedAdAccountId, setSelectedAdAccountId] = useState('');
     const [adsDatePreset, setAdsDatePreset] = useState(
-        () => (instagramSettings?.adsData?.summary?.date_preset || 'last_30d')
+        () => (instagramSettings?.adsData?.summary?.date_preset || 'last_28d')
     );
     const [adsPlacementScope, setAdsPlacementScope] = useState<'instagram' | 'all'>('instagram');
     const [isSyncingDemographics, setIsSyncingDemographics] = useState(false);
@@ -1556,6 +1556,10 @@ export default function ReportIndex({
                     const igAdsList = adsData?.ig_ads ?? [];
                     const igBoostMediaList = adsData?.ig_boost_media ?? [];
                     const platformBreakdown = adsData?.platform_breakdown ?? [];
+                    const allCampaigns = adsData?.campaigns ?? [];
+                    const displayedCampaigns = useIgScope
+                        ? allCampaigns.filter((c) => (c.ig_metrics !== null && c.ig_metrics !== undefined) || Boolean(c.targets_instagram || (c.ads_count ?? 0) > 0))
+                        : allCampaigns;
 
                     return (
                     <div className="space-y-5">
@@ -1809,6 +1813,11 @@ export default function ReportIndex({
                                 </h4>
                                 <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
                                     Total Akun IG 28h (Organik + Iklan): <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{totalIgAccountReach.toLocaleString('id-ID')}</strong>
+                                    {(summary?.date_preset && summary.date_preset !== 'last_28d') && (
+                                        <span className="ml-1.5 text-amber-700 dark:text-amber-300">
+                                            (Ads: {datePresetLabels[summary.date_preset] || summary.date_preset})
+                                        </span>
+                                    )}
                                 </span>
                             </div>
                             <div className="space-y-2">
@@ -1992,7 +2001,7 @@ export default function ReportIndex({
                                     </p>
                                 </div>
                                 <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
-                                    {adsData?.campaigns?.length ?? 0} Kampanye Terdata
+                                    {displayedCampaigns.length} Kampanye{useIgScope && allCampaigns.length > displayedCampaigns.length ? ` (dari ${allCampaigns.length} total)` : ' Terdata'}
                                 </span>
                             </div>
 
@@ -2010,16 +2019,18 @@ export default function ReportIndex({
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {(adsData?.campaigns?.length ?? 0) === 0 ? (
+                                        {displayedCampaigns.length === 0 ? (
                                             <tr>
                                                 <td colSpan={7} className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Belum ada data kampanye. Klik tombol &quot;Tarik Data Iklan Meta&quot; di atas untuk menyinkronkan kampanye aktif dari Ads Manager.
+                                                    {allCampaigns.length > 0 && useIgScope
+                                                        ? 'Tidak ada kampanye dengan penempatan Instagram pada periode ini. Pilih "Semua Penempatan" di atas untuk melihat kampanye kanal lain.'
+                                                        : 'Belum ada data kampanye. Klik tombol "Tarik Data Iklan Meta" di atas untuk menyinkronkan kampanye aktif dari Ads Manager.'}
                                                 </td>
                                             </tr>
                                         ) : (
-                                            adsData?.campaigns?.map((c) => {
+                                            displayedCampaigns.map((c) => {
                                                 const effStatus = c.effective_status || c.status;
-                                                const cMetrics = useIgScope && c.ig_metrics ? c.ig_metrics : c.metrics;
+                                                const cMetrics = useIgScope ? (c.ig_metrics ?? null) : c.metrics;
                                                 const dailyAmt = c.daily_budget_amount ?? (c.daily_budget ? Number(c.daily_budget) / currencyOffset : null);
                                                 const lifeAmt = c.lifetime_budget_amount ?? (c.lifetime_budget ? Number(c.lifetime_budget) / currencyOffset : null);
                                                 const remAmt = c.budget_remaining_amount ?? (c.budget_remaining ? Number(c.budget_remaining) / currencyOffset : null);

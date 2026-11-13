@@ -3880,6 +3880,13 @@ class InstagramGraphService
                         'limit' => 50,
                         'access_token' => $adToken,
                     ]),
+                    $makeReq('account_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                        'fields' => 'spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                        'date_preset' => $datePreset,
+                        'level' => 'account',
+                        'limit' => 5,
+                        'access_token' => $adToken,
+                    ]),
                     $makeReq('campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
                         'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
                         'date_preset' => $datePreset,
@@ -3955,7 +3962,8 @@ class InstagramGraphService
                             'fields' => 'ad_id,ad_name,adset_id,campaign_id,campaign_name,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
                             'date_preset' => $datePreset,
                             'level' => 'ad',
-                            'limit' => 50,
+                            'breakdowns' => 'publisher_platform',
+                            'limit' => 100,
                             'access_token' => $adToken,
                         ]),
                     ];
@@ -4027,6 +4035,11 @@ class InstagramGraphService
             ? (array) ($platformCampaignResp->json('data') ?? [])
             : [];
 
+        $accountInsightsResp = $batchResponses['account_insights'] ?? null;
+        $rawAccountInsights = ($accountInsightsResp instanceof Response && $accountInsightsResp->successful())
+            ? (array) ($accountInsightsResp->json('data') ?? [])
+            : [];
+
         $platformAccountResp = $batchResponses['platform_account_insights'] ?? null;
         $rawPlatformAccountInsights = ($platformAccountResp instanceof Response && $platformAccountResp->successful())
             ? (array) ($platformAccountResp->json('data') ?? [])
@@ -4036,7 +4049,6 @@ class InstagramGraphService
         $rawAdInsights = ($adInsightsResp instanceof Response && $adInsightsResp->successful())
             ? (array) ($adInsightsResp->json('data') ?? [])
             : [];
-
         // Group adsets by campaign & ID
         $adsetsById = [];
         $adsetStatsByCampaign = [];
@@ -4117,16 +4129,23 @@ class InstagramGraphService
             $igSum = $this->summarizeInsightRows($platformBreakdownRows['instagram']);
         }
 
-        // Ad-level insights
-        $adInsightsById = [];
+        // Ad-level insights (separated by publisher_platform when available)
+        $adAllPlatformRows = [];
+        $igAdInsightsById = [];
         foreach ($rawAdInsights as $row) {
             $adId = (string) ($row['ad_id'] ?? '');
-            if ($adId !== '') {
-                $adInsightsById[$adId] = $this->summarizeInsightRows([$row]);
+            if ($adId === '') {
+                continue;
+            }
+            $adAllPlatformRows[$adId][] = $row;
+            if (isset($row['publisher_platform']) && strtolower(trim((string) $row['publisher_platform'])) === 'instagram') {
+                $igAdInsightsById[$adId] = $this->summarizeInsightRows([$row]);
             }
         }
-        $igAdInsightsById = [];
-
+        $adInsightsById = [];
+        foreach ($adAllPlatformRows as $adId => $rowsForAd) {
+            $adInsightsById[$adId] = $this->summarizeInsightRows($rowsForAd);
+        }
         $campaignNameMap = [];
         foreach ($rawCampaigns as $c) {
             if (! empty($c['id'])) {
@@ -4215,11 +4234,13 @@ class InstagramGraphService
             $effectiveIgMediaId = (string) ($creative['effective_instagram_media_id'] ?? '');
             $igPermalink = (string) ($creative['instagram_permalink_url'] ?? '');
             $adsetPlatforms = array_map('strtolower', array_map('strval', (array) ($adsetsById[$asId]['targeting']['publisher_platforms'] ?? [])));
-
             $hasIgCreative = $sourceIgMediaId !== '' || $effectiveIgMediaId !== '' || $igPermalink !== '' || $igUserId !== '';
-            $targetsIg = empty($adsetPlatforms) || in_array('instagram', $adsetPlatforms, true) || isset($igAdInsightsById[$adId]);
+            $hasIgDelivery = isset($igAdInsightsById[$adId]);
+            $targetsIg = ! empty($adsetPlatforms)
+                ? in_array('instagram', $adsetPlatforms, true)
+                : (! $hasIgBreakdown || $hasIgDelivery || $hasIgCreative);
 
-            if (! $hasIgCreative && ! $targetsIg) {
+            if (! $hasIgCreative && ! $hasIgDelivery && ! $targetsIg) {
                 continue;
             }
             if ($igUserId !== '' && $actualIgId !== '' && $igUserId !== $actualIgId && $sourceIgMediaId === '' && $effectiveIgMediaId === '') {
@@ -4342,15 +4363,18 @@ class InstagramGraphService
             $c['daily_budget_amount'] = $dailyBudget;
             $c['lifetime_budget_amount'] = $lifetimeBudget;
             $c['budget_remaining_amount'] = $budgetRemaining;
+            $hasIgCampaignDelivery = isset($igCampaignInsightsById[$cId]);
             $c['budget_source'] = $budgetSource;
-            $c['targets_instagram'] = $asStat['targets_instagram'] ?? true;
+            $c['targets_instagram'] = $hasIgCampaignDelivery || ($adsCountByCampaign[$cId] ?? 0) > 0 || ($asStat['targets_instagram'] ?? ! $hasIgBreakdown);
             $c['ads_count'] = $adsCountByCampaign[$cId] ?? 0;
             $c['metrics'] = $campaignInsightsById[$cId] ?? $this->summarizeInsightRows([]);
             $c['ig_metrics'] = $igCampaignInsightsById[$cId] ?? null;
             $enrichedCampaigns[] = $c;
         }
 
-        $totalSum = $this->summarizeInsightRows($rawCampaignInsights);
+        $totalSum = ! empty($rawAccountInsights)
+            ? $this->summarizeInsightRows($rawAccountInsights)
+            : $this->summarizeInsightRows($rawCampaignInsights);
         $boostedPostsCount = count(array_filter(
             $igAds,
             static fn (array $a): bool => ! empty($a['is_boosted_post'])
