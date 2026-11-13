@@ -1378,4 +1378,322 @@ class InstagramMaxIntegrationTest extends TestCase
         $this->get(route('report.export.excel', ['date_from' => '2026-11-01', 'date_to' => '2026-11-30']))
             ->assertOk();
     }
+
+    public function test_sync_ads_prioritizes_ig_linked_ad_account_filters_ig_placement_and_matches_boosted_posts(): void
+    {
+        $boostedItem = ContentItem::factory()->create([
+            'title' => 'Reels Edukasi Publik Boosted',
+            'platform' => 'instagram',
+            'format' => 'reels',
+            'status' => 'published',
+            'ig_media_id' => '180999001',
+            'published_url' => 'https://www.instagram.com/reel/BoostReel01/',
+            'is_ad_boosted' => false,
+            'ad_spend' => null,
+        ]);
+
+        Http::fake(function (HttpClientRequest $request) {
+            $url = $request->url();
+            $data = $request->data();
+
+            if (str_contains($url, '/17841400111222/media')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => '180999001',
+                            'caption' => 'Reels Edukasi Publik Boosted',
+                            'media_type' => 'VIDEO',
+                            'permalink' => 'https://www.instagram.com/reel/BoostReel01/',
+                            'boost_ads_list' => [
+                                ['ad_id' => 'ad_ig_1', 'ad_status' => 'ACTIVE'],
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/17841400111222')) {
+                return Http::response(['id' => '17841400111222', 'username' => 'humas_sparc'], 200);
+            }
+
+            if (str_contains($url, '/me/adaccounts')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'act_111111',
+                            'account_id' => '111111',
+                            'name' => 'Personal Unlinked Account',
+                            'currency' => 'IDR',
+                            'account_status' => 1,
+                        ],
+                        [
+                            'id' => 'act_222222',
+                            'account_id' => '222222',
+                            'name' => 'HUMAS Official IG Ads',
+                            'currency' => 'IDR',
+                            'account_status' => 1,
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/act_111111/connected_instagram_accounts')) {
+                return Http::response(['data' => []], 200);
+            }
+
+            if (str_contains($url, '/act_222222/connected_instagram_accounts')) {
+                return Http::response([
+                    'data' => [
+                        ['id' => '17841400111222', 'username' => 'humas_sparc'],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/act_222222/campaigns')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'cmp_ig_1',
+                            'name' => 'Boost Reels Edukasi',
+                            'status' => 'ACTIVE',
+                            'effective_status' => 'ACTIVE',
+                            'objective' => 'OUTCOME_ENGAGEMENT',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/act_222222/adsets')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'adset_1',
+                            'name' => 'IG Feed & Reels Placement',
+                            'campaign_id' => 'cmp_ig_1',
+                            'daily_budget' => '200000',
+                            'budget_remaining' => '120000',
+                            'targeting' => ['publisher_platforms' => ['instagram', 'facebook']],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/act_222222/ads')) {
+                return Http::response([
+                    'data' => [
+                        [
+                            'id' => 'ad_ig_1',
+                            'name' => 'Boost: Reels Edukasi Publik',
+                            'status' => 'ACTIVE',
+                            'effective_status' => 'ACTIVE',
+                            'campaign_id' => 'cmp_ig_1',
+                            'adset_id' => 'adset_1',
+                            'creative' => [
+                                'id' => 'cr_1',
+                                'instagram_user_id' => '17841400111222',
+                                'source_instagram_media_id' => '180999001',
+                                'effective_instagram_media_id' => '180999001',
+                                'instagram_permalink_url' => 'https://www.instagram.com/reel/BoostReel01/',
+                                'thumbnail_url' => 'https://cdn.example.com/boost-thumb.jpg',
+                            ],
+                        ],
+                    ],
+                ], 200);
+            }
+
+            if (str_contains($url, '/act_222222/insights')) {
+                $level = $data['level'] ?? 'campaign';
+                $breakdowns = $data['breakdowns'] ?? '';
+
+                if ($level === 'account' && $breakdowns === 'publisher_platform') {
+                    return Http::response([
+                        'data' => [
+                            [
+                                'publisher_platform' => 'instagram',
+                                'spend' => '350000',
+                                'impressions' => '45000',
+                                'reach' => '32000',
+                                'clicks' => '1450',
+                                'inline_link_clicks' => '900',
+                                'actions' => [
+                                    ['action_type' => 'post_engagement', 'value' => '2100'],
+                                    ['action_type' => 'onsite_conversion.post_save', 'value' => '140'],
+                                    ['action_type' => 'ig_profile_visit', 'value' => '320'],
+                                ],
+                            ],
+                            [
+                                'publisher_platform' => 'facebook',
+                                'spend' => '150000',
+                                'impressions' => '20000',
+                                'reach' => '15000',
+                                'clicks' => '400',
+                            ],
+                        ],
+                    ], 200);
+                }
+
+                if ($level === 'campaign' && $breakdowns === 'publisher_platform') {
+                    return Http::response([
+                        'data' => [
+                            [
+                                'campaign_id' => 'cmp_ig_1',
+                                'campaign_name' => 'Boost Reels Edukasi',
+                                'publisher_platform' => 'instagram',
+                                'spend' => '350000',
+                                'impressions' => '45000',
+                                'reach' => '32000',
+                                'clicks' => '1450',
+                            ],
+                            [
+                                'campaign_id' => 'cmp_ig_1',
+                                'campaign_name' => 'Boost Reels Edukasi',
+                                'publisher_platform' => 'facebook',
+                                'spend' => '150000',
+                                'impressions' => '20000',
+                                'reach' => '15000',
+                                'clicks' => '400',
+                            ],
+                        ],
+                    ], 200);
+                }
+
+                if ($level === 'ad' && $breakdowns === 'publisher_platform') {
+                    return Http::response([
+                        'data' => [
+                            [
+                                'ad_id' => 'ad_ig_1',
+                                'campaign_id' => 'cmp_ig_1',
+                                'publisher_platform' => 'instagram',
+                                'spend' => '350000',
+                                'impressions' => '45000',
+                                'reach' => '32000',
+                                'clicks' => '1450',
+                                'actions' => [
+                                    ['action_type' => 'post_engagement', 'value' => '2100'],
+                                    ['action_type' => 'onsite_conversion.post_save', 'value' => '140'],
+                                ],
+                            ],
+                        ],
+                    ], 200);
+                }
+
+                if ($level === 'ad') {
+                    return Http::response([
+                        'data' => [
+                            [
+                                'ad_id' => 'ad_ig_1',
+                                'campaign_id' => 'cmp_ig_1',
+                                'spend' => '500000',
+                                'impressions' => '65000',
+                                'reach' => '47000',
+                                'clicks' => '1850',
+                            ],
+                        ],
+                    ], 200);
+                }
+
+                return Http::response([
+                    'data' => [
+                        [
+                            'campaign_id' => 'cmp_ig_1',
+                            'campaign_name' => 'Boost Reels Edukasi',
+                            'spend' => '500000',
+                            'impressions' => '65000',
+                            'reach' => '47000',
+                            'clicks' => '1850',
+                        ],
+                    ],
+                ], 200);
+            }
+
+            return Http::response(['data' => []], 200);
+        });
+
+        $this->post(route('settings.instagram.syncAds'), ['date_preset' => 'last_28d'])
+            ->assertRedirect();
+
+        $conn = InstagramConnection::current()->fresh();
+        $adsData = $conn->ads_data;
+
+        $this->assertSame('222222', $adsData['active_account']['account_id']);
+        $this->assertTrue($adsData['active_account']['is_ig_linked']);
+        $this->assertSame('last_28d', $adsData['summary']['date_preset']);
+        $this->assertTrue($adsData['summary']['has_ig_breakdown']);
+        $this->assertEquals(350000.0, $adsData['summary']['ig_spend']);
+        $this->assertSame(32000, $adsData['summary']['ig_reach']);
+        $this->assertSame(45000, $adsData['summary']['ig_impressions']);
+        $this->assertSame(1450, $adsData['summary']['ig_clicks']);
+        $this->assertSame(2100, $adsData['summary']['ig_engagements']);
+        $this->assertSame(140, $adsData['summary']['ig_saves']);
+        $this->assertSame(320, $adsData['summary']['ig_profile_visits']);
+
+        // AdSet budget fallback populated on campaign
+        $this->assertEquals(200000, $adsData['campaigns'][0]['daily_budget_amount']);
+        $this->assertSame('adset', $adsData['campaigns'][0]['budget_source']);
+
+        // Boosted post matched to ContentItem with IG placement spend
+        $this->assertCount(1, $adsData['ig_ads']);
+        $this->assertTrue($adsData['ig_ads'][0]['is_boosted_post']);
+        $this->assertSame($boostedItem->content_id, $adsData['ig_ads'][0]['content_code']);
+        $this->assertCount(1, $adsData['ig_boost_media']);
+
+        $boostedItem->refresh();
+        $this->assertTrue($boostedItem->is_ad_boosted);
+        $this->assertEquals(350000.0, (float) $boostedItem->ad_spend);
+    }
+
+    public function test_sync_ads_normalizes_usd_currency_offset_and_adset_budgets(): void
+    {
+        Http::fake([
+            'https://graph.facebook.com/v21.0/17841400111222?*' => Http::response([
+                'id' => '17841400111222',
+                'username' => 'humas_sparc',
+            ], 200),
+            'https://graph.facebook.com/v21.0/me/adaccounts*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'act_998877',
+                        'account_id' => '998877',
+                        'name' => 'Global USD Account',
+                        'currency' => 'USD',
+                        'amount_spent' => '12500',
+                        'account_status' => 1,
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_998877/campaigns*' => Http::response([
+                'data' => [
+                    [
+                        'id' => 'cmp_usd_1',
+                        'name' => 'Global Campaign',
+                        'status' => 'ACTIVE',
+                        'effective_status' => 'ACTIVE',
+                        'daily_budget' => '5000',
+                        'budget_remaining' => '2500',
+                    ],
+                ],
+            ], 200),
+            'https://graph.facebook.com/v21.0/act_998877/insights*' => Http::response([
+                'data' => [
+                    [
+                        'campaign_id' => 'cmp_usd_1',
+                        'campaign_name' => 'Global Campaign',
+                        'spend' => '25.00',
+                        'impressions' => '5000',
+                        'reach' => '4100',
+                        'clicks' => '150',
+                    ],
+                ],
+            ], 200),
+            '*' => Http::response(['data' => []], 200),
+        ]);
+
+        $this->post(route('settings.instagram.syncAds'))->assertRedirect();
+
+        $conn = InstagramConnection::current()->fresh();
+        $this->assertSame(100, $conn->ads_data['active_account']['currency_offset']);
+        $this->assertEquals(125.0, $conn->ads_data['active_account']['amount_spent_amount']);
+        $this->assertEquals(50.0, $conn->ads_data['campaigns'][0]['daily_budget_amount']);
+        $this->assertEquals(25.0, $conn->ads_data['campaigns'][0]['budget_remaining_amount']);
+    }
 }

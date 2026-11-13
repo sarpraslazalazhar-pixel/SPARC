@@ -101,22 +101,107 @@ export interface MetaAdsSummary {
     total_impressions: number;
     total_reach: number;
     total_clicks: number;
+    total_inline_link_clicks?: number;
     avg_ctr: number;
     avg_cpc: number;
     avg_cpm: number;
+    has_ig_breakdown?: boolean;
+    ig_spend?: number;
+    ig_impressions?: number;
+    ig_reach?: number;
+    ig_clicks?: number;
+    ig_inline_link_clicks?: number;
+    ig_ctr?: number;
+    ig_cpc?: number;
+    ig_cpm?: number;
+    ig_engagements?: number;
+    ig_likes?: number;
+    ig_comments?: number;
+    ig_saves?: number;
+    ig_shares?: number;
+    ig_profile_visits?: number;
+    ig_messaging_started?: number;
+    boosted_posts_count?: number;
     date_preset?: string;
+}
+
+export interface MetaAdMetrics {
+    spend: number;
+    impressions: number;
+    reach: number;
+    clicks: number;
+    inline_link_clicks?: number;
+    ctr: number;
+    cpc: number;
+    cpm: number;
+    post_engagement?: number;
+    likes?: number;
+    comments?: number;
+    saves?: number;
+    shares?: number;
+    video_views?: number;
+    profile_visits?: number;
+    messaging_started?: number;
 }
 
 export interface MetaAdCampaign {
     id: string;
     name: string;
     status: string;
+    effective_status?: string;
     objective?: string;
+    buying_type?: string;
     start_time?: string;
     stop_time?: string;
     daily_budget?: string;
     lifetime_budget?: string;
     budget_remaining?: string;
+    daily_budget_amount?: number | null;
+    lifetime_budget_amount?: number | null;
+    budget_remaining_amount?: number | null;
+    budget_source?: 'campaign' | 'adset' | null;
+    targets_instagram?: boolean;
+    ads_count?: number;
+    metrics?: MetaAdMetrics;
+    ig_metrics?: MetaAdMetrics | null;
+}
+
+export interface MetaInstagramAdItem {
+    id: string;
+    name: string;
+    status: string;
+    effective_status?: string;
+    campaign_id: string;
+    campaign_name?: string;
+    adset_id?: string;
+    instagram_user_id?: string | null;
+    source_instagram_media_id?: string | null;
+    effective_instagram_media_id?: string | null;
+    instagram_permalink_url?: string | null;
+    thumbnail_url?: string | null;
+    caption?: string | null;
+    cta_type?: string | null;
+    is_boosted_post?: boolean;
+    content_item_id?: string | null;
+    content_code?: string | null;
+    content_title?: string | null;
+    metrics: MetaAdMetrics;
+}
+
+export interface InstagramBoostMediaItem {
+    media_id: string;
+    caption?: string;
+    media_type: string;
+    thumbnail_url?: string | null;
+    permalink?: string;
+    timestamp?: string | null;
+    boost_ads_list: Array<Record<string, unknown>>;
+    content_item_id?: string | null;
+    content_code?: string | null;
+}
+
+export interface MetaPlatformBreakdownItem extends MetaAdMetrics {
+    platform: string;
 }
 
 export interface MetaAdsData {
@@ -126,15 +211,26 @@ export interface MetaAdsData {
         account_id: string;
         account_status?: number;
         currency?: string;
+        currency_offset?: number;
         amount_spent?: string;
+        amount_spent_amount?: number | null;
+        balance_amount?: number | null;
+        is_ig_linked?: boolean;
+        connected_ig_accounts?: Array<{ id: string; username?: string | null }>;
     }>;
     active_account?: {
         id: string;
         name: string;
         account_id: string;
         currency?: string;
+        currency_offset?: number;
+        is_ig_linked?: boolean;
+        connected_ig_accounts?: Array<{ id: string; username?: string | null }>;
     } | null;
     campaigns?: MetaAdCampaign[];
+    ig_ads?: MetaInstagramAdItem[];
+    ig_boost_media?: InstagramBoostMediaItem[];
+    platform_breakdown?: MetaPlatformBreakdownItem[];
     summary: MetaAdsSummary;
     insights?: Array<{
         campaign_name?: string;

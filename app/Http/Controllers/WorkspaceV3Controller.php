@@ -5157,11 +5157,19 @@ class WorkspaceV3Controller extends Controller
             'page_id' => (string) ($chosen['page_id'] ?? ''),
             'page_name' => (string) ($chosen['page_name'] ?? ''),
             'access_token' => (string) $token,
+            'ads_data' => null,
+            'account_insights' => null,
+            'demographics_data' => null,
+            'stories_data' => null,
+            'mentions_data' => null,
             'connected' => true,
             'last_tested_at' => now(),
             'connected_by' => auth()->id(),
         ]);
 
+        if (! empty($conn->user_access_token)) {
+            (new InstagramGraphService)->inspectTokenPermissions((string) $conn->user_access_token);
+        }
         $request->session()->put('sparc_v3.settings.instagram', [
             'account_id' => (string) $chosen['account_id'],
             'access_token' => (string) $token,
@@ -5200,6 +5208,12 @@ class WorkspaceV3Controller extends Controller
             'access_token' => null,
             'user_access_token' => null,
             'candidate_accounts' => null,
+            'granted_scopes' => null,
+            'ads_data' => null,
+            'account_insights' => null,
+            'demographics_data' => null,
+            'stories_data' => null,
+            'mentions_data' => null,
             'token_expires_at' => null,
             'connected' => false,
         ]);

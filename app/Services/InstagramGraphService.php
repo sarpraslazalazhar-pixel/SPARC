@@ -375,7 +375,7 @@ class InstagramGraphService
     /**
      * Inspect active token permissions from Meta `/me/permissions`.
      *
-     * @return array{success: bool, granted: array<int, string>, capabilities: array{basic: bool, insights: bool, publish: bool, comments: bool}, error?: string}
+     * @return array{success: bool, granted: array<int, string>, capabilities: array{basic: bool, insights: bool, publish: bool, comments: bool, ads: bool}, error?: string}
      */
     public function inspectTokenPermissions(?string $overrideToken = null): array
     {
@@ -392,16 +392,19 @@ class InstagramGraphService
         }
         $tokenToInspect = $tokenToInspect ?: $this->accessToken;
 
+        $emptyCapabilities = [
+            'basic' => false,
+            'insights' => false,
+            'publish' => false,
+            'comments' => false,
+            'ads' => false,
+        ];
+
         if (empty($tokenToInspect)) {
             return [
                 'success' => false,
                 'granted' => [],
-                'capabilities' => [
-                    'basic' => false,
-                    'insights' => false,
-                    'publish' => false,
-                    'comments' => false,
-                ],
+                'capabilities' => $emptyCapabilities,
                 'error' => 'Token belum tersedia untuk diperiksa.',
             ];
         }
@@ -417,12 +420,7 @@ class InstagramGraphService
                 return [
                     'success' => false,
                     'granted' => [],
-                    'capabilities' => [
-                        'basic' => false,
-                        'insights' => false,
-                        'publish' => false,
-                        'comments' => false,
-                    ],
+                    'capabilities' => $emptyCapabilities,
                     'error' => $response->json('error.message') ?? 'Gagal memeriksa daftar izin token Meta.',
                 ];
             }
@@ -451,12 +449,7 @@ class InstagramGraphService
             return [
                 'success' => false,
                 'granted' => [],
-                'capabilities' => [
-                    'basic' => false,
-                    'insights' => false,
-                    'publish' => false,
-                    'comments' => false,
-                ],
+                'capabilities' => $emptyCapabilities,
                 'error' => $e->getMessage(),
             ];
         }
@@ -3363,7 +3356,153 @@ class InstagramGraphService
     }
 
     /**
-     * Fetch all Meta Ad Accounts accessible by the configured User Access Token.
+     * Resolve Meta Marketing API currency offset (1 for zero-decimal/IDR/JPY/etc., 100 for USD/SGD/etc.).
+     */
+    public static function getCurrencyOffset(string $currency): int
+    {
+        $offsetOneCurrencies = [
+            'CLP', 'COP', 'CRC', 'HUF', 'IDR', 'ISK', 'JPY', 'KRW', 'PYG', 'TWD', 'VND',
+        ];
+
+        return in_array(strtoupper(trim($currency)), $offsetOneCurrencies, true) ? 1 : 100;
+    }
+
+    /**
+     * Convert raw Meta Marketing API budget/balance minor-unit string into actual currency units.
+     */
+    public static function normalizeAdMoney(mixed $rawValue, string $currency = 'IDR'): ?float
+    {
+        if ($rawValue === null || $rawValue === '' || ! is_numeric($rawValue)) {
+            return null;
+        }
+
+        $offset = self::getCurrencyOffset($currency);
+
+        return round(((float) $rawValue) / $offset, $offset === 1 ? 0 : 2);
+    }
+
+    /**
+     * Extract Instagram-relevant interaction counts from a Meta Marketing API Insights row.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{
+     *     inline_link_clicks: int,
+     *     link_clicks: int,
+     *     post_engagement: int,
+     *     likes: int,
+     *     comments: int,
+     *     saves: int,
+     *     shares: int,
+     *     video_views: int,
+     *     profile_visits: int,
+     *     messaging_started: int
+     * }
+     */
+    protected function extractAdActionMetrics(array $row): array
+    {
+        $actionMap = [];
+        foreach ((array) ($row['actions'] ?? []) as $act) {
+            if (! is_array($act)) {
+                continue;
+            }
+            $type = strtolower((string) ($act['action_type'] ?? ''));
+            $val = (int) round((float) ($act['value'] ?? 0));
+            if ($type !== '') {
+                $actionMap[$type] = ($actionMap[$type] ?? 0) + $val;
+            }
+        }
+
+        $inlineLinkClicks = (int) round((float) ($row['inline_link_clicks'] ?? 0));
+        $linkClicks = max($inlineLinkClicks, $actionMap['link_click'] ?? 0);
+        $likes = max($actionMap['like'] ?? 0, $actionMap['post_reaction'] ?? 0);
+        $profileVisits = max(
+            (int) round((float) ($row['instagram_profile_visits'] ?? 0)),
+            $actionMap['ig_profile_visit'] ?? 0,
+            $actionMap['instagram_profile_visit'] ?? 0,
+            $actionMap['instagram_profile_visits'] ?? 0,
+            $actionMap['profile_visit'] ?? 0,
+            $actionMap['onsite_conversion.profile_visit'] ?? 0
+        );
+
+        return [
+            'inline_link_clicks' => $inlineLinkClicks,
+            'link_clicks' => $linkClicks,
+            'post_engagement' => $actionMap['post_engagement'] ?? 0,
+            'likes' => $likes,
+            'comments' => $actionMap['comment'] ?? 0,
+            'saves' => $actionMap['onsite_conversion.post_save'] ?? ($actionMap['post_save'] ?? 0),
+            'shares' => $actionMap['post'] ?? 0,
+            'video_views' => $actionMap['video_view'] ?? 0,
+            'profile_visits' => $profileVisits,
+            'messaging_started' => max(
+                $actionMap['onsite_conversion.messaging_conversation_started_7d'] ?? 0,
+                $actionMap['onsite_conversion.messaging_first_reply'] ?? 0
+            ),
+        ];
+    }
+
+    /**
+     * Build normalized metrics summary from an array of Marketing API insight rows.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<string, mixed>
+     */
+    protected function summarizeInsightRows(array $rows): array
+    {
+        $spend = 0.0;
+        $impressions = 0;
+        $reach = 0;
+        $clicks = 0;
+        $inlineLinkClicks = 0;
+        $engagements = 0;
+        $likes = 0;
+        $comments = 0;
+        $saves = 0;
+        $shares = 0;
+        $videoViews = 0;
+        $profileVisits = 0;
+        $messagingStarted = 0;
+
+        foreach ($rows as $row) {
+            $spend += (float) ($row['spend'] ?? 0);
+            $impressions += (int) ($row['impressions'] ?? 0);
+            $reach += (int) ($row['reach'] ?? 0);
+            $clicks += (int) ($row['clicks'] ?? 0);
+
+            $act = $this->extractAdActionMetrics($row);
+            $inlineLinkClicks += $act['inline_link_clicks'];
+            $engagements += $act['post_engagement'];
+            $likes += $act['likes'];
+            $comments += $act['comments'];
+            $saves += $act['saves'];
+            $shares += $act['shares'];
+            $videoViews += $act['video_views'];
+            $profileVisits += $act['profile_visits'];
+            $messagingStarted += $act['messaging_started'];
+        }
+
+        return [
+            'spend' => round($spend, 2),
+            'impressions' => $impressions,
+            'reach' => $reach,
+            'clicks' => $clicks,
+            'inline_link_clicks' => $inlineLinkClicks,
+            'ctr' => $impressions > 0 ? round(($clicks / $impressions) * 100, 2) : 0.0,
+            'cpc' => $clicks > 0 ? round($spend / $clicks, 2) : 0.0,
+            'cpm' => $impressions > 0 ? round(($spend / $impressions) * 1000, 2) : 0.0,
+            'post_engagement' => $engagements,
+            'likes' => $likes,
+            'comments' => $comments,
+            'saves' => $saves,
+            'shares' => $shares,
+            'video_views' => $videoViews,
+            'profile_visits' => $profileVisits,
+            'messaging_started' => $messagingStarted,
+        ];
+    }
+
+    /**
+     * Fetch all Meta Ad Accounts accessible by the configured User Access Token and annotate IG linkage.
      *
      * @return array{success: bool, accounts?: array<int, array<string, mixed>>, error?: string}
      */
@@ -3444,6 +3583,89 @@ class InstagramGraphService
                 ];
             }
 
+            $actualIgId = $this->resolveActualInstagramId();
+            $connectedIgMap = [];
+            $probeSlice = array_slice($accounts, 0, 12);
+
+            if (! empty($probeSlice)) {
+                try {
+                    $igLinkResps = Http::batch(function (Batch $batch) use ($probeSlice, $adToken): array {
+                        $reqs = [];
+                        foreach ($probeSlice as $acc) {
+                            $rawId = (string) ($acc['id'] ?? $acc['account_id'] ?? '');
+                            if ($rawId === '') {
+                                continue;
+                            }
+                            $formattedId = Str::startsWith($rawId, 'act_') ? $rawId : 'act_'.$rawId;
+                            $reqs[] = $batch->as($formattedId)
+                                ->connectTimeout(6)
+                                ->timeout(10)
+                                ->withOptions(['force_ip_resolve' => 'v4'])
+                                ->get(sprintf('%s/%s/connected_instagram_accounts', $this->baseUrl, $formattedId), [
+                                    'fields' => 'id,username',
+                                    'limit' => 25,
+                                    'access_token' => $adToken,
+                                ]);
+                        }
+
+                        return $reqs;
+                    })->concurrency(6)->send();
+
+                    foreach ($igLinkResps as $formattedId => $igResp) {
+                        if ($igResp instanceof Response && $igResp->successful()) {
+                            $list = [];
+                            foreach ((array) ($igResp->json('data') ?? []) as $igRow) {
+                                if (! empty($igRow['id'])) {
+                                    $list[] = [
+                                        'id' => (string) $igRow['id'],
+                                        'username' => isset($igRow['username']) ? (string) $igRow['username'] : null,
+                                    ];
+                                }
+                            }
+                            $connectedIgMap[$formattedId] = $list;
+                        }
+                    }
+                } catch (\Throwable) {
+                    // Non-fatal if connected_instagram_accounts edge is unavailable
+                }
+            }
+
+            $connUsername = '';
+            try {
+                if (Schema::hasTable('instagram_connections')) {
+                    $connUsername = strtolower(trim((string) (InstagramConnection::current()->username ?? '')));
+                }
+            } catch (\Throwable) {
+                $connUsername = '';
+            }
+
+            foreach ($accounts as &$acc) {
+                $currency = (string) ($acc['currency'] ?? 'IDR');
+                $rawId = (string) ($acc['id'] ?? $acc['account_id'] ?? '');
+                $formattedId = Str::startsWith($rawId, 'act_') ? $rawId : 'act_'.$rawId;
+                $linkedIgs = $connectedIgMap[$formattedId] ?? [];
+                $isIgLinked = false;
+
+                foreach ($linkedIgs as $igNode) {
+                    if ($actualIgId !== '' && $igNode['id'] === $actualIgId) {
+                        $isIgLinked = true;
+                        break;
+                    }
+                    if ($connUsername !== '' && strtolower((string) ($igNode['username'] ?? '')) === $connUsername) {
+                        $isIgLinked = true;
+                        break;
+                    }
+                }
+
+                $acc['currency_offset'] = self::getCurrencyOffset($currency);
+                $acc['amount_spent_amount'] = self::normalizeAdMoney($acc['amount_spent'] ?? null, $currency);
+                $acc['balance_amount'] = self::normalizeAdMoney($acc['balance'] ?? null, $currency);
+                $acc['spend_cap_amount'] = self::normalizeAdMoney($acc['spend_cap'] ?? null, $currency);
+                $acc['connected_ig_accounts'] = $linkedIgs;
+                $acc['is_ig_linked'] = $isIgLinked;
+            }
+            unset($acc);
+
             return [
                 'success' => true,
                 'accounts' => $accounts,
@@ -3469,7 +3691,7 @@ class InstagramGraphService
 
         try {
             $resp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
-                'fields' => 'id,name,status,objective,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
+                'fields' => 'id,name,status,effective_status,objective,buying_type,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
                 'limit' => 100,
                 'access_token' => $adToken,
             ]);
@@ -3506,7 +3728,7 @@ class InstagramGraphService
 
         try {
             $resp = $this->metaHttp(18, 12)->get(sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
-                'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,cpc,cpm,ctr,actions,cost_per_action_type',
+                'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
                 'date_preset' => $datePreset,
                 'level' => 'campaign',
                 'limit' => 100,
@@ -3521,33 +3743,20 @@ class InstagramGraphService
             }
             /** @var array<int, array<string, mixed>> $rows */
             $rows = $resp->json('data') ?? [];
-            $totalSpend = 0.0;
-            $totalImpressions = 0;
-            $totalReach = 0;
-            $totalClicks = 0;
-
-            foreach ($rows as $row) {
-                $totalSpend += (float) ($row['spend'] ?? 0);
-                $totalImpressions += (int) ($row['impressions'] ?? 0);
-                $totalReach += (int) ($row['reach'] ?? 0);
-                $totalClicks += (int) ($row['clicks'] ?? 0);
-            }
-
-            $avgCtr = $totalImpressions > 0 ? round(($totalClicks / $totalImpressions) * 100, 2) : 0.0;
-            $avgCpc = $totalClicks > 0 ? round($totalSpend / $totalClicks, 2) : 0.0;
-            $avgCpm = $totalImpressions > 0 ? round(($totalSpend / $totalImpressions) * 1000, 2) : 0.0;
+            $sum = $this->summarizeInsightRows($rows);
 
             return [
                 'success' => true,
                 'insights' => $rows,
                 'summary' => [
-                    'total_spend' => $totalSpend,
-                    'total_impressions' => $totalImpressions,
-                    'total_reach' => $totalReach,
-                    'total_clicks' => $totalClicks,
-                    'avg_ctr' => $avgCtr,
-                    'avg_cpc' => $avgCpc,
-                    'avg_cpm' => $avgCpm,
+                    'total_spend' => $sum['spend'],
+                    'total_impressions' => $sum['impressions'],
+                    'total_reach' => $sum['reach'],
+                    'total_clicks' => $sum['clicks'],
+                    'total_inline_link_clicks' => $sum['inline_link_clicks'],
+                    'avg_ctr' => $sum['ctr'],
+                    'avg_cpc' => $sum['cpc'],
+                    'avg_cpm' => $sum['cpm'],
                     'date_preset' => $datePreset,
                 ],
             ];
@@ -3557,7 +3766,7 @@ class InstagramGraphService
     }
 
     /**
-     * Synchronize and cache complete Ads performance to `instagram_connections`.
+     * Synchronize and cache complete Ads performance (with Instagram placement breakdown & boosted IG posts) to `instagram_connections`.
      *
      * @return array{success: bool, ads_data?: array<string, mixed>, error?: string}
      */
@@ -3580,14 +3789,35 @@ class InstagramGraphService
                 'accounts' => [],
                 'active_account' => null,
                 'campaigns' => [],
+                'ig_ads' => [],
+                'ig_boost_media' => [],
+                'platform_breakdown' => [],
                 'summary' => [
                     'total_spend' => 0.0,
                     'total_impressions' => 0,
                     'total_reach' => 0,
                     'total_clicks' => 0,
+                    'total_inline_link_clicks' => 0,
                     'avg_ctr' => 0.0,
                     'avg_cpc' => 0.0,
                     'avg_cpm' => 0.0,
+                    'has_ig_breakdown' => false,
+                    'ig_spend' => 0.0,
+                    'ig_impressions' => 0,
+                    'ig_reach' => 0,
+                    'ig_clicks' => 0,
+                    'ig_inline_link_clicks' => 0,
+                    'ig_ctr' => 0.0,
+                    'ig_cpc' => 0.0,
+                    'ig_cpm' => 0.0,
+                    'ig_engagements' => 0,
+                    'ig_likes' => 0,
+                    'ig_comments' => 0,
+                    'ig_saves' => 0,
+                    'ig_shares' => 0,
+                    'ig_profile_visits' => 0,
+                    'ig_messaging_started' => 0,
+                    'boosted_posts_count' => 0,
                     'date_preset' => $datePreset,
                 ],
                 'insights' => [],
@@ -3603,44 +3833,490 @@ class InstagramGraphService
             return ['success' => true, 'ads_data' => $emptyPayload];
         }
 
-        $selectedAccount = $accounts[0];
-        if ($targetAdAccountId !== null) {
+        $selectedAccount = null;
+        if ($targetAdAccountId !== null && trim($targetAdAccountId) !== '') {
+            $cleanTarget = preg_replace('/^act_/', '', trim($targetAdAccountId));
             foreach ($accounts as $acc) {
-                if (($acc['id'] ?? '') === $targetAdAccountId || ($acc['account_id'] ?? '') === $targetAdAccountId) {
+                $accClean = preg_replace('/^act_/', '', (string) ($acc['account_id'] ?? $acc['id'] ?? ''));
+                if (($acc['id'] ?? '') === $targetAdAccountId || ($acc['account_id'] ?? '') === $targetAdAccountId || $accClean === $cleanTarget) {
                     $selectedAccount = $acc;
                     break;
                 }
             }
         }
+        if ($selectedAccount === null) {
+            foreach ($accounts as $acc) {
+                if (! empty($acc['is_ig_linked'])) {
+                    $selectedAccount = $acc;
+                    break;
+                }
+            }
+        }
+        if ($selectedAccount === null) {
+            $selectedAccount = $accounts[0];
+        }
 
         $selectedId = (string) ($selectedAccount['id'] ?? $selectedAccount['account_id'] ?? '');
-        $campaignsResult = $this->fetchAdCampaigns($selectedId);
-        $insightsResult = $this->fetchAdInsights($selectedId, $datePreset);
+        $formattedId = Str::startsWith($selectedId, 'act_') ? $selectedId : 'act_'.$selectedId;
+        $currency = (string) ($selectedAccount['currency'] ?? 'IDR');
+        $adToken = $this->resolveAdAccessToken();
+        $actualIgId = $this->resolveActualInstagramId();
 
-        if (! ($campaignsResult['success'] ?? false) && ! ($insightsResult['success'] ?? false)) {
-            $err = $campaignsResult['error'] ?? $insightsResult['error'] ?? 'Gagal menarik kampanye dan insights iklan dari Meta Marketing API.';
-            $this->captureApiTelemetry(null, 'sync_ads', $started, $err, false);
+        $batchResponses = Http::batch(function (Batch $batch) use ($formattedId, $datePreset, $adToken, $actualIgId): array {
+            $makeReq = static fn (string $key, string $url, array $params) => $batch->as($key)
+                ->connectTimeout(12)
+                ->timeout(18)
+                ->withOptions(['force_ip_resolve' => 'v4'])
+                ->get($url, $params);
+
+            $reqs = [
+                $makeReq('campaigns', sprintf('%s/%s/campaigns', $this->baseUrl, $formattedId), [
+                    'fields' => 'id,name,status,effective_status,objective,buying_type,start_time,stop_time,daily_budget,lifetime_budget,budget_remaining',
+                    'limit' => 100,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('adsets', sprintf('%s/%s/adsets', $this->baseUrl, $formattedId), [
+                    'fields' => 'id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,optimization_goal,targeting,start_time,end_time',
+                    'limit' => 150,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('ads', sprintf('%s/%s/ads', $this->baseUrl, $formattedId), [
+                    'fields' => 'id,name,status,effective_status,campaign_id,adset_id,created_time,updated_time,creative{id,name,instagram_user_id,source_instagram_media_id,effective_instagram_media_id,instagram_permalink_url,thumbnail_url,image_url,object_story_id,body,title,call_to_action_type}',
+                    'limit' => 150,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                    'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
+                    'date_preset' => $datePreset,
+                    'level' => 'campaign',
+                    'limit' => 100,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('platform_campaign_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                    'fields' => 'campaign_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                    'date_preset' => $datePreset,
+                    'level' => 'campaign',
+                    'breakdowns' => 'publisher_platform',
+                    'limit' => 250,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('platform_account_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                    'fields' => 'spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                    'date_preset' => $datePreset,
+                    'level' => 'account',
+                    'breakdowns' => 'publisher_platform',
+                    'limit' => 20,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('ad_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                    'fields' => 'ad_id,ad_name,adset_id,campaign_id,campaign_name,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions,cost_per_action_type',
+                    'date_preset' => $datePreset,
+                    'level' => 'ad',
+                    'limit' => 150,
+                    'access_token' => $adToken,
+                ]),
+                $makeReq('ad_platform_insights', sprintf('%s/%s/insights', $this->baseUrl, $formattedId), [
+                    'fields' => 'ad_id,ad_name,campaign_id,spend,impressions,reach,clicks,inline_link_clicks,cpc,cpm,ctr,actions',
+                    'date_preset' => $datePreset,
+                    'level' => 'ad',
+                    'breakdowns' => 'publisher_platform',
+                    'limit' => 300,
+                    'access_token' => $adToken,
+                ]),
+            ];
+
+            if ($actualIgId !== '' && ! empty($this->accessToken)) {
+                $reqs[] = $makeReq('ig_boost_media', sprintf('%s/%s/media', $this->baseUrl, $actualIgId), [
+                    'fields' => 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,boost_ads_list,boost_eligibility_info',
+                    'limit' => 25,
+                    'access_token' => $this->accessToken,
+                ]);
+            }
+
+            return $reqs;
+        })->concurrency(6)->send();
+
+        $campaignsResp = $batchResponses['campaigns'] ?? null;
+        $campaignInsightsResp = $batchResponses['campaign_insights'] ?? null;
+
+        $campaignsOk = $campaignsResp instanceof Response && $campaignsResp->successful();
+        $insightsOk = $campaignInsightsResp instanceof Response && $campaignInsightsResp->successful();
+
+        if (! $campaignsOk && ! $insightsOk) {
+            $err = ($campaignsResp instanceof Response ? $campaignsResp->json('error.message') : null)
+                ?? ($campaignInsightsResp instanceof Response ? $campaignInsightsResp->json('error.message') : null)
+                ?? 'Gagal menarik kampanye dan insights iklan dari Meta Marketing API.';
+            $this->captureApiTelemetry($campaignsResp instanceof Response ? $campaignsResp : null, 'sync_ads', $started, $err, false);
 
             return [
                 'success' => false,
                 'error' => $err,
             ];
         }
+
+        /** @var array<int, array<string, mixed>> $rawCampaigns */
+        $rawCampaigns = $campaignsOk ? (array) ($campaignsResp->json('data') ?? []) : [];
+        /** @var array<int, array<string, mixed>> $rawCampaignInsights */
+        $rawCampaignInsights = $insightsOk ? (array) ($campaignInsightsResp->json('data') ?? []) : [];
+
+        $adsetsResp = $batchResponses['adsets'] ?? null;
+        /** @var array<int, array<string, mixed>> $rawAdsets */
+        $rawAdsets = ($adsetsResp instanceof Response && $adsetsResp->successful())
+            ? (array) ($adsetsResp->json('data') ?? [])
+            : [];
+
+        $adsResp = $batchResponses['ads'] ?? null;
+        /** @var array<int, array<string, mixed>> $rawAds */
+        $rawAds = ($adsResp instanceof Response && $adsResp->successful())
+            ? (array) ($adsResp->json('data') ?? [])
+            : [];
+
+        $platformCampaignResp = $batchResponses['platform_campaign_insights'] ?? null;
+        $rawPlatformCampaignInsights = ($platformCampaignResp instanceof Response && $platformCampaignResp->successful())
+            ? (array) ($platformCampaignResp->json('data') ?? [])
+            : [];
+
+        $platformAccountResp = $batchResponses['platform_account_insights'] ?? null;
+        $rawPlatformAccountInsights = ($platformAccountResp instanceof Response && $platformAccountResp->successful())
+            ? (array) ($platformAccountResp->json('data') ?? [])
+            : [];
+
+        $adInsightsResp = $batchResponses['ad_insights'] ?? null;
+        $rawAdInsights = ($adInsightsResp instanceof Response && $adInsightsResp->successful())
+            ? (array) ($adInsightsResp->json('data') ?? [])
+            : [];
+
+        $adPlatformResp = $batchResponses['ad_platform_insights'] ?? null;
+        $rawAdPlatformInsights = ($adPlatformResp instanceof Response && $adPlatformResp->successful())
+            ? (array) ($adPlatformResp->json('data') ?? [])
+            : [];
+
+        // Group adsets by campaign & ID
+        $adsetsById = [];
+        $adsetStatsByCampaign = [];
+        foreach ($rawAdsets as $adset) {
+            $asId = (string) ($adset['id'] ?? '');
+            $cId = (string) ($adset['campaign_id'] ?? '');
+            if ($asId !== '') {
+                $adsetsById[$asId] = $adset;
+            }
+            if ($cId === '') {
+                continue;
+            }
+            if (! isset($adsetStatsByCampaign[$cId])) {
+                $adsetStatsByCampaign[$cId] = [
+                    'daily_budget_raw' => 0.0,
+                    'lifetime_budget_raw' => 0.0,
+                    'budget_remaining_raw' => 0.0,
+                    'targets_instagram' => false,
+                ];
+            }
+            $adsetStatsByCampaign[$cId]['daily_budget_raw'] += (float) ($adset['daily_budget'] ?? 0);
+            $adsetStatsByCampaign[$cId]['lifetime_budget_raw'] += (float) ($adset['lifetime_budget'] ?? 0);
+            $adsetStatsByCampaign[$cId]['budget_remaining_raw'] += (float) ($adset['budget_remaining'] ?? 0);
+
+            $platforms = (array) ($adset['targeting']['publisher_platforms'] ?? []);
+            if (empty($platforms) || in_array('instagram', array_map('strtolower', array_map('strval', $platforms)), true)) {
+                $adsetStatsByCampaign[$cId]['targets_instagram'] = true;
+            }
+        }
+
+        // Index campaign insights (total)
+        $campaignInsightsById = [];
+        foreach ($rawCampaignInsights as $row) {
+            $cId = (string) ($row['campaign_id'] ?? '');
+            if ($cId !== '') {
+                $campaignInsightsById[$cId] = $this->summarizeInsightRows([$row]);
+            }
+        }
+
+        // Index campaign insights broken down by publisher_platform
+        $igCampaignInsightsById = [];
+        $platformBreakdownRows = [];
+        foreach ($rawPlatformCampaignInsights as $row) {
+            if (! isset($row['publisher_platform'])) {
+                continue;
+            }
+            $plat = strtolower(trim((string) $row['publisher_platform']));
+            $cId = (string) ($row['campaign_id'] ?? '');
+            $platformBreakdownRows[$plat][] = $row;
+            if ($plat === 'instagram' && $cId !== '') {
+                $igCampaignInsightsById[$cId] = $this->summarizeInsightRows([$row]);
+            }
+        }
+
+        // Account-level platform breakdown (true deduplicated reach per platform)
+        $accountPlatformBreakdown = [];
+        foreach ($rawPlatformAccountInsights as $row) {
+            if (! isset($row['publisher_platform'])) {
+                continue;
+            }
+            $plat = strtolower(trim((string) $row['publisher_platform']));
+            $accountPlatformBreakdown[$plat][] = $row;
+        }
+
+        $platformBreakdown = [];
+        $sourceBreakdownMap = ! empty($accountPlatformBreakdown) ? $accountPlatformBreakdown : $platformBreakdownRows;
+        foreach ($sourceBreakdownMap as $plat => $pRows) {
+            $pSum = $this->summarizeInsightRows($pRows);
+            $platformBreakdown[] = array_merge(['platform' => $plat], $pSum);
+        }
+        usort($platformBreakdown, static fn (array $a, array $b): int => $b['spend'] <=> $a['spend']);
+
+        $hasIgBreakdown = ! empty($sourceBreakdownMap);
+        $igAccountRows = $accountPlatformBreakdown['instagram'] ?? ($platformBreakdownRows['instagram'] ?? []);
+        $igSum = $this->summarizeInsightRows($igAccountRows);
+
+        if (empty($accountPlatformBreakdown['instagram']) && ! empty($platformBreakdownRows['instagram'])) {
+            $igSum = $this->summarizeInsightRows($platformBreakdownRows['instagram']);
+        }
+
+        // Ad-level insights (prefer Instagram placement when present)
+        $adInsightsById = [];
+        foreach ($rawAdInsights as $row) {
+            $adId = (string) ($row['ad_id'] ?? '');
+            if ($adId !== '') {
+                $adInsightsById[$adId] = $this->summarizeInsightRows([$row]);
+            }
+        }
+
+        $igAdInsightsById = [];
+        foreach ($rawAdPlatformInsights as $row) {
+            if (! isset($row['publisher_platform']) || empty($row['ad_id'])) {
+                continue;
+            }
+            if (strtolower((string) $row['publisher_platform']) === 'instagram') {
+                $igAdInsightsById[(string) $row['ad_id']] = $this->summarizeInsightRows([$row]);
+            }
+        }
+
+        $campaignNameMap = [];
+        foreach ($rawCampaigns as $c) {
+            if (! empty($c['id'])) {
+                $campaignNameMap[(string) $c['id']] = (string) ($c['name'] ?? '');
+            }
+        }
+
+        // Load SPARC ContentItems to match boosted IG posts
+        $contentItemsByMediaId = [];
+        $contentItemsByShortcode = [];
+        if (Schema::hasTable('content_items')) {
+            $igItems = ContentItem::query()
+                ->select(['id', 'content_id', 'title', 'ig_media_id', 'published_url', 'is_ad_boosted', 'ad_spend'])
+                ->where(function ($q): void {
+                    $q->where('platform', 'instagram')
+                        ->orWhereNotNull('ig_media_id');
+                })
+                ->get();
+
+            foreach ($igItems as $ci) {
+                if (! empty($ci->ig_media_id)) {
+                    $contentItemsByMediaId[(string) $ci->ig_media_id] = $ci;
+                }
+                if (! empty($ci->published_url)) {
+                    $sc = $this->extractShortcode((string) $ci->published_url);
+                    if ($sc !== null) {
+                        $contentItemsByShortcode[$sc] = $ci;
+                    }
+                }
+            }
+        }
+
+        $igAds = [];
+        $adsCountByCampaign = [];
+        $boostedSpendByContentItemId = [];
+
+        foreach ($rawAds as $ad) {
+            $adId = (string) ($ad['id'] ?? '');
+            $cId = (string) ($ad['campaign_id'] ?? '');
+            $asId = (string) ($ad['adset_id'] ?? '');
+            $creative = is_array($ad['creative'] ?? null) ? $ad['creative'] : [];
+
+            $igUserId = (string) ($creative['instagram_user_id'] ?? '');
+            $sourceIgMediaId = (string) ($creative['source_instagram_media_id'] ?? '');
+            $effectiveIgMediaId = (string) ($creative['effective_instagram_media_id'] ?? '');
+            $igPermalink = (string) ($creative['instagram_permalink_url'] ?? '');
+            $adsetPlatforms = array_map('strtolower', array_map('strval', (array) ($adsetsById[$asId]['targeting']['publisher_platforms'] ?? [])));
+
+            $hasIgCreative = $sourceIgMediaId !== '' || $effectiveIgMediaId !== '' || $igPermalink !== '' || $igUserId !== '';
+            $targetsIg = empty($adsetPlatforms) || in_array('instagram', $adsetPlatforms, true) || isset($igAdInsightsById[$adId]);
+
+            if (! $hasIgCreative && ! $targetsIg) {
+                continue;
+            }
+            if ($igUserId !== '' && $actualIgId !== '' && $igUserId !== $actualIgId && $sourceIgMediaId === '' && $effectiveIgMediaId === '') {
+                continue;
+            }
+
+            if ($cId !== '') {
+                $adsCountByCampaign[$cId] = ($adsCountByCampaign[$cId] ?? 0) + 1;
+            }
+
+            $metrics = $igAdInsightsById[$adId] ?? ($adInsightsById[$adId] ?? $this->summarizeInsightRows([]));
+
+            $matchedCi = null;
+            if ($sourceIgMediaId !== '' && isset($contentItemsByMediaId[$sourceIgMediaId])) {
+                $matchedCi = $contentItemsByMediaId[$sourceIgMediaId];
+            } elseif ($effectiveIgMediaId !== '' && isset($contentItemsByMediaId[$effectiveIgMediaId])) {
+                $matchedCi = $contentItemsByMediaId[$effectiveIgMediaId];
+            } elseif ($igPermalink !== '') {
+                $sc = $this->extractShortcode($igPermalink);
+                if ($sc !== null && isset($contentItemsByShortcode[$sc])) {
+                    $matchedCi = $contentItemsByShortcode[$sc];
+                }
+            }
+
+            if ($matchedCi !== null) {
+                $boostedSpendByContentItemId[$matchedCi->id] = ($boostedSpendByContentItemId[$matchedCi->id] ?? 0.0) + (float) ($metrics['spend'] ?? 0);
+            }
+
+            $igAds[] = [
+                'id' => $adId,
+                'name' => (string) ($ad['name'] ?? ($creative['name'] ?? 'Iklan Instagram')),
+                'status' => (string) ($ad['status'] ?? 'UNKNOWN'),
+                'effective_status' => (string) ($ad['effective_status'] ?? ($ad['status'] ?? 'UNKNOWN')),
+                'campaign_id' => $cId,
+                'campaign_name' => $campaignNameMap[$cId] ?? '',
+                'adset_id' => $asId,
+                'instagram_user_id' => $igUserId ?: null,
+                'source_instagram_media_id' => $sourceIgMediaId ?: null,
+                'effective_instagram_media_id' => $effectiveIgMediaId ?: null,
+                'instagram_permalink_url' => $igPermalink ?: null,
+                'thumbnail_url' => $creative['thumbnail_url'] ?? ($creative['image_url'] ?? null),
+                'caption' => $creative['body'] ?? ($creative['title'] ?? null),
+                'cta_type' => $creative['call_to_action_type'] ?? null,
+                'is_boosted_post' => $sourceIgMediaId !== '' || $effectiveIgMediaId !== '',
+                'content_item_id' => $matchedCi ? (string) $matchedCi->id : null,
+                'content_code' => $matchedCi?->content_id,
+                'content_title' => $matchedCi?->title,
+                'metrics' => $metrics,
+            ];
+        }
+
+        usort($igAds, static fn (array $a, array $b): int => ($b['metrics']['spend'] ?? 0) <=> ($a['metrics']['spend'] ?? 0));
+
+        // Parse IG Graph API `boost_ads_list` on recent IG Media (catches active IG app boosts)
+        $igBoostMedia = [];
+        $igBoostMediaResp = $batchResponses['ig_boost_media'] ?? null;
+        if ($igBoostMediaResp instanceof Response && $igBoostMediaResp->successful()) {
+            foreach ((array) ($igBoostMediaResp->json('data') ?? []) as $igMedia) {
+                $boostList = (array) ($igMedia['boost_ads_list'] ?? []);
+                if (empty($boostList)) {
+                    continue;
+                }
+                $mId = (string) ($igMedia['id'] ?? '');
+                $permalink = (string) ($igMedia['permalink'] ?? '');
+                $matchedCi = $contentItemsByMediaId[$mId] ?? ($permalink !== '' ? ($contentItemsByShortcode[$this->extractShortcode($permalink) ?? ''] ?? null) : null);
+                if ($matchedCi !== null && ! isset($boostedSpendByContentItemId[$matchedCi->id])) {
+                    $boostedSpendByContentItemId[$matchedCi->id] = (float) ($matchedCi->ad_spend ?? 0);
+                }
+                $igBoostMedia[] = [
+                    'media_id' => $mId,
+                    'caption' => Str::limit(trim((string) ($igMedia['caption'] ?? '')), 120),
+                    'media_type' => (string) ($igMedia['media_type'] ?? 'IMAGE'),
+                    'thumbnail_url' => $igMedia['thumbnail_url'] ?? ($igMedia['media_url'] ?? null),
+                    'permalink' => $permalink,
+                    'timestamp' => $igMedia['timestamp'] ?? null,
+                    'boost_ads_list' => $boostList,
+                    'boost_eligibility_info' => $igMedia['boost_eligibility_info'] ?? null,
+                    'content_item_id' => $matchedCi ? (string) $matchedCi->id : null,
+                    'content_code' => $matchedCi?->content_id,
+                ];
+            }
+        }
+
+        // Persist matched boosted flags & ad spend back to ContentItem rows
+        if (! empty($boostedSpendByContentItemId) && Schema::hasTable('content_items')) {
+            foreach ($boostedSpendByContentItemId as $ciId => $spendAmt) {
+                ContentItem::where('id', $ciId)->update([
+                    'is_ad_boosted' => true,
+                    'ad_spend' => round($spendAmt, 2),
+                ]);
+            }
+        }
+
+        // Enrich campaigns with currency-normalized budgets (with adset fallback) + per-campaign insights
+        $enrichedCampaigns = [];
+        foreach ($rawCampaigns as $c) {
+            $cId = (string) ($c['id'] ?? '');
+            $asStat = $adsetStatsByCampaign[$cId] ?? null;
+
+            $dailyBudget = self::normalizeAdMoney($c['daily_budget'] ?? null, $currency);
+            $lifetimeBudget = self::normalizeAdMoney($c['lifetime_budget'] ?? null, $currency);
+            $budgetRemaining = self::normalizeAdMoney($c['budget_remaining'] ?? null, $currency);
+            $budgetSource = ($dailyBudget !== null || $lifetimeBudget !== null) ? 'campaign' : null;
+
+            if ($dailyBudget === null && $lifetimeBudget === null && $asStat !== null) {
+                if ($asStat['daily_budget_raw'] > 0) {
+                    $dailyBudget = self::normalizeAdMoney($asStat['daily_budget_raw'], $currency);
+                    $budgetSource = 'adset';
+                }
+                if ($asStat['lifetime_budget_raw'] > 0) {
+                    $lifetimeBudget = self::normalizeAdMoney($asStat['lifetime_budget_raw'], $currency);
+                    $budgetSource = 'adset';
+                }
+                if ($budgetRemaining === null && $asStat['budget_remaining_raw'] > 0) {
+                    $budgetRemaining = self::normalizeAdMoney($asStat['budget_remaining_raw'], $currency);
+                }
+            }
+
+            $c['effective_status'] = (string) ($c['effective_status'] ?? ($c['status'] ?? 'UNKNOWN'));
+            $c['daily_budget_amount'] = $dailyBudget;
+            $c['lifetime_budget_amount'] = $lifetimeBudget;
+            $c['budget_remaining_amount'] = $budgetRemaining;
+            $c['budget_source'] = $budgetSource;
+            $c['targets_instagram'] = $asStat['targets_instagram'] ?? true;
+            $c['ads_count'] = $adsCountByCampaign[$cId] ?? 0;
+            $c['metrics'] = $campaignInsightsById[$cId] ?? $this->summarizeInsightRows([]);
+            $c['ig_metrics'] = $igCampaignInsightsById[$cId] ?? null;
+            $enrichedCampaigns[] = $c;
+        }
+
+        $totalSum = $this->summarizeInsightRows($rawCampaignInsights);
+        $boostedPostsCount = count(array_filter(
+            $igAds,
+            static fn (array $a): bool => ! empty($a['is_boosted_post'])
+        ));
+        if ($boostedPostsCount === 0 && ! empty($igBoostMedia)) {
+            $boostedPostsCount = count($igBoostMedia);
+        }
+
         $adsPayload = [
             'accounts' => $accounts,
             'active_account' => $selectedAccount,
-            'campaigns' => $campaignsResult['campaigns'] ?? [],
-            'summary' => $insightsResult['summary'] ?? [
-                'total_spend' => 0.0,
-                'total_impressions' => 0,
-                'total_reach' => 0,
-                'total_clicks' => 0,
-                'avg_ctr' => 0.0,
-                'avg_cpc' => 0.0,
-                'avg_cpm' => 0.0,
+            'campaigns' => $enrichedCampaigns,
+            'ig_ads' => $igAds,
+            'ig_boost_media' => $igBoostMedia,
+            'platform_breakdown' => $platformBreakdown,
+            'summary' => [
+                'total_spend' => $totalSum['spend'],
+                'total_impressions' => $totalSum['impressions'],
+                'total_reach' => $totalSum['reach'],
+                'total_clicks' => $totalSum['clicks'],
+                'total_inline_link_clicks' => $totalSum['inline_link_clicks'],
+                'avg_ctr' => $totalSum['ctr'],
+                'avg_cpc' => $totalSum['cpc'],
+                'avg_cpm' => $totalSum['cpm'],
+                'has_ig_breakdown' => $hasIgBreakdown,
+                'ig_spend' => $igSum['spend'],
+                'ig_impressions' => $igSum['impressions'],
+                'ig_reach' => $igSum['reach'],
+                'ig_clicks' => $igSum['clicks'],
+                'ig_inline_link_clicks' => $igSum['inline_link_clicks'],
+                'ig_ctr' => $igSum['ctr'],
+                'ig_cpc' => $igSum['cpc'],
+                'ig_cpm' => $igSum['cpm'],
+                'ig_engagements' => $igSum['post_engagement'],
+                'ig_likes' => $igSum['likes'],
+                'ig_comments' => $igSum['comments'],
+                'ig_saves' => $igSum['saves'],
+                'ig_shares' => $igSum['shares'],
+                'ig_profile_visits' => $igSum['profile_visits'],
+                'ig_messaging_started' => $igSum['messaging_started'],
+                'boosted_posts_count' => $boostedPostsCount,
                 'date_preset' => $datePreset,
             ],
-            'insights' => $insightsResult['insights'] ?? [],
+            'insights' => $rawCampaignInsights,
             'synced_at' => now()->format('d M Y, H:i').' WIB',
         ];
 
@@ -3648,15 +4324,17 @@ class InstagramGraphService
             InstagramConnection::current()->update(['ads_data' => $adsPayload]);
         }
 
+        $displayImpressions = $hasIgBreakdown ? $igSum['impressions'] : $totalSum['impressions'];
         $this->captureApiTelemetry(
-            null,
+            $campaignsResp instanceof Response ? $campaignsResp : null,
             'sync_ads',
             $started,
             sprintf(
-                'Ads disinkronkan (%s: %d kampanye, %d impresi).',
+                'Ads disinkronkan (%s: %d kampanye, %d iklan IG, %d impresi).',
                 $selectedAccount['name'] ?? $selectedId,
-                count($adsPayload['campaigns']),
-                $adsPayload['summary']['total_impressions'] ?? 0
+                count($enrichedCampaigns),
+                count($igAds),
+                $displayImpressions
             )
         );
 

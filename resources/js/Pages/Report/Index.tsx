@@ -148,11 +148,13 @@ export default function ReportIndex({
     const { props } = usePage<SharedWorkspaceProps>();
     const can = props.auth?.can;
     const { success: toastSuccess, error: toastError } = useToast();
-
     const [activeLayer, setActiveLayer] = useState<'content' | 'ads' | 'creator' | 'operational' | 'team'>('content');
     const [isSyncingAds, setIsSyncingAds] = useState(false);
     const [selectedAdAccountId, setSelectedAdAccountId] = useState('');
-    const [adsDatePreset, setAdsDatePreset] = useState('last_30d');
+    const [adsDatePreset, setAdsDatePreset] = useState(
+        () => (instagramSettings?.adsData?.summary?.date_preset || 'last_30d')
+    );
+    const [adsPlacementScope, setAdsPlacementScope] = useState<'instagram' | 'all'>('instagram');
     const [isSyncingDemographics, setIsSyncingDemographics] = useState(false);
     const [isSyncingStories, setIsSyncingStories] = useState(false);
     const [isSyncingMentions, setIsSyncingMentions] = useState(false);
@@ -1506,24 +1508,103 @@ export default function ReportIndex({
                 {/* =========================================================
                     LAYER 4: META MARKETING API & ADS MONITORING
                    ========================================================= */}
-                {activeLayer === 'ads' && (
+                {activeLayer === 'ads' && (() => {
+                    const adsData = igAccount?.adsData;
+                    const summary = adsData?.summary;
+                    const currency = adsData?.active_account?.currency || 'IDR';
+                    const currencyOffset = adsData?.active_account?.currency_offset ?? (['IDR', 'JPY', 'KRW', 'VND', 'TWD'].includes(currency) ? 1 : 100);
+                    const hasIgBreakdown = Boolean(summary?.has_ig_breakdown);
+                    const useIgScope = hasIgBreakdown && adsPlacementScope === 'instagram';
+
+                    const formatMoney = (amount: number | null | undefined): string => {
+                        if (amount === null || amount === undefined) {
+                            return '—';
+                        }
+                        const decimals = currencyOffset === 1 ? 0 : 2;
+                        return `${currency} ${amount.toLocaleString('id-ID', {
+                            minimumFractionDigits: decimals,
+                            maximumFractionDigits: decimals,
+                        })}`;
+                    };
+
+                    const activeSpend = useIgScope ? (summary?.ig_spend ?? 0) : (summary?.total_spend ?? 0);
+                    const activeImpressions = useIgScope ? (summary?.ig_impressions ?? 0) : (summary?.total_impressions ?? 0);
+                    const activeReach = useIgScope ? (summary?.ig_reach ?? 0) : (summary?.total_reach ?? 0);
+                    const activeClicks = useIgScope ? (summary?.ig_clicks ?? 0) : (summary?.total_clicks ?? 0);
+                    const activeLinkClicks = useIgScope ? (summary?.ig_inline_link_clicks ?? 0) : (summary?.total_inline_link_clicks ?? 0);
+                    const activeCtr = useIgScope ? (summary?.ig_ctr ?? 0) : (summary?.avg_ctr ?? 0);
+                    const activeCpc = useIgScope ? (summary?.ig_cpc ?? 0) : (summary?.avg_cpc ?? 0);
+                    const activeCpm = useIgScope ? (summary?.ig_cpm ?? 0) : (summary?.avg_cpm ?? 0);
+
+                    // Per Meta IG Graph API spec, /{ig-user-id}/insights `reach` already includes boosted/ad reach
+                    const totalIgAccountReach = igAccount?.accountInsights?.reach_28d ?? 0;
+                    const paidIgReach = hasIgBreakdown ? (summary?.ig_reach ?? 0) : (summary?.total_reach ?? 0);
+                    const estimatedOrganicReach = Math.max(0, totalIgAccountReach - paidIgReach);
+                    const reachDenominator = Math.max(1, estimatedOrganicReach + paidIgReach);
+                    const organicReachPct = Math.round((estimatedOrganicReach / reachDenominator) * 100);
+                    const paidReachPct = Math.max(0, 100 - organicReachPct);
+
+                    const datePresetLabels: Record<string, string> = {
+                        last_7d: '7 Hari Terakhir',
+                        last_28d: '28 Hari Terakhir (Sesuai IG)',
+                        last_30d: '30 Hari Terakhir',
+                        last_90d: '90 Hari Terakhir',
+                        this_month: 'Bulan Ini',
+                        maximum: 'Sepanjang Waktu',
+                    };
+
+                    const igAdsList = adsData?.ig_ads ?? [];
+                    const igBoostMediaList = adsData?.ig_boost_media ?? [];
+                    const platformBreakdown = adsData?.platform_breakdown ?? [];
+
+                    return (
                     <div className="space-y-5">
+                        {/* Permission Notice if connected without ads_read */}
+                        {igAccount?.connected && igAccount?.capabilities && !igAccount.capabilities.ads && (
+                            <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                                <div className="flex items-start gap-2.5">
+                                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                                    <div>
+                                        <p className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                            Izin Meta Marketing API (ads_read) Belum Aktif
+                                        </p>
+                                        <p className="text-[11px] text-[var(--md-sys-color-on-surface-variant)] mt-0.5">
+                                            Buka Pengaturan → centang <strong>Meta Marketing API (ads_read)</strong> pada Smart Scopes → klik <strong>Perbarui Otorisasi Meta</strong> agar data iklan dan postingan yang dipromosikan dari IG bisa ditarik.
+                                        </p>
+                                    </div>
+                                </div>
+                                {can?.manageSettings && (
+                                    <Link
+                                        href="/settings"
+                                        className="px-3.5 py-1.5 rounded-xl bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)] font-bold whitespace-nowrap self-start sm:self-center"
+                                    >
+                                        Atur di Pengaturan
+                                    </Link>
+                                )}
+                            </div>
+                        )}
+
                         {/* Ads Header Card */}
                         <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                             <div className="space-y-1">
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <Megaphone className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                                     <h3 className="font-bold text-sm sm:text-base text-[var(--md-sys-color-on-surface)]">
-                                        Meta Marketing API — Monitoring Kampanye & Iklan Berbayar
+                                        Meta Marketing API — Monitoring Iklan &amp; Promosi Instagram
                                     </h3>
+                                    {adsData?.active_account?.is_ig_linked && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                                            <CheckCircle2 className="w-3 h-3" /> Terhubung ke @{igAccount?.username || 'IG'}
+                                        </span>
+                                    )}
                                 </div>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
                                     Akun Iklan Terhubung:{' '}
-                                    {igAccount?.adsData?.active_account ? (
+                                    {adsData?.active_account ? (
                                         <strong className="text-[var(--md-sys-color-on-surface)]">
-                                            {igAccount.adsData.active_account.name} (ID: act_{igAccount.adsData.active_account.account_id})
+                                            {adsData.active_account.name} (ID: act_{adsData.active_account.account_id})
                                         </strong>
-                                    ) : igAccount?.adsData?.synced_at ? (
+                                    ) : adsData?.synced_at ? (
                                         <strong className="text-amber-700 dark:text-amber-300">
                                             Belum ada Ad Account ditemukan di Meta Ads Manager
                                         </strong>
@@ -1532,27 +1613,53 @@ export default function ReportIndex({
                                             Belum disinkronkan
                                         </strong>
                                     )}
-                                    {igAccount?.adsData?.synced_at && (
+                                    {adsData?.synced_at && (
                                         <span className="ml-2 text-[var(--md-sys-color-on-surface-muted)]">
-                                            • Terakhir disinkronkan: {igAccount.adsData.synced_at}
+                                            • Terakhir disinkronkan: {adsData.synced_at}
                                         </span>
                                     )}
                                 </p>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
-                                {(igAccount?.adsData?.accounts?.length ?? 0) > 1 && (
+                                {hasIgBreakdown && (
+                                    <div className="inline-flex rounded-xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] p-0.5 text-[11px] font-semibold">
+                                        <button
+                                            type="button"
+                                            onClick={() => setAdsPlacementScope('instagram')}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                                adsPlacementScope === 'instagram'
+                                                    ? 'bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]'
+                                                    : 'text-[var(--md-sys-color-on-surface-variant)]'
+                                            }`}
+                                        >
+                                            Instagram Saja
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAdsPlacementScope('all')}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                                adsPlacementScope === 'all'
+                                                    ? 'bg-[var(--md-sys-color-primary)] text-[var(--md-sys-color-on-primary)]'
+                                                    : 'text-[var(--md-sys-color-on-surface-variant)]'
+                                            }`}
+                                        >
+                                            Semua Penempatan
+                                        </button>
+                                    </div>
+                                )}
+                                {(adsData?.accounts?.length ?? 0) > 1 && (
                                     <select
                                         aria-label="Pilih Akun Iklan Meta"
-                                        value={selectedAdAccountId || igAccount?.adsData?.active_account?.account_id || ''}
+                                        value={selectedAdAccountId || adsData?.active_account?.account_id || ''}
                                         onChange={(e) => {
                                             setSelectedAdAccountId(e.target.value);
                                             handleSyncAds(e.target.value, adsDatePreset);
                                         }}
                                         className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none"
                                     >
-                                        {igAccount?.adsData?.accounts?.map((acc) => (
+                                        {adsData?.accounts?.map((acc) => (
                                             <option key={acc.id} value={acc.account_id}>
-                                                {acc.name} (act_{acc.account_id})
+                                                {acc.name} (act_{acc.account_id}){acc.is_ig_linked ? ' ★ IG' : ''}
                                             </option>
                                         ))}
                                     </select>
@@ -1567,9 +1674,11 @@ export default function ReportIndex({
                                     className="h-8 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-2.5 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none"
                                 >
                                     <option value="last_7d">7 Hari Terakhir</option>
+                                    <option value="last_28d">28 Hari Terakhir (Sesuai IG)</option>
                                     <option value="last_30d">30 Hari Terakhir</option>
                                     <option value="last_90d">90 Hari Terakhir</option>
                                     <option value="this_month">Bulan Ini</option>
+                                    <option value="maximum">Sepanjang Waktu</option>
                                 </select>
                                 <Button
                                     type="button"
@@ -1588,101 +1697,288 @@ export default function ReportIndex({
                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
                             <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
                                 <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    <span>Total Biaya (Spend)</span>
+                                    <span>Total Biaya {useIgScope ? '(IG)' : '(Spend)'}</span>
                                     <DollarSign className="w-4 h-4 text-emerald-500" />
                                 </div>
                                 <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
-                                    {igAccount?.adsData?.active_account?.currency || 'IDR'}{' '}
-                                    {(igAccount?.adsData?.summary?.total_spend ?? 0).toLocaleString('id-ID', { minimumFractionDigits: 2 })}
+                                    {formatMoney(activeSpend)}
                                 </div>
                                 <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
-                                    Periode: {igAccount?.adsData?.summary?.date_preset || '30 Hari Terakhir'}
+                                    Periode: {datePresetLabels[summary?.date_preset || adsDatePreset] || summary?.date_preset || '30 Hari Terakhir'}
                                 </div>
                             </div>
 
                             <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
                                 <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    <span>Total Impresi & Reach</span>
+                                    <span>Impresi &amp; Jangkauan {useIgScope ? '(IG)' : ''}</span>
                                     <Eye className="w-4 h-4 text-purple-500" />
                                 </div>
                                 <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
-                                    {(igAccount?.adsData?.summary?.total_impressions ?? 0).toLocaleString('id-ID')}
+                                    {activeImpressions.toLocaleString('id-ID')}
                                 </div>
                                 <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
-                                    Jangkauan: {(igAccount?.adsData?.summary?.total_reach ?? 0).toLocaleString('id-ID')} audiens
+                                    Jangkauan: {activeReach.toLocaleString('id-ID')} akun
                                 </div>
                             </div>
 
                             <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
                                 <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    <span>Total Klik & CTR</span>
+                                    <span>Total Klik &amp; CTR</span>
                                     <MousePointerClick className="w-4 h-4 text-blue-500" />
                                 </div>
                                 <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
-                                    {(igAccount?.adsData?.summary?.total_clicks ?? 0).toLocaleString('id-ID')}
+                                    {activeClicks.toLocaleString('id-ID')}
                                 </div>
                                 <div className="text-[11px] font-semibold text-blue-600 dark:text-blue-400">
-                                    Rata-rata CTR: {igAccount?.adsData?.summary?.avg_ctr ?? 0}%
+                                    CTR: {activeCtr}% {activeLinkClicks > 0 ? `• Link Clicks: ${activeLinkClicks.toLocaleString('id-ID')}` : ''}
                                 </div>
                             </div>
 
                             <div className="p-4 rounded-xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-1">
                                 <div className="flex items-center justify-between text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    <span>Efisiensi CPC & CPM</span>
+                                    <span>Efisiensi CPC &amp; CPM</span>
                                     <TrendingUp className="w-4 h-4 text-amber-500" />
                                 </div>
                                 <div className="text-xl sm:text-2xl font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
-                                    CPC {(igAccount?.adsData?.summary?.avg_cpc ?? 0).toLocaleString('id-ID')}
+                                    CPC {activeCpc.toLocaleString('id-ID')}
                                 </div>
                                 <div className="text-[11px] text-[var(--md-sys-color-on-surface-variant)]">
-                                    CPM: {(igAccount?.adsData?.summary?.avg_cpm ?? 0).toLocaleString('id-ID')}
+                                    CPM: {activeCpm.toLocaleString('id-ID')}
+                                    {(summary?.ig_profile_visits ?? 0) > 0 && ` • Kunj. Profil: ${summary?.ig_profile_visits?.toLocaleString('id-ID')}`}
                                 </div>
                             </div>
                         </div>
 
-                        {/* Organic vs Paid Comparison */}
+                        {/* Instagram Ads Engagement & Platform Breakdown */}
+                        {(hasIgBreakdown || (summary?.ig_engagements ?? 0) > 0) && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {platformBreakdown.length > 0 && (
+                                    <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-2.5">
+                                        <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
+                                            Distribusi Penempatan Iklan (Publisher Platform)
+                                        </h4>
+                                        <div className="space-y-2">
+                                            {platformBreakdown.map((pb) => (
+                                                <div key={pb.platform} className="flex items-center justify-between text-xs p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)]">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-2 h-2 rounded-full ${pb.platform === 'instagram' ? 'bg-pink-500' : pb.platform === 'facebook' ? 'bg-blue-500' : 'bg-zinc-400'}`} />
+                                                        <span className="font-bold capitalize text-[var(--md-sys-color-on-surface)]">{pb.platform.replace('_', ' ')}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-3 sparc-code-id text-[11px]">
+                                                        <span className="text-[var(--md-sys-color-on-surface-variant)]">{pb.reach.toLocaleString('id-ID')} reach</span>
+                                                        <span className="text-[var(--md-sys-color-on-surface-variant)]">{pb.clicks.toLocaleString('id-ID')} klik</span>
+                                                        <span className="font-bold text-[var(--md-sys-color-on-surface)]">{formatMoney(pb.spend)}</span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="p-4 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-2.5">
+                                    <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)]">
+                                        Aksi &amp; Interaksi Iklan di Instagram
+                                    </h4>
+                                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                                        {[
+                                            { label: 'Interaksi', val: summary?.ig_engagements ?? 0 },
+                                            { label: 'Suka', val: summary?.ig_likes ?? 0 },
+                                            { label: 'Komentar', val: summary?.ig_comments ?? 0 },
+                                            { label: 'Simpan', val: summary?.ig_saves ?? 0 },
+                                            { label: 'Bagikan', val: summary?.ig_shares ?? 0 },
+                                            { label: 'Kunj. Profil', val: summary?.ig_profile_visits ?? 0 },
+                                        ].map((metric) => (
+                                            <div key={metric.label} className="p-2 rounded-xl bg-[var(--md-sys-color-surface-container-low)]">
+                                                <div className="text-sm font-extrabold sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                                    {metric.val.toLocaleString('id-ID')}
+                                                </div>
+                                                <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)]">{metric.label}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Organic vs Paid Comparison (Accurate per Meta IG Graph API definition: reach_28d includes ads) */}
                         <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] space-y-3">
-                            <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2">
-                                <PieChart className="w-4 h-4 text-[var(--md-sys-color-primary)]" />
-                                Perbandingan Jangkauan Publikasi (Organik vs Iklan Berbayar)
-                            </h4>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--md-sys-color-on-surface-variant)] flex items-center gap-2">
+                                    <PieChart className="w-4 h-4 text-[var(--md-sys-color-primary)]" />
+                                    Perbandingan Jangkauan Instagram (Estimasi Organik vs Iklan Berbayar)
+                                </h4>
+                                <span className="text-[11px] text-[var(--md-sys-color-on-surface-muted)]">
+                                    Total Akun IG 28h (Organik + Iklan): <strong className="sparc-code-id text-[var(--md-sys-color-on-surface)]">{totalIgAccountReach.toLocaleString('id-ID')}</strong>
+                                </span>
+                            </div>
                             <div className="space-y-2">
-                                <div className="flex items-center justify-between text-xs font-semibold">
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold">
                                     <span className="flex items-center gap-2 text-purple-600 dark:text-purple-400">
                                         <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-                                        Organik (Instagram Graph API): {((igAccount?.accountInsights?.reach_28d ?? 0)).toLocaleString('id-ID')} Reach
+                                        Estimasi Organik IG: {estimatedOrganicReach.toLocaleString('id-ID')} Reach ({organicReachPct}%)
                                     </span>
                                     <span className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
                                         <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-                                        Iklan (Meta Marketing API): {(igAccount?.adsData?.summary?.total_reach ?? 0).toLocaleString('id-ID')} Reach
+                                        Iklan Berbayar IG (Meta Ads): {paidIgReach.toLocaleString('id-ID')} Reach ({paidReachPct}%)
                                     </span>
                                 </div>
                                 <div className="w-full h-3 rounded-full bg-[var(--md-sys-color-surface-container-highest)] overflow-hidden flex">
                                     <div
                                         className="h-full bg-purple-500 transition-all"
-                                        style={{
-                                            width: `${Math.round(
-                                                ((igAccount?.accountInsights?.reach_28d ?? 0) /
-                                                    Math.max(1, (igAccount?.accountInsights?.reach_28d ?? 0) + (igAccount?.adsData?.summary?.total_reach ?? 0))) *
-                                                    100
-                                            )}%`,
-                                        }}
-                                        title="Porsi Organik"
+                                        style={{ width: `${organicReachPct}%` }}
+                                        title="Porsi Organik IG"
                                     />
                                     <div
                                         className="h-full bg-blue-500 transition-all"
-                                        style={{
-                                            width: `${Math.round(
-                                                ((igAccount?.adsData?.summary?.total_reach ?? 0) /
-                                                    Math.max(1, (igAccount?.accountInsights?.reach_28d ?? 0) + (igAccount?.adsData?.summary?.total_reach ?? 0))) *
-                                                    100
-                                            )}%`,
-                                        }}
-                                        title="Porsi Iklan Berbayar"
+                                        style={{ width: `${paidReachPct}%` }}
+                                        title="Porsi Iklan Berbayar IG"
                                     />
                                 </div>
                             </div>
                         </div>
+
+                        {/* Boosted IG Posts & Instagram Ad Creatives */}
+                        {(igAdsList.length > 0 || igBoostMediaList.length > 0) && (
+                            <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
+                                <div className="p-4 border-b border-[var(--md-sys-color-outline-variant)] flex items-center justify-between">
+                                    <div>
+                                        <h4 className="font-bold text-sm text-[var(--md-sys-color-on-surface)]">
+                                            Postingan IG yang Dipromosikan &amp; Iklan Instagram
+                                        </h4>
+                                        <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                            Materi iklan &amp; boosted post dari Instagram (`source_instagram_media_id` / `effective_instagram_media_id`)
+                                        </p>
+                                    </div>
+                                    <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                        {igAdsList.length > 0 ? igAdsList.length : igBoostMediaList.length} Iklan IG
+                                    </span>
+                                </div>
+
+                                {igAdsList.length > 0 ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-xs border-collapse">
+                                            <thead>
+                                                <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
+                                                    <th className="py-3 px-4">Materi Iklan / Postingan IG</th>
+                                                    <th className="py-3 px-3">Status Efektif</th>
+                                                    <th className="py-3 px-3 text-right">Biaya (Spend)</th>
+                                                    <th className="py-3 px-3 text-right">Reach</th>
+                                                    <th className="py-3 px-3 text-right">Impresi</th>
+                                                    <th className="py-3 px-3 text-right">Klik / CTR</th>
+                                                    <th className="py-3 px-3 text-right">Aksi IG</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
+                                                {igAdsList.map((ad) => (
+                                                    <tr key={ad.id} className="notion-row">
+                                                        <td className="py-3 px-4">
+                                                            <div className="flex items-center gap-3">
+                                                                {ad.thumbnail_url ? (
+                                                                    <img
+                                                                        src={ad.thumbnail_url}
+                                                                        alt={ad.name}
+                                                                        className="w-10 h-10 rounded-lg object-cover border border-[var(--md-sys-color-outline-variant)] shrink-0"
+                                                                    />
+                                                                ) : (
+                                                                    <div className="w-10 h-10 rounded-lg bg-[var(--md-sys-color-surface-container-high)] flex items-center justify-center shrink-0">
+                                                                        <Megaphone className="w-4 h-4 text-[var(--md-sys-color-on-surface-muted)]" />
+                                                                    </div>
+                                                                )}
+                                                                <div className="min-w-0 space-y-0.5">
+                                                                    <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
+                                                                        {ad.content_title || ad.name}
+                                                                    </div>
+                                                                    <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                                        {ad.is_boosted_post && (
+                                                                            <span className="px-1.5 py-0.5 rounded bg-pink-500/10 text-pink-700 dark:text-pink-300 font-semibold">
+                                                                                Boosted IG Post
+                                                                            </span>
+                                                                        )}
+                                                                        {ad.content_code && (
+                                                                            <span className="sparc-code-id px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-700 dark:text-purple-300 font-bold">
+                                                                                {ad.content_code}
+                                                                            </span>
+                                                                        )}
+                                                                        {ad.campaign_name && <span className="truncate max-w-[200px]">{ad.campaign_name}</span>}
+                                                                        {ad.instagram_permalink_url && (
+                                                                            <a
+                                                                                href={ad.instagram_permalink_url}
+                                                                                target="_blank"
+                                                                                rel="noreferrer"
+                                                                                className="inline-flex items-center gap-0.5 text-blue-600 dark:text-blue-400 hover:underline font-semibold"
+                                                                            >
+                                                                                Lihat di IG <ExternalLink className="w-2.5 h-2.5" />
+                                                                            </a>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 px-3">
+                                                            <span
+                                                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                                                    (ad.effective_status || ad.status) === 'ACTIVE'
+                                                                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
+                                                                        : 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30'
+                                                                }`}
+                                                            >
+                                                                {ad.effective_status || ad.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            {formatMoney(ad.metrics.spend)}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                                            {ad.metrics.reach.toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
+                                                            {ad.metrics.impressions.toLocaleString('id-ID')}
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right sparc-code-id">
+                                                            <div className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                                                {ad.metrics.clicks.toLocaleString('id-ID')}
+                                                            </div>
+                                                            <div className="text-[10px] text-blue-600 dark:text-blue-400">{ad.metrics.ctr}%</div>
+                                                        </td>
+                                                        <td className="py-3 px-3 text-right text-[11px] text-[var(--md-sys-color-on-surface-variant)] sparc-code-id">
+                                                            {(ad.metrics.post_engagement ?? 0) > 0
+                                                                ? `${ad.metrics.post_engagement?.toLocaleString('id-ID')} inter.`
+                                                                : '—'}
+                                                            {(ad.metrics.saves ?? 0) > 0 && ` • ${ad.metrics.saves} save`}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        {igBoostMediaList.map((bm) => (
+                                            <div key={bm.media_id} className="p-3 rounded-xl bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] flex items-center gap-3 text-xs">
+                                                {bm.thumbnail_url && (
+                                                    <img src={bm.thumbnail_url} alt={bm.media_id} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                                                )}
+                                                <div className="min-w-0 flex-1 space-y-1">
+                                                    <div className="font-bold text-[var(--md-sys-color-on-surface)] line-clamp-1">
+                                                        {bm.caption || `Media IG #${bm.media_id}`}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold">
+                                                            Aktif Dipromosikan di IG ({bm.boost_ads_list.length})
+                                                        </span>
+                                                        {bm.permalink && (
+                                                            <a href={bm.permalink} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-0.5">
+                                                                Buka IG <ExternalLink className="w-2.5 h-2.5" />
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {/* Campaigns Table */}
                         <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] rounded-2xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] overflow-hidden">
@@ -1692,11 +1988,11 @@ export default function ReportIndex({
                                         Daftar Kampanye Iklan Meta
                                     </h4>
                                     <p className="text-xs text-[var(--md-sys-color-on-surface-variant)]">
-                                        Data kampanye yang berjalan di Meta Ads Manager
+                                        Data kampanye &amp; performa dari Meta Ads Manager ({useIgScope ? 'Penempatan Instagram' : 'Semua Penempatan'})
                                     </p>
                                 </div>
                                 <span className="text-xs sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
-                                    {igAccount?.adsData?.campaigns?.length ?? 0} Kampanye Terdata
+                                    {adsData?.campaigns?.length ?? 0} Kampanye Terdata
                                 </span>
                             </div>
 
@@ -1706,54 +2002,101 @@ export default function ReportIndex({
                                         <tr className="border-b border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)] text-[11px] font-bold text-[var(--md-sys-color-on-surface-variant)] uppercase tracking-wider">
                                             <th className="py-3 px-4">Nama Kampanye</th>
                                             <th className="py-3 px-3">Status</th>
-                                            <th className="py-3 px-3">Tujuan (Objective)</th>
+                                            <th className="py-3 px-3">Tujuan</th>
                                             <th className="py-3 px-3 text-right">Anggaran</th>
-                                            <th className="py-3 px-3 text-right">Sisa Anggaran</th>
+                                            <th className="py-3 px-3 text-right">Biaya (Spend)</th>
+                                            <th className="py-3 px-3 text-right">Reach / Impresi</th>
+                                            <th className="py-3 px-3 text-right">Klik / CTR</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--md-sys-color-outline-variant)]/60">
-                                        {(igAccount?.adsData?.campaigns?.length ?? 0) === 0 ? (
+                                        {(adsData?.campaigns?.length ?? 0) === 0 ? (
                                             <tr>
-                                                <td colSpan={5} className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                                    Belum ada data kampanye. Klik tombol "Tarik Data Iklan Meta" di atas untuk menyinkronkan kampanye aktif dari Ads Manager.
+                                                <td colSpan={7} className="py-8 text-center text-xs text-[var(--md-sys-color-on-surface-muted)]">
+                                                    Belum ada data kampanye. Klik tombol &quot;Tarik Data Iklan Meta&quot; di atas untuk menyinkronkan kampanye aktif dari Ads Manager.
                                                 </td>
                                             </tr>
                                         ) : (
-                                            igAccount?.adsData?.campaigns?.map((c) => (
+                                            adsData?.campaigns?.map((c) => {
+                                                const effStatus = c.effective_status || c.status;
+                                                const cMetrics = useIgScope && c.ig_metrics ? c.ig_metrics : c.metrics;
+                                                const dailyAmt = c.daily_budget_amount ?? (c.daily_budget ? Number(c.daily_budget) / currencyOffset : null);
+                                                const lifeAmt = c.lifetime_budget_amount ?? (c.lifetime_budget ? Number(c.lifetime_budget) / currencyOffset : null);
+                                                const remAmt = c.budget_remaining_amount ?? (c.budget_remaining ? Number(c.budget_remaining) / currencyOffset : null);
+                                                return (
                                                 <tr key={c.id} className="notion-row">
                                                     <td className="py-3 px-4 font-bold text-[var(--md-sys-color-on-surface)]">
                                                         <div className="line-clamp-1">{c.name}</div>
-                                                        <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)] sparc-code-id">ID: {c.id}</div>
+                                                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--md-sys-color-on-surface-muted)] sparc-code-id">
+                                                            <span>ID: {c.id}</span>
+                                                            {c.targets_instagram && (
+                                                                <span className="px-1.5 py-0.2 rounded bg-pink-500/10 text-pink-700 dark:text-pink-300 font-sans font-semibold">
+                                                                    IG
+                                                                </span>
+                                                            )}
+                                                            {(c.ads_count ?? 0) > 0 && (
+                                                                <span className="font-sans">• {c.ads_count} iklan</span>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                     <td className="py-3 px-3">
                                                         <span
                                                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                                                                c.status === 'ACTIVE'
+                                                                effStatus === 'ACTIVE'
                                                                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
                                                                     : 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30'
                                                             }`}
                                                         >
-                                                            {c.status}
+                                                            {effStatus}
                                                         </span>
                                                     </td>
                                                     <td className="py-3 px-3 text-[var(--md-sys-color-on-surface-variant)] font-medium">
                                                         {c.objective || 'OUTCOME_ENGAGEMENT'}
                                                     </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
-                                                        {c.daily_budget ? `Harian: ${Number(c.daily_budget).toLocaleString('id-ID')}` : c.lifetime_budget ? `Total: ${Number(c.lifetime_budget).toLocaleString('id-ID')}` : '—'}
+                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface)]">
+                                                        <div className="font-bold">
+                                                            {dailyAmt !== null
+                                                                ? `Harian: ${formatMoney(dailyAmt)}`
+                                                                : lifeAmt !== null
+                                                                  ? `Total: ${formatMoney(lifeAmt)}`
+                                                                  : '—'}
+                                                        </div>
+                                                        {remAmt !== null && (
+                                                            <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                                Sisa: {formatMoney(remAmt)}
+                                                            </div>
+                                                        )}
                                                     </td>
-                                                    <td className="py-3 px-3 text-right sparc-code-id text-[var(--md-sys-color-on-surface-variant)]">
-                                                        {c.budget_remaining ? Number(c.budget_remaining).toLocaleString('id-ID') : '—'}
+                                                    <td className="py-3 px-3 text-right sparc-code-id font-bold text-[var(--md-sys-color-on-surface)]">
+                                                        {cMetrics ? formatMoney(cMetrics.spend) : '—'}
+                                                    </td>
+                                                    <td className="py-3 px-3 text-right sparc-code-id">
+                                                        <div className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            {cMetrics ? cMetrics.reach.toLocaleString('id-ID') : '—'}
+                                                        </div>
+                                                        <div className="text-[10px] text-[var(--md-sys-color-on-surface-muted)]">
+                                                            {cMetrics ? `${cMetrics.impressions.toLocaleString('id-ID')} imp.` : ''}
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-3 px-3 text-right sparc-code-id">
+                                                        <div className="font-bold text-[var(--md-sys-color-on-surface)]">
+                                                            {cMetrics ? cMetrics.clicks.toLocaleString('id-ID') : '—'}
+                                                        </div>
+                                                        <div className="text-[10px] text-blue-600 dark:text-blue-400">
+                                                            {cMetrics ? `${cMetrics.ctr}%` : ''}
+                                                        </div>
                                                     </td>
                                                 </tr>
-                                            ))
+                                                );
+                                            })
                                         )}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
-                )}
+                    );
+                })()}
 
                 {/* =========================================================
                     LAYER 5: CREATOR & BUSINESS AUDIENCE DEMOGRAPHICS

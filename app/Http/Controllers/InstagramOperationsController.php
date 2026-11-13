@@ -1189,7 +1189,9 @@ class InstagramOperationsController extends Controller
         }
 
         $targetAdAccountId = $request->input('ad_account_id');
-        $datePreset = (string) $request->input('date_preset', 'last_30d');
+        $allowedPresets = ['today', 'yesterday', 'last_7d', 'last_14d', 'last_28d', 'last_30d', 'last_90d', 'this_month', 'last_month', 'maximum'];
+        $rawPreset = trim((string) $request->input('date_preset', 'last_30d'));
+        $datePreset = in_array($rawPreset, $allowedPresets, true) ? $rawPreset : 'last_30d';
         $res = $service->syncAdsPerformance($targetAdAccountId ? (string) $targetAdAccountId : null, $datePreset);
 
         if (! ($res['success'] ?? false)) {
@@ -1217,16 +1219,25 @@ class InstagramOperationsController extends Controller
             return back();
         }
 
+        $hasIgBreakdown = ! empty($summary['has_ig_breakdown']);
+        $displayImpressions = $hasIgBreakdown
+            ? (float) ($summary['ig_impressions'] ?? 0)
+            : (float) ($summary['total_impressions'] ?? 0);
+        $displaySpend = $hasIgBreakdown
+            ? (float) ($summary['ig_spend'] ?? 0)
+            : (float) ($summary['total_spend'] ?? 0);
+
         WorkspaceV3Controller::flashToast(
             $request,
             'success',
             'Data Iklan Berhasil Disinkronkan!',
             sprintf(
-                'Performa %s (%d kampanye, %s tayangan, spend %s).',
+                'Performa %s (%d kampanye, %d iklan IG, %s tayangan, spend %s).',
                 $res['ads_data']['active_account']['name'] ?? 'Akun Iklan',
                 count($res['ads_data']['campaigns'] ?? []),
-                number_format((float) ($summary['total_impressions'] ?? 0)),
-                number_format((float) ($summary['total_spend'] ?? 0), 2)
+                count($res['ads_data']['ig_ads'] ?? []),
+                number_format($displayImpressions),
+                number_format($displaySpend, 2)
             )
         );
 

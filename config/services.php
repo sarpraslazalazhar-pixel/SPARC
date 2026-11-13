@@ -44,7 +44,7 @@ return [
         'graph_version' => env('META_GRAPH_VERSION', 'v21.0'),
         'oauth_scopes' => env(
             'META_OAUTH_SCOPES',
-            'instagram_basic,pages_show_list,pages_read_engagement,instagram_manage_insights,instagram_content_publish,instagram_manage_comments'
+            'instagram_basic,pages_show_list,pages_read_engagement,instagram_manage_insights,instagram_content_publish,instagram_manage_comments,ads_read'
         ),
     ],
 

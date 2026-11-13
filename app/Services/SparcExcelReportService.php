@@ -837,7 +837,7 @@ class SparcExcelReportService
     protected function buildMetaAdsSheet(array $ig, string $today): array
     {
         $rows = [];
-        $merges = ['A1:G1', 'A2:G2', 'A4:G4'];
+        $merges = ['A1:K1', 'A2:K2', 'A4:K4'];
 
         $adsData = is_array($ig['adsData'] ?? null) ? $ig['adsData'] : [];
         $activeAcc = is_array($adsData['active_account'] ?? null) ? $adsData['active_account'] : [];
@@ -847,16 +847,31 @@ class SparcExcelReportService
         $accName = (string) ($activeAcc['name'] ?? 'Semua Akun Iklan');
         $accId = (string) ($activeAcc['account_id'] ?? 'act_default');
         $currency = (string) ($activeAcc['currency'] ?? 'IDR');
+        $hasIgBreakdown = ! empty($summary['has_ig_breakdown']);
+        $spendVal = $hasIgBreakdown ? (float) ($summary['ig_spend'] ?? 0) : (float) ($summary['total_spend'] ?? 0);
+        $impressionsVal = $hasIgBreakdown ? (int) ($summary['ig_impressions'] ?? 0) : (int) ($summary['total_impressions'] ?? 0);
+        $reachVal = $hasIgBreakdown ? (int) ($summary['ig_reach'] ?? 0) : (int) ($summary['total_reach'] ?? 0);
+        $clicksVal = $hasIgBreakdown ? (int) ($summary['ig_clicks'] ?? 0) : (int) ($summary['total_clicks'] ?? 0);
+        $ctrVal = $hasIgBreakdown ? (float) ($summary['ig_ctr'] ?? 0) : (float) ($summary['avg_ctr'] ?? 0);
+        $cpcVal = $hasIgBreakdown ? (float) ($summary['ig_cpc'] ?? 0) : (float) ($summary['avg_cpc'] ?? 0);
+        $cpmVal = $hasIgBreakdown ? (float) ($summary['ig_cpm'] ?? 0) : (float) ($summary['avg_cpm'] ?? 0);
 
         $rows[] = [
             'height' => 30,
-            'cells' => $this->mergedRowCells(7, 'SPARC HUMAS — MONITORING KAMPANYE & IKLAN BERBAYAR (META ADS)', 1),
+            'cells' => $this->mergedRowCells(11, 'SPARC HUMAS — MONITORING KAMPANYE & IKLAN BERBAYAR (META ADS / INSTAGRAM)', 1),
         ];
         $rows[] = [
             'height' => 20,
             'cells' => $this->mergedRowCells(
-                7,
-                "Akun Iklan: {$accName} (ID: {$accId})  •  Mata Uang: {$currency}  •  Tanggal Laporan: {$today}",
+                11,
+                sprintf(
+                    'Akun Iklan: %s (ID: %s)  •  Cakupan: %s  •  Mata Uang: %s  •  Tanggal: %s',
+                    $accName,
+                    $accId,
+                    $hasIgBreakdown ? 'Penempatan Instagram' : 'Semua Penempatan Meta',
+                    $currency,
+                    $today
+                ),
                 2
             ),
         ];
@@ -864,7 +879,7 @@ class SparcExcelReportService
 
         $rows[] = [
             'height' => 22,
-            'cells' => $this->mergedRowCells(7, 'RINGKASAN KINERJA IKLAN META (30 HARI TERAKHIR)', 3),
+            'cells' => $this->mergedRowCells(11, 'RINGKASAN KINERJA IKLAN INSTAGRAM (META ADS)', 3),
         ];
         $rows[] = [
             'height' => 24,
@@ -876,28 +891,36 @@ class SparcExcelReportService
                 ['value' => 'Rata-rata CTR (%)', 'style' => 6],
                 ['value' => 'Rata-rata CPC', 'style' => 6],
                 ['value' => 'Rata-rata CPM', 'style' => 6],
+                ['value' => 'Interaksi Iklan', 'style' => 6],
+                ['value' => 'Simpan (Saves)', 'style' => 6],
+                ['value' => 'Kunjungan Profil', 'style' => 6],
+                ['value' => 'Postingan Boosted', 'style' => 6],
             ],
         ];
         $rows[] = [
             'height' => 22,
             'cells' => [
-                ['value' => (int) round((float) ($summary['total_spend'] ?? 0)), 'type' => 'n', 'style' => 11],
-                ['value' => (int) ($summary['total_impressions'] ?? 0), 'type' => 'n', 'style' => 11],
-                ['value' => (int) ($summary['total_reach'] ?? 0), 'type' => 'n', 'style' => 11],
-                ['value' => (int) ($summary['total_clicks'] ?? 0), 'type' => 'n', 'style' => 11],
-                ['value' => number_format((float) ($summary['avg_ctr'] ?? 0), 2, ',', '.').'%', 'style' => 9],
-                ['value' => (int) round((float) ($summary['avg_cpc'] ?? 0)), 'type' => 'n', 'style' => 11],
-                ['value' => (int) round((float) ($summary['avg_cpm'] ?? 0)), 'type' => 'n', 'style' => 11],
+                ['value' => (int) round($spendVal), 'type' => 'n', 'style' => 11],
+                ['value' => $impressionsVal, 'type' => 'n', 'style' => 11],
+                ['value' => $reachVal, 'type' => 'n', 'style' => 11],
+                ['value' => $clicksVal, 'type' => 'n', 'style' => 11],
+                ['value' => number_format($ctrVal, 2, ',', '.').'%', 'style' => 9],
+                ['value' => (int) round($cpcVal), 'type' => 'n', 'style' => 11],
+                ['value' => (int) round($cpmVal), 'type' => 'n', 'style' => 11],
+                ['value' => (int) ($summary['ig_engagements'] ?? 0), 'type' => 'n', 'style' => 11],
+                ['value' => (int) ($summary['ig_saves'] ?? 0), 'type' => 'n', 'style' => 11],
+                ['value' => (int) ($summary['ig_profile_visits'] ?? 0), 'type' => 'n', 'style' => 11],
+                ['value' => (int) ($summary['boosted_posts_count'] ?? 0), 'type' => 'n', 'style' => 11],
             ],
         ];
 
         $rows[] = ['height' => 12, 'cells' => []];
 
         $campHeaderRow = count($rows) + 1;
-        $merges[] = "A{$campHeaderRow}:G{$campHeaderRow}";
+        $merges[] = "A{$campHeaderRow}:K{$campHeaderRow}";
         $rows[] = [
             'height' => 22,
-            'cells' => $this->mergedRowCells(7, 'DAFTAR KAMPANYE IKLAN META ADS MANAGER', 3),
+            'cells' => $this->mergedRowCells(11, 'DAFTAR KAMPANYE IKLAN META ADS MANAGER', 3),
         ];
         $rows[] = [
             'height' => 24,
@@ -905,27 +928,35 @@ class SparcExcelReportService
                 ['value' => 'No', 'style' => 5],
                 ['value' => 'ID Kampanye', 'style' => 5],
                 ['value' => 'Nama Kampanye', 'style' => 4],
-                ['value' => 'Status', 'style' => 5],
+                ['value' => 'Status Efektif', 'style' => 5],
                 ['value' => 'Tujuan (Objective)', 'style' => 4],
                 ['value' => 'Anggaran Kampanye', 'style' => 6],
                 ['value' => 'Sisa Anggaran', 'style' => 6],
+                ['value' => "Spend ({$currency})", 'style' => 6],
+                ['value' => 'Reach', 'style' => 6],
+                ['value' => 'Impressions', 'style' => 6],
+                ['value' => 'Clicks', 'style' => 6],
             ],
         ];
 
         if (count($campaigns) === 0) {
             $emptyIdx = count($rows) + 1;
-            $merges[] = "A{$emptyIdx}:G{$emptyIdx}";
+            $merges[] = "A{$emptyIdx}:K{$emptyIdx}";
             $rows[] = [
                 'height' => 20,
-                'cells' => $this->mergedRowCells(7, 'Belum ada data kampanye iklan Meta yang disinkronkan.', 13),
+                'cells' => $this->mergedRowCells(11, 'Belum ada data kampanye iklan Meta yang disinkronkan.', 13),
             ];
         } else {
             foreach ($campaigns as $idx => $c) {
                 $isEven = $idx % 2 === 1;
-                $budget = ! empty($c['daily_budget'])
-                    ? (int) $c['daily_budget']
-                    : (! empty($c['lifetime_budget']) ? (int) $c['lifetime_budget'] : null);
-                $remaining = ! empty($c['budget_remaining']) ? (int) $c['budget_remaining'] : null;
+                $budget = $c['daily_budget_amount'] ?? ($c['lifetime_budget_amount'] ?? null);
+                if ($budget === null) {
+                    $budget = ! empty($c['daily_budget'])
+                        ? InstagramGraphService::normalizeAdMoney($c['daily_budget'], $currency)
+                        : (! empty($c['lifetime_budget']) ? InstagramGraphService::normalizeAdMoney($c['lifetime_budget'], $currency) : null);
+                }
+                $remaining = $c['budget_remaining_amount'] ?? (! empty($c['budget_remaining']) ? InstagramGraphService::normalizeAdMoney($c['budget_remaining'], $currency) : null);
+                $cMetrics = is_array($c['ig_metrics'] ?? null) ? $c['ig_metrics'] : (is_array($c['metrics'] ?? null) ? $c['metrics'] : []);
 
                 $rows[] = [
                     'height' => 20,
@@ -933,10 +964,14 @@ class SparcExcelReportService
                         ['value' => $idx + 1, 'type' => 'n', 'style' => $isEven ? 10 : 9],
                         ['value' => (string) ($c['id'] ?? '—'), 'style' => $isEven ? 10 : 9],
                         ['value' => (string) ($c['name'] ?? '—'), 'style' => $isEven ? 8 : 7],
-                        ['value' => strtoupper((string) ($c['status'] ?? '—')), 'style' => $isEven ? 10 : 9],
+                        ['value' => strtoupper((string) ($c['effective_status'] ?? ($c['status'] ?? '—'))), 'style' => $isEven ? 10 : 9],
                         ['value' => (string) ($c['objective'] ?? 'OUTCOME_ENGAGEMENT'), 'style' => $isEven ? 8 : 7],
-                        $this->nullableMetricCell($budget, $isEven),
-                        $this->nullableMetricCell($remaining, $isEven),
+                        $this->nullableMetricCell($budget !== null ? (int) round((float) $budget) : null, $isEven),
+                        $this->nullableMetricCell($remaining !== null ? (int) round((float) $remaining) : null, $isEven),
+                        $this->nullableMetricCell(isset($cMetrics['spend']) ? (int) round((float) $cMetrics['spend']) : null, $isEven),
+                        $this->nullableMetricCell(isset($cMetrics['reach']) ? (int) $cMetrics['reach'] : null, $isEven),
+                        $this->nullableMetricCell(isset($cMetrics['impressions']) ? (int) $cMetrics['impressions'] : null, $isEven),
+                        $this->nullableMetricCell(isset($cMetrics['clicks']) ? (int) $cMetrics['clicks'] : null, $isEven),
                     ],
                 ];
             }
@@ -944,7 +979,7 @@ class SparcExcelReportService
 
         return [
             'name' => '3. Monitoring Iklan',
-            'widths' => [18, 20, 38, 16, 24, 20, 20],
+            'widths' => [18, 20, 38, 18, 24, 20, 20, 18, 16, 16, 14],
             'rows' => $rows,
             'merges' => $merges,
         ];
