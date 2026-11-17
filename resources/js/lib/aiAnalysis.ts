@@ -97,7 +97,7 @@ export async function fetchAnalysis(
 /** Cached period digest, or a fresh one when `refresh` is set. */
 export async function fetchDigest(
     refresh = false
-): Promise<{ analysis: AiAnalysisEnvelope<AiDigestResult>['analysis']; error?: string }> {
+): Promise<{ analysis: AiAnalysisEnvelope<AiDigestResult>['analysis']; configured: boolean; error?: string }> {
     const response = await fetch(`/ai/digest${refresh ? '?refresh=1' : ''}`, {
         headers: jsonHeaders(),
         credentials: 'same-origin',
@@ -105,12 +105,13 @@ export async function fetchDigest(
 
     const payload = await parseJsonSafe<{
         analysis: AiAnalysisEnvelope<AiDigestResult>['analysis'];
+        configured?: boolean;
         message?: string;
     }>(response);
 
     if (!response.ok || !payload) {
-        return { analysis: null, error: payload?.message ?? 'Ringkasan strategi belum tersedia.' };
+        return { analysis: null, configured: false, error: payload?.message ?? 'Ringkasan strategi belum tersedia.' };
     }
 
-    return { analysis: payload.analysis };
+    return { analysis: payload.analysis, configured: payload.configured ?? true };
 }

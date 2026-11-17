@@ -10,19 +10,19 @@ import type { AiDigestResult } from '@/types/aiAnalysis';
  */
 export function DashboardAiDigestWidget() {
     const [digest, setDigest] = useState<AiDigestResult | null>(null);
-    const [configured, setConfigured] = useState(false);
+    const [configured, setConfigured] = useState(true);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
 
-        void fetchDigest().then(({ analysis }) => {
+        void fetchDigest().then(({ analysis, configured: isConfigured }) => {
             if (cancelled) {
                 return;
             }
             setDigest((analysis?.result as AiDigestResult | null) ?? null);
-            setConfigured(analysis !== null);
+            setConfigured(isConfigured);
         });
 
         return () => {
@@ -42,9 +42,9 @@ export function DashboardAiDigestWidget() {
         }
 
         setDigest((analysis?.result as AiDigestResult | null) ?? null);
-        setConfigured(true);
     };
 
+    // Only hide when the server explicitly reports missing AI credentials.
     if (!digest && !configured) {
         return null;
     }
