@@ -59,7 +59,7 @@ export interface WorkspaceUser {
     id: string;
     name: string;
     email: string;
-    role: 'admin' | 'manager' | 'planner' | 'creator' | 'publisher' | 'viewer';
+    role: 'admin' | 'manager' | 'planner' | 'creator' | 'viewer';
     roleLabel: string;
     avatar: string;
 }
@@ -232,12 +232,12 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
     const { showToast, error: toastError, success: toastSuccess } = useToast();
 
     const currentUser: WorkspaceUser = props.auth?.user ?? {
-        id: 'u-1',
-        name: 'Aldwin NV',
-        email: 'aldwin@humas.instansi.go.id',
-        role: 'admin',
-        roleLabel: 'Administrator',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
+        id: '0',
+        name: 'Tim HUMAS',
+        email: '',
+        role: 'viewer',
+        roleLabel: 'Pemantau Eksekutif',
+        avatar: 'https://ui-avatars.com/api/?name=Tim+HUMAS&background=1546D8&color=fff&size=128&bold=true',
     };
 
     const can: WorkspacePermissions = props.auth?.can ?? {

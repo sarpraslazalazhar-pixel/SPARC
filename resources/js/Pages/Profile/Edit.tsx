@@ -188,7 +188,7 @@ export default function ProfileEdit({ user }: ProfileEditProps) {
                                 value={data.name}
                                 onChange={(e) => setData('name', e.target.value)}
                                 error={errors.name}
-                                placeholder="Contoh: Aldwin NV"
+                                placeholder="Contoh: Nama Lengkap"
                             />
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -199,7 +199,7 @@ export default function ProfileEdit({ user }: ProfileEditProps) {
                                     value={data.email}
                                     onChange={(e) => setData('email', e.target.value)}
                                     error={errors.email}
-                                    placeholder="nama@humas.instansi.go.id"
+                                    placeholder="nama@alazharpeduli.or.id"
                                 />
 
                                 <Input

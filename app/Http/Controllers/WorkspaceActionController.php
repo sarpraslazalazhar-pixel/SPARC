@@ -47,7 +47,7 @@ class WorkspaceActionController extends Controller
             'platform' => $validated['platform'],
             'format' => $validated['format'] ?? 'reels_shorts',
             'pillar' => $validated['pillar'] ?? 'edukasi',
-            'picName' => 'Aldwin',
+            'picName' => (string) ($request->user()?->name ?? 'Tim HUMAS'),
             'picAvatar' => 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
             'publishDate' => $validated['publish_date'] ?: now()->addDays(3)->toDateString(),
             'caption' => $validated['caption'] ?? '',
@@ -201,7 +201,7 @@ class WorkspaceActionController extends Controller
             'type' => 'creative_project',
             'title' => $title,
             'deletedAt' => 'Baru saja',
-            'deletedBy' => 'Aldwin (Lead Planner)',
+            'deletedBy' => (string) ($request->user()?->name ?? 'Tim HUMAS'),
             'details' => 'Dipindahkan dari papan Content Planner',
         ]);
         $request->session()->put('sparc.trash_items', $trashItems);
@@ -250,7 +250,7 @@ class WorkspaceActionController extends Controller
             'platform' => $validated['platform'],
             'format' => $validated['format'] ?? 'reels',
             'status' => 'scheduled',
-            'picName' => 'Aldwin',
+            'picName' => (string) ($request->user()?->name ?? 'Tim HUMAS'),
             'caption' => $validated['caption'] ?? '',
         ];
         $request->session()->put('sparc.calendar_events', $events);

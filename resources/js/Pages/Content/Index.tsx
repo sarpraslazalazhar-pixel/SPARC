@@ -310,7 +310,7 @@ export default function ContentPlanIndex({
         format: 'reels_shorts',
         pillar: 'edukasi' as ContentPillarKey,
         priority: 'normal' as PriorityLevel,
-        pic_name: team[2]?.name ?? 'Nadia Putri',
+        pic_name: team[2]?.name ?? 'Tim HUMAS',
         production_deadline: '2026-10-30',
         publish_date: '2026-11-02',
         publish_time: '10:00',
@@ -668,7 +668,7 @@ export default function ContentPlanIndex({
                                             (statusKey === 'ready_to_publish' &&
                                                 !can?.approveContent) ||
                                             (statusKey === 'published' &&
-                                                !['admin', 'manager', 'publisher'].includes(currentRole))
+                                                !['admin', 'manager', 'creator'].includes(currentRole))
                                         }
                                     >
                                         {WORKFLOW_STATUS_META[statusKey].label}

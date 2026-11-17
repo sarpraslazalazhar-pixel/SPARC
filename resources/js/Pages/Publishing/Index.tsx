@@ -958,7 +958,7 @@ export default function PublishingIndex({
                                             <th className="py-3 px-3">Kanal</th>
                                             <th className="py-3 px-3">Waktu Tayang Aktual</th>
                                             <th className="py-3 px-3">Metrik Ringkas</th>
-                                            <th className="py-3 px-3">Publisher</th>
+                                            <th className="py-3 px-3">Creator</th>
                                             <th className="py-3 px-4">Tautan Bukti Tayang</th>
                                         </tr>
                                     </thead>

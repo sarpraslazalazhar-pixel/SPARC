@@ -15,7 +15,6 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
         $accounts = [
             [
                 'email' => 'test@example.com',
@@ -25,53 +24,53 @@ class DatabaseSeeder extends Seeder
                 'primary_role' => 'admin',
             ],
             [
-                'email' => 'admin@sparc.go.id',
-                'name' => 'Aldwin NV',
-                'password' => bcrypt('password'),
-                'role' => 'admin',
-                'primary_role' => 'admin',
-            ],
-            [
-                'email' => 'aldwin@humas.instansi.go.id',
-                'name' => 'Aldwin NV (Admin)',
-                'password' => bcrypt('password'),
-                'role' => 'admin',
-                'primary_role' => 'admin',
-            ],
-            [
-                'email' => 'rina.kabag@humas.instansi.go.id',
-                'name' => 'Rina Kartika',
+                'email' => 'bayu@alazharpeduli.or.id',
+                'name' => 'Bayu Juni Setiawan',
                 'password' => bcrypt('password'),
                 'role' => 'manager',
                 'primary_role' => 'manager',
             ],
             [
-                'email' => 'nadia.planner@humas.instansi.go.id',
-                'name' => 'Nadia Putri',
-                'password' => bcrypt('password'),
-                'role' => 'planner',
-                'primary_role' => 'planner',
-            ],
-            [
-                'email' => 'dimas.creative@humas.instansi.go.id',
-                'name' => 'Dimas Pratama',
+                'email' => 'ana@alazharpeduli.or.id',
+                'name' => 'Fitri Ana Wulandari',
                 'password' => bcrypt('password'),
                 'role' => 'creator',
                 'primary_role' => 'creator',
             ],
             [
-                'email' => 'fajar.social@humas.instansi.go.id',
-                'name' => 'Fajar Nugroho',
+                'email' => 'risda@alazharpeduli.or.id',
+                'name' => 'Risdawati',
                 'password' => bcrypt('password'),
-                'role' => 'publisher',
-                'primary_role' => 'publisher',
+                'role' => 'creator',
+                'primary_role' => 'creator',
             ],
             [
-                'email' => 'budi.viewer@humas.instansi.go.id',
-                'name' => 'Dr. Budi Santoso',
+                'email' => 'fauzi@alazharpeduli.or.id',
+                'name' => 'Fauzi Arif Suhada',
                 'password' => bcrypt('password'),
-                'role' => 'viewer',
-                'primary_role' => 'viewer',
+                'role' => 'creator',
+                'primary_role' => 'creator',
+            ],
+            [
+                'email' => 'rosyadi@alazharpeduli.or.id',
+                'name' => 'Rosyadi',
+                'password' => bcrypt('password'),
+                'role' => 'creator',
+                'primary_role' => 'creator',
+            ],
+            [
+                'email' => 'nopen@alazharpeduli.or.id',
+                'name' => 'Nopen Setiawan',
+                'password' => bcrypt('password'),
+                'role' => 'creator',
+                'primary_role' => 'creator',
+            ],
+            [
+                'email' => 'nadhila@alazharpeduli.or.id',
+                'name' => 'Nadhilah Amalia Sifa',
+                'password' => bcrypt('password'),
+                'role' => 'creator',
+                'primary_role' => 'creator',
             ],
         ];
 

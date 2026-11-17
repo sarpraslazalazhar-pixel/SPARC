@@ -42,7 +42,7 @@ export default function AnalyticsIndex({
             scheduledAt: `${today} 10:00`,
             publishedActualAt: m.date || `${today} 10:00`,
             publishedUrl: null,
-            picName: 'Publisher HUMAS',
+            picName: 'Tim HUMAS',
             checklist: [],
             metrics: {
                 reach: m.reach,

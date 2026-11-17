@@ -229,7 +229,6 @@ Route::middleware('auth')->group(function () {
         ]);
     })->name('trash.index');
 
-    Route::post('/workspace/role', [WorkspaceV3Controller::class, 'switchRole'])->name('workspace.role');
     Route::get('/poll/updates', [WorkspaceV3Controller::class, 'pollUpdates'])->name('poll.updates');
     Route::post('/notifications/{id}/read', [WorkspaceV3Controller::class, 'markNotificationRead'])->name('notifications.read');
     Route::post('/notifications/read-all', [WorkspaceV3Controller::class, 'markAllNotificationsRead'])->name('notifications.readAll');

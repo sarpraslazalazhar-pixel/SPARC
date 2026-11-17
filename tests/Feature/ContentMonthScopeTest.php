@@ -178,7 +178,7 @@ class ContentMonthScopeTest extends TestCase
                 'format' => $i % 3 === 0 ? 'reels' : 'feed',
                 'pillar' => 'kelembagaan',
                 'pic_name' => 'Instagram Auto-Sync',
-                'pic_role' => 'publisher',
+                'pic_role' => 'creator',
                 'pic_avatar' => '',
                 'production_deadline' => '2026-09-15',
                 'publish_date' => '2026-09-15',

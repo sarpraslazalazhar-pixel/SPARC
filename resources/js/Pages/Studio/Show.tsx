@@ -84,7 +84,7 @@ const DEFAULT_PROJECT: StudioProjectDetail = {
     format: 'reels_shorts',
     pillar: 'edukasi',
     status: 'in_scripting',
-    picName: 'Aldwin (Writer)',
+    picName: 'Tim HUMAS',
     targetDate: '2026-11-02',
     haloapuTicketId: '045-812-901',
     haloapuBrief: 'Panduan 3 langkah online: 1. Buka portal, 2. Isi NIK, 3. Konfirmasi email.',

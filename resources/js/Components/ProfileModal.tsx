@@ -202,7 +202,7 @@ export function ProfileModal({ isOpen, onClose, user }: ProfileModalProps) {
                         value={data.name}
                         onChange={(e) => setData('name', e.target.value)}
                         error={errors.name}
-                        placeholder="Contoh: Aldwin NV"
+                        placeholder="Contoh: Nama Lengkap"
                     />
 
                     <Input
@@ -212,7 +212,7 @@ export function ProfileModal({ isOpen, onClose, user }: ProfileModalProps) {
                         value={data.email}
                         onChange={(e) => setData('email', e.target.value)}
                         error={errors.email}
-                        placeholder="nama@humas.instansi.go.id"
+                        placeholder="nama@alazharpeduli.or.id"
                     />
 
                     <Input

@@ -328,9 +328,9 @@ class WorkspaceFlowTest extends TestCase
      */
     public function test_sparc_v3_rbac_enforces_server_permissions_and_graceful_inertia_rollback(): void
     {
-        // Switch role to Creator
-        $this->post(route('workspace.role'), ['role' => 'creator'])
-            ->assertRedirect();
+        // Creator: boleh menandai tayang, tidak boleh approve ke `ready_to_publish`
+        $creator = User::factory()->create(['role' => 'creator', 'primary_role' => 'creator']);
+        $this->actingAs($creator);
 
         // Creator cannot access Admin-only Settings
         $this->get(route('settings.index'))->assertForbidden();
@@ -349,15 +349,24 @@ class WorkspaceFlowTest extends TestCase
             ->assertRedirect(route('planner.index'))
             ->assertSessionHasErrors(['status']);
 
-        // Switch role to Viewer -> cannot create content
-        $this->post(route('workspace.role'), ['role' => 'viewer'])->assertRedirect();
+        // Creator menggantikan Publisher: menandai `published` tidak lagi 403
+        $publishable = ContentItem::query()->firstOrFail();
+        $this->patch(route('content.status', ['id' => (string) $publishable->id]), [
+            'status' => 'published',
+            'published_url' => 'https://www.instagram.com/p/creator-publish/',
+        ])->assertRedirect();
+        $this->assertSame('published', $publishable->fresh()->status);
+
+        // Viewer -> cannot create content
+        $viewer = User::factory()->create(['role' => 'viewer', 'primary_role' => 'viewer']);
+        $this->actingAs($viewer);
         $this->post(route('content.store'), [
             'title' => 'Konten Ilegal dari Viewer',
             'platform' => 'instagram',
             'format' => 'reels_shorts',
             'pillar' => 'edukasi',
             'priority' => 'normal',
-            'pic_name' => 'Nadia Putri',
+            'pic_name' => 'Tim HUMAS',
             'production_deadline' => '2026-10-30',
             'publish_date' => '2026-11-01',
         ])->assertForbidden();

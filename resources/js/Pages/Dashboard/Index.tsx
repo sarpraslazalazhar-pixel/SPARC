@@ -336,7 +336,7 @@ export default function DashboardIndex({
         content_item_id: contentItems[0]?.id ?? 'ci-1',
         title: '',
         task_type: 'design' as ProductionTaskItem['taskType'],
-        assigned_to: currentUser?.name ?? 'Dimas Pratama',
+        assigned_to: currentUser?.name ?? 'Tim HUMAS',
         due_date: today,
     });
 

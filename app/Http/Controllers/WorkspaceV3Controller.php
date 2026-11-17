@@ -94,17 +94,13 @@ class WorkspaceV3Controller extends Controller
             'manager' => 'Kepala HUMAS',
             'planner' => 'Content Planner',
             'creator' => 'Creator / Designer',
-            'publisher' => 'Publisher',
             'viewer' => 'Pemantau Eksekutif',
         ];
 
         $personas = self::rolePersonas();
 
         if ($authUser = $request->user()) {
-            $sessionRole = $session->get('sparc_v3.active_role');
-            $userRole = ! empty($sessionRole)
-                ? (string) $sessionRole
-                : (string) ($authUser->role ?: $authUser->primary_role ?: 'admin');
+            $userRole = (string) ($authUser->role ?: $authUser->primary_role ?: 'admin');
             $activeRole = $userRole;
             $currentUser = [
                 'id' => (string) $authUser->id,
@@ -676,7 +672,7 @@ class WorkspaceV3Controller extends Controller
                     'platform' => (string) ($legacy['platform'] ?? 'instagram'),
                     'format' => (string) ($legacy['format'] ?? 'reels_shorts'),
                     'pillar' => (string) ($legacy['pillar'] ?? 'edukasi'),
-                    'picName' => (string) ($legacy['picName'] ?? 'Aldwin NV'),
+                    'picName' => (string) ($legacy['picName'] ?? $currentUser['name'] ?? 'Tim HUMAS'),
                     'picRole' => 'planner',
                     'picAvatar' => (string) ($legacy['picAvatar'] ?? $currentUser['avatar']),
                     'productionDeadline' => (string) ($legacy['publishDate'] ?? '2026-10-30'),
@@ -694,7 +690,7 @@ class WorkspaceV3Controller extends Controller
                             'id' => 'h-'.Str::lower(Str::random(5)),
                             'fromStatus' => null,
                             'toStatus' => self::normalizeStatus((string) ($legacy['status'] ?? 'inbox')),
-                            'actor' => (string) ($legacy['picName'] ?? 'Aldwin NV'),
+                            'actor' => (string) ($legacy['picName'] ?? $currentUser['name'] ?? 'Tim HUMAS'),
                             'timestamp' => 'Baru saja',
                             'note' => 'Item dibuat melalui alur cepat.',
                         ],
@@ -1088,7 +1084,7 @@ class WorkspaceV3Controller extends Controller
                             'scheduledAt' => $schedStr,
                             'publishedActualAt' => $isLive ? $schedStr : null,
                             'publishedUrl' => $row->published_url,
-                            'picName' => (string) ($row->pic_name ?: 'Publisher HUMAS'),
+                            'picName' => (string) ($row->pic_name ?: 'Tim HUMAS'),
                             'checklist' => $isLive
                                 ? []
                                 : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $row->platform)),
@@ -1254,7 +1250,7 @@ class WorkspaceV3Controller extends Controller
                                 'scheduledAt' => $schedStr,
                                 'publishedActualAt' => $isLive ? $schedStr : null,
                                 'publishedUrl' => $dbItem->published_url,
-                                'picName' => (string) ($dbItem->pic_name ?: 'Publisher HUMAS'),
+                                'picName' => (string) ($dbItem->pic_name ?: 'Tim HUMAS'),
                                 'checklist' => $isLive
                                     ? []
                                     : ($dbChecklists[$synId] ?? self::defaultChecklistForPlatform((string) $dbItem->platform)),
@@ -1399,8 +1395,8 @@ class WorkspaceV3Controller extends Controller
             'viewTeamWorkload' => in_array($role, ['admin', 'manager'], true),
             'manageActivities' => in_array($role, ['admin', 'manager', 'planner'], true),
             'editContent' => in_array($role, ['admin', 'manager', 'planner', 'creator'], true),
-            'updateTasks' => in_array($role, ['admin', 'manager', 'planner', 'creator', 'publisher'], true),
-            'managePublishing' => in_array($role, ['admin', 'manager', 'planner', 'publisher'], true),
+            'updateTasks' => in_array($role, ['admin', 'manager', 'planner', 'creator'], true),
+            'managePublishing' => in_array($role, ['admin', 'manager', 'planner', 'creator'], true),
             'manageAssets' => in_array($role, ['admin', 'manager', 'planner', 'creator'], true),
             'manageSettings' => $role === 'admin',
         ];
@@ -1416,48 +1412,40 @@ class WorkspaceV3Controller extends Controller
         return [
             'admin' => [
                 'id' => 'u-1',
-                'name' => 'Aldwin NV',
-                'email' => 'aldwin@humas.instansi.go.id',
+                'name' => 'Test User',
+                'email' => 'test@example.com',
                 'role' => 'admin',
                 'roleLabel' => 'Administrator',
                 'avatar' => 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
             ],
             'manager' => [
                 'id' => 'u-2',
-                'name' => 'Rina Kartika',
-                'email' => 'rina.kabag@humas.instansi.go.id',
+                'name' => 'Bayu Juni Setiawan',
+                'email' => 'bayu@alazharpeduli.or.id',
                 'role' => 'manager',
                 'roleLabel' => 'Kepala HUMAS',
                 'avatar' => 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=80',
             ],
             'planner' => [
                 'id' => 'u-3',
-                'name' => 'Nadia Putri',
-                'email' => 'nadia.planner@humas.instansi.go.id',
+                'name' => 'Risdawati',
+                'email' => 'risda@alazharpeduli.or.id',
                 'role' => 'planner',
                 'roleLabel' => 'Content Planner',
                 'avatar' => 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=120&auto=format&fit=crop&q=80',
             ],
             'creator' => [
                 'id' => 'u-4',
-                'name' => 'Dimas Pratama',
-                'email' => 'dimas.creative@humas.instansi.go.id',
+                'name' => 'Fitri Ana Wulandari',
+                'email' => 'ana@alazharpeduli.or.id',
                 'role' => 'creator',
                 'roleLabel' => 'Creator / Designer',
                 'avatar' => 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80',
             ],
-            'publisher' => [
-                'id' => 'u-5',
-                'name' => 'Fajar Nugroho',
-                'email' => 'fajar.social@humas.instansi.go.id',
-                'role' => 'publisher',
-                'roleLabel' => 'Publisher',
-                'avatar' => 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80',
-            ],
             'viewer' => [
                 'id' => 'u-6',
-                'name' => 'Dr. Budi Santoso',
-                'email' => 'budi.pimpinan@humas.instansi.go.id',
+                'name' => 'Nadhilah Amalia Sifa',
+                'email' => 'nadhila@alazharpeduli.or.id',
                 'role' => 'viewer',
                 'roleLabel' => 'Viewer Pimpinan',
                 'avatar' => 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
@@ -2397,33 +2385,6 @@ class WorkspaceV3Controller extends Controller
     }
 
     /**
-     * Switch active workspace role persona for live RBAC verification.
-     */
-    public function switchRole(Request $request): RedirectResponse
-    {
-        $validated = $request->validate([
-            'role' => ['required', 'string', 'in:admin,manager,planner,creator,publisher,viewer'],
-        ]);
-
-        self::hydrateWorkspace($request);
-        $request->session()->put('sparc_v3.active_role', $validated['role']);
-
-        $persona = self::rolePersonas()[$validated['role']];
-        self::flashToast(
-            $request,
-            'info',
-            'Peran Aktif Diperbarui',
-            sprintf('Beralih ke sesi %s (%s).', $persona['name'], $persona['roleLabel'])
-        );
-
-        if ($validated['role'] !== 'admin' && str_starts_with((string) $request->headers->get('referer', ''), url('/settings'))) {
-            return to_route('dashboard');
-        }
-
-        return back();
-    }
-
-    /**
      * Short-polling endpoint (`GET /poll/updates?since=`) returning unread counts & genuinely new notifications.
      */
     public function pollUpdates(Request $request): JsonResponse
@@ -2763,12 +2724,12 @@ class WorkspaceV3Controller extends Controller
             ]);
         }
 
-        if ($targetStatus === 'published' && ! in_array($role, ['admin', 'manager', 'publisher'], true)) {
+        if ($targetStatus === 'published' && ! in_array($role, ['admin', 'manager', 'creator'], true)) {
             if (! $request->header('X-Inertia')) {
-                abort(403, 'Hanya Publisher, Kepala HUMAS, atau Admin yang dapat menandai tayang.');
+                abort(403, 'Hanya Creator, Kepala HUMAS, atau Admin yang dapat menandai tayang.');
             }
             throw ValidationException::withMessages([
-                'status' => 'Status "Published" wajib diselesaikan melalui checklist pra-publikasi oleh Publisher.',
+                'status' => 'Status "Published" wajib diselesaikan melalui checklist pra-publikasi oleh Creator.',
             ]);
         }
 
@@ -3269,10 +3230,7 @@ class WorkspaceV3Controller extends Controller
     public function syncInstagramBatch(Request $request): JsonResponse
     {
         $authUser = $request->user();
-        $sessionRole = $request->hasSession() ? $request->session()->get('sparc_v3.active_role') : null;
-        $activeRole = ! empty($sessionRole)
-            ? (string) $sessionRole
-            : (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
+        $activeRole = (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
         $can = self::permissionsForRole($activeRole);
         if (! ($can['editContent'] || $can['managePublishing'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan metrik konten.');
@@ -3380,10 +3338,7 @@ class WorkspaceV3Controller extends Controller
     public function syncInstagramInsightsBatch(Request $request): JsonResponse
     {
         $authUser = $request->user();
-        $sessionRole = $request->hasSession() ? $request->session()->get('sparc_v3.active_role') : null;
-        $activeRole = ! empty($sessionRole)
-            ? (string) $sessionRole
-            : (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
+        $activeRole = (string) ($authUser?->role ?: $authUser?->primary_role ?: 'admin');
         $can = self::permissionsForRole($activeRole);
         if (! ($can['editContent'] || $can['managePublishing'])) {
             abort(403, 'Peran Anda tidak diizinkan menyinkronkan metrik konten.');
@@ -3848,7 +3803,7 @@ class WorkspaceV3Controller extends Controller
                 $dbItem->history()->create([
                     'from_status' => $oldStatus,
                     'to_status' => 'published',
-                    'actor' => auth()->user()->name ?? ($state['currentUser']['name'] ?? 'Publisher'),
+                    'actor' => auth()->user()->name ?? ($state['currentUser']['name'] ?? 'Tim HUMAS'),
                     'note' => sprintf('Ditandai tayang secara manual (%s).', $validated['published_url']),
                 ]);
                 app(HaloApuClientService::class)->handlePublishedContent($dbItem, $validated['published_url'] ?? null);
@@ -4174,7 +4129,7 @@ class WorkspaceV3Controller extends Controller
                             'scheduledAt' => ((string) ($cItem['publishDate'] ?? self::TODAY)).' '.((string) ($cItem['publishTime'] ?? '10:00')),
                             'publishedActualAt' => self::TODAY.' '.now()->format('H:i'),
                             'publishedUrl' => $cItem['publishedUrl'] ?? null,
-                            'picName' => (string) ($cItem['picName'] ?? 'Publisher HUMAS'),
+                            'picName' => (string) ($cItem['picName'] ?? 'Tim HUMAS'),
                             'checklist' => [],
                             'metrics' => $newMetrics,
                         ];
@@ -4433,9 +4388,9 @@ class WorkspaceV3Controller extends Controller
             [
                 'name' => ['required', 'string', 'min:3', 'max:100'],
                 'email' => ['required', 'email', 'max:150', 'unique:users,email'],
-                'role' => ['nullable', 'string', 'in:admin,manager,planner,creator,publisher,viewer'],
+                'role' => ['nullable', 'string', 'in:admin,manager,planner,creator,viewer'],
                 'roles' => ['nullable', 'array'],
-                'roles.*' => ['string', 'in:admin,manager,planner,creator,publisher,viewer'],
+                'roles.*' => ['string', 'in:admin,manager,planner,creator,viewer'],
                 'password' => ['nullable', 'string', 'min:6', 'max:100'],
             ],
             [
@@ -4479,7 +4434,7 @@ class WorkspaceV3Controller extends Controller
         }
 
         $validated = $request->validate([
-            'role' => ['required', 'string', 'in:admin,manager,planner,creator,publisher,viewer'],
+            'role' => ['required', 'string', 'in:admin,manager,planner,creator,viewer'],
         ]);
 
         $user = User::findOrFail($id);
@@ -5357,7 +5312,7 @@ class WorkspaceV3Controller extends Controller
             'scheduledAt' => $schedDate.' 10:00',
             'publishedActualAt' => null,
             'publishedUrl' => null,
-            'picName' => 'Fajar Nugroho',
+            'picName' => (string) ($request->user()?->name ?? 'Tim HUMAS'),
             'checklist' => self::defaultChecklistForPlatform($platform),
             'metrics' => null,
         ]);
@@ -5415,97 +5370,10 @@ class WorkspaceV3Controller extends Controller
     public static function defaultSeed(): array
     {
         return [
-            'active_role' => 'admin',
             'content_items' => [],
             'activities' => [],
             'publications' => [],
             'assets' => self::defaultSeedAssets(),
-            'team' => [
-                [
-                    'id' => 'tm-1',
-                    'name' => 'Aldwin NV',
-                    'email' => 'aldwin@humas.instansi.go.id',
-                    'roles' => ['admin', 'planner'],
-                    'primaryRole' => 'admin',
-                    'avatar' => 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 3,
-                    'dueThisWeek' => 2,
-                    'overdueTasks' => 0,
-                    'effortHours' => 14,
-                    'capacityHours' => 30,
-                    'status' => 'Aktif',
-                ],
-                [
-                    'id' => 'tm-2',
-                    'name' => 'Rina Kartika',
-                    'email' => 'rina.kabag@humas.instansi.go.id',
-                    'roles' => ['manager'],
-                    'primaryRole' => 'manager',
-                    'avatar' => 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 2,
-                    'dueThisWeek' => 2,
-                    'overdueTasks' => 0,
-                    'effortHours' => 10,
-                    'capacityHours' => 25,
-                    'status' => 'Aktif',
-                ],
-                [
-                    'id' => 'tm-3',
-                    'name' => 'Nadia Putri',
-                    'email' => 'nadia.planner@humas.instansi.go.id',
-                    'roles' => ['planner'],
-                    'primaryRole' => 'planner',
-                    'avatar' => 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 5,
-                    'dueThisWeek' => 3,
-                    'overdueTasks' => 1,
-                    'effortHours' => 24,
-                    'capacityHours' => 30,
-                    'status' => 'Aktif',
-                ],
-                [
-                    'id' => 'tm-4',
-                    'name' => 'Dimas Pratama',
-                    'email' => 'dimas.creative@humas.instansi.go.id',
-                    'roles' => ['creator'],
-                    'primaryRole' => 'creator',
-                    'avatar' => 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 6,
-                    'dueThisWeek' => 4,
-                    'overdueTasks' => 1,
-                    'effortHours' => 28,
-                    'capacityHours' => 30,
-                    'status' => 'Beban Tinggi',
-                ],
-                [
-                    'id' => 'tm-5',
-                    'name' => 'Fajar Nugroho',
-                    'email' => 'fajar.social@humas.instansi.go.id',
-                    'roles' => ['publisher'],
-                    'primaryRole' => 'publisher',
-                    'avatar' => 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 3,
-                    'dueThisWeek' => 3,
-                    'overdueTasks' => 0,
-                    'effortHours' => 16,
-                    'capacityHours' => 30,
-                    'status' => 'Aktif',
-                ],
-                [
-                    'id' => 'tm-6',
-                    'name' => 'Dr. Budi Santoso',
-                    'email' => 'budi.pimpinan@humas.instansi.go.id',
-                    'roles' => ['viewer'],
-                    'primaryRole' => 'viewer',
-                    'avatar' => 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
-                    'activeTasks' => 0,
-                    'dueThisWeek' => 0,
-                    'overdueTasks' => 0,
-                    'effortHours' => 0,
-                    'capacityHours' => 10,
-                    'status' => 'Pemantau Eksekutif',
-                ],
-            ],
             'settings' => [
                 'monthlyContentTarget' => 24,
                 'workingHoursStart' => '08:00',
@@ -5543,7 +5411,7 @@ class WorkspaceV3Controller extends Controller
                 'externalUrl' => 'Harddisk Eksternal Humas 01 (Folder: RAW_2026/KIP)',
                 'thumbnailUrl' => '',
                 'contentId' => null,
-                'uploadedBy' => 'Dimas Pratama',
+                'uploadedBy' => 'Fauzi Arif Suhada',
                 'createdAt' => '25 Okt 2026',
                 'dimensions' => 'Media Fisik (HDD 2TB)',
             ],
@@ -5556,7 +5424,7 @@ class WorkspaceV3Controller extends Controller
                 'externalUrl' => 'https://drive.google.com/drive/folders/humas-dokumentasi-2026',
                 'thumbnailUrl' => 'https://www.google.com/s2/favicons?domain=drive.google.com&sz=128',
                 'contentId' => null,
-                'uploadedBy' => 'Nadia Putri',
+                'uploadedBy' => 'Fitri Ana Wulandari',
                 'createdAt' => '26 Okt 2026',
                 'dimensions' => 'Cloud Storage (Google Drive)',
             ],
@@ -5568,7 +5436,7 @@ class WorkspaceV3Controller extends Controller
                 'externalUrl' => 'https://www.canva.com/design/DAFxxxxx/view',
                 'thumbnailUrl' => 'https://www.google.com/s2/favicons?domain=canva.com&sz=128',
                 'contentId' => null,
-                'uploadedBy' => 'Dimas Pratama',
+                'uploadedBy' => 'Fauzi Arif Suhada',
                 'createdAt' => '27 Okt 2026',
                 'dimensions' => '1080 × 1350 px',
             ],

@@ -2271,7 +2271,7 @@ class InstagramGraphService
                         'format' => $format,
                         'pillar' => 'kelembagaan',
                         'pic_name' => 'Instagram Auto-Sync',
-                        'pic_role' => 'publisher',
+                        'pic_role' => 'creator',
                         'production_deadline' => $publishedAt->toDateString(),
                         'publish_date' => $publishedAt->toDateString(),
                         'publish_time' => $publishedAt->format('H:i'),

@@ -104,7 +104,7 @@ export default function CommentsIndex({
         title: '',
         format: 'reels',
         pillar: 'edukasi',
-        pic_name: team[0]?.name ?? 'Nadia Putri',
+        pic_name: team[0]?.name ?? 'Tim HUMAS',
     });
 
     const igHandleLabel = props.instagramStatus?.username
@@ -203,7 +203,7 @@ export default function CommentsIndex({
             title: `Tanggapan @${comment.username}: ${snippet}`,
             format: 'reels',
             pillar: 'edukasi',
-            pic_name: team[0]?.name ?? 'Nadia Putri',
+            pic_name: team[0]?.name ?? 'Tim HUMAS',
         });
     };
 
@@ -932,7 +932,7 @@ export default function CommentsIndex({
                         value={convertForm.data.pic_name}
                         onChange={(e) => convertForm.setData('pic_name', e.target.value)}
                     >
-                        {(team.length > 0 ? team : [{ id: '1', name: 'Nadia Putri' }]).map((m) => (
+                        {(team.length > 0 ? team : [{ id: '1', name: 'Tim HUMAS' }]).map((m) => (
                             <option key={m.id} value={m.name}>
                                 {m.name}
                             </option>

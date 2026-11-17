@@ -130,7 +130,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
         platform: item?.platform ?? 'instagram',
         pillar: item?.pillar ?? 'edukasi',
         priority: item?.priority ?? 'normal',
-        pic_name: item?.picName ?? 'Nadia Putri',
+        pic_name: item?.picName ?? 'Tim HUMAS',
         production_deadline: item?.productionDeadline ?? today,
         publish_date: item?.publishDate ?? today,
         brief: item?.brief ?? '',
@@ -145,7 +145,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
         content_item_id: item?.id ?? '',
         title: '',
         task_type: 'design' as 'scripting' | 'design' | 'video' | 'review' | 'approval' | 'distribution' | 'other',
-        assigned_to: team[0]?.name ?? 'Dimas Pratama',
+        assigned_to: team[0]?.name ?? 'Tim HUMAS',
         due_date: item?.productionDeadline ?? today,
     });
 
@@ -205,7 +205,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                 content_item_id: item.id,
                 title: '',
                 task_type: 'design',
-                assigned_to: item.picName || 'Dimas Pratama',
+                assigned_to: item.picName || 'Tim HUMAS',
                 due_date: item.productionDeadline || today,
             });
             taskForm.clearErrors();
@@ -546,7 +546,7 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                                         (statusKey === 'ready_to_publish' &&
                                                             !can?.approveContent) ||
                                                         (statusKey === 'published' &&
-                                                            !['admin', 'manager', 'publisher'].includes(
+                                                            !['admin', 'manager', 'creator'].includes(
                                                                 currentRole ?? ''
                                                             ))
                                                     }

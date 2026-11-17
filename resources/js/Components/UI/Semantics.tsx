@@ -71,7 +71,7 @@ export type ContentPillarKey =
     | 'pengumuman'
     | 'hiburan';
 
-export type UserRoleKey = 'admin' | 'manager' | 'planner' | 'creator' | 'publisher' | 'viewer';
+export type UserRoleKey = 'admin' | 'manager' | 'planner' | 'creator' | 'viewer';
 
 
 export const FORMAT_GROUPS: Record<'reels' | 'feed' | 'carousel', string[]> = {
@@ -498,8 +498,7 @@ export const ROLE_META: Record<UserRoleKey, { label: string; description: string
     admin: { label: 'Administrator', description: 'Akses penuh sistem, pengguna & konfigurasi' },
     manager: { label: 'Kepala HUMAS', description: 'Approval konten, prioritas & pantau beban tim' },
     planner: { label: 'Content Planner', description: 'Rencana konten, kalender kegiatan & tugas' },
-    creator: { label: 'Creator / Designer', description: 'Produksi naskah, desain & katalog aset' },
-    publisher: { label: 'Publisher', description: 'Optimasi checklist kanal, tayang & metrik' },
+    creator: { label: 'Creator / Designer', description: 'Produksi naskah, desain, tayang & metrik' },
     viewer: { label: 'Viewer Pimpinan', description: 'Akses baca dashboard, kalender & laporan' },
 };
 

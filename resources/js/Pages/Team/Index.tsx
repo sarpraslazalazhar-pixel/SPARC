@@ -38,7 +38,6 @@ const ROLE_KEYS: UserRoleKey[] = [
     'manager',
     'planner',
     'creator',
-    'publisher',
     'viewer',
 ];
 function generateRandomPassword(): string {

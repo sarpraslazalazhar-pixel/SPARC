@@ -70,7 +70,7 @@ export default function StudioIndex({
         title: '',
         format: 'reels_shorts' as CreativeProject['format'],
         pillar: 'edukasi' as CreativeProject['pillar'],
-        pic_name: 'Aldwin (Writer)',
+        pic_name: 'Tim HUMAS',
         target_date: '2026-11-12',
     });
 
@@ -368,10 +368,7 @@ export default function StudioIndex({
                             onChange={(e) => createForm.setData('pic_name', e.target.value)}
                             error={createForm.errors.pic_name}
                         >
-                            <option value="Aldwin (Writer)">Aldwin (Writer)</option>
-                            <option value="Designer 1">Designer 1</option>
-                            <option value="Designer 2">Designer 2</option>
-                            <option value="Editor Video">Editor Video</option>
+                            <option value="Tim HUMAS">Tim HUMAS</option>
                         </Select>
 
                         <Input

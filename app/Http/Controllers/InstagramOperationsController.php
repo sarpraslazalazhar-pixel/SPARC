@@ -689,7 +689,7 @@ class InstagramOperationsController extends Controller
     {
         $state = WorkspaceV3Controller::hydrateWorkspace($request);
         if (! ($state['can']['managePublishing'] || $state['can']['approveContent'])) {
-            abort(403, 'Hanya Publisher, Planner, Kepala HUMAS, atau Administrator yang dapat menghapus komentar publik.');
+            abort(403, 'Hanya Creator, Planner, Kepala HUMAS, atau Administrator yang dapat menghapus komentar publik.');
         }
 
         $username = $comment->username;
@@ -753,7 +753,7 @@ class InstagramOperationsController extends Controller
             'platform' => 'instagram',
             'format' => $validated['format'] ?? 'reels',
             'pillar' => $validated['pillar'] ?? 'edukasi',
-            'pic_name' => $validated['pic_name'] ?? ($state['currentUser']['name'] ?? 'Nadia Putri'),
+            'pic_name' => $validated['pic_name'] ?? ($state['currentUser']['name'] ?? 'Tim HUMAS'),
             'pic_role' => 'planner',
             'pic_avatar' => '',
             'production_deadline' => now()->addDays(4)->toDateString(),
