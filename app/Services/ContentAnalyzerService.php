@@ -48,7 +48,7 @@ class ContentAnalyzerService
             system: self::PRE_PUBLISH_SYSTEM,
             prompt: $this->draftPrompt($snapshot),
             schema: $this->reviewSchema(),
-            images: $this->draftImages($snapshot),
+            images: $this->attachedImages($snapshot),
         );
     }
 
@@ -73,6 +73,7 @@ class ContentAnalyzerService
             system: self::PRE_PUBLISH_SYSTEM,
             prompt: $this->performancePrompt($snapshot),
             schema: $this->reviewSchema(),
+            images: $this->attachedImages($snapshot),
         );
     }
 
@@ -183,7 +184,7 @@ class ContentAnalyzerService
         }
         $lines[] = 'Caption:';
         $lines[] = $snapshot['caption'];
-        if ($this->draftImages($snapshot) !== []) {
+        if ($this->attachedImages($snapshot) !== []) {
             $lines[] = 'Gambar desain/referensi dilampirkan: nilai keterbacaan visualnya (hierarki teks, kontras, kepadatan) di visual_readability.';
         }
         $lines[] = 'Aturan: skor 0-100 untuk overall_score; status_label salah satu "Perlu Perbaikan Utama", "Cukup Baik", "Siap Tayang"; beri 2-4 kekuatan, 2-4 perbaikan, 2-3 langkah aksi, dan tepat 2 alternatif caption dengan gaya berbeda. Alternatif caption harus mempertahankan fakta pada brief.';
@@ -192,16 +193,20 @@ class ContentAnalyzerService
     }
 
     /**
-     * Reference images the reviewer may read (design or moodboard), when the item has one.
+     * Visual context the reviewer may read: design, moodboard, and the Reels cover.
+     *
+     * Video itself is never attached — Prism has no File API upload, and inline
+     * base64 caps near 20MB while Instagram CDN links expire.
      *
      * @param  array<string, mixed>  $snapshot
      * @return list<Image>
      */
-    private function draftImages(array $snapshot): array
+    private function attachedImages(array $snapshot): array
     {
         $urls = array_filter([
             (string) ($snapshot['result_design_url'] ?? ''),
             (string) ($snapshot['ref_design_url'] ?? ''),
+            (string) ($snapshot['ig_thumbnail_url'] ?? ''),
         ]);
 
         $images = [];
@@ -236,6 +241,9 @@ class ContentAnalyzerService
         ];
         $lines[] = 'Caption:';
         $lines[] = (string) ($snapshot['caption'] ?? '(tanpa caption)');
+        if ($this->attachedImages($snapshot) !== []) {
+            $lines[] = 'Gambar cover/desain dilampirkan: nilai keterbacaan visualnya di visual_readability.';
+        }
         $lines[] = 'Aturan: hitung rasio terhadap reach bila reach > 0, sebutkan rasio itu di executive_summary. Skor 0-100 mencerminkan efektivitas konten, bukan jumlah absolut interaksi. actionable_next_steps harus bisa dikerjakan minggu ini.';
 
         return implode("\n", $lines);
@@ -277,6 +285,7 @@ class ContentAnalyzerService
             'pillar' => (string) $item->pillar,
             'publish_time' => (string) ($item->publish_time ?? ''),
             'caption' => (string) ($item->caption ?? ''),
+            'ig_thumbnail_url' => (string) ($item->ig_thumbnail_url ?? ''),
             'metrics' => [
                 'reach' => (int) ($item->reach ?? 0),
                 'views' => (int) ($item->views ?? 0),

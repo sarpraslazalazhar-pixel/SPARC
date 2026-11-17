@@ -127,6 +127,23 @@ class ContentAnalyzerTest extends TestCase
         $this->assertSame(100, $analysis->result['metrics_breakdown']['visual_readability']);
     }
 
+    public function test_performance_review_attaches_the_reels_cover(): void
+    {
+        $item = ContentItem::factory()->create([
+            'status' => 'published',
+            'reach' => 1000,
+            'likes' => 40,
+            'ig_thumbnail_url' => 'https://scontent.cdninstagram.com/cover.jpg',
+        ]);
+
+        Prism::fake([StructuredResponseFake::make()->withStructured($this->reviewPayload(71))]);
+
+        $analysis = $this->app->make(ContentAnalyzerService::class)->analyzePerformance($item);
+
+        $this->assertSame(71, $analysis->result['overall_score']);
+        $this->assertSame('https://scontent.cdninstagram.com/cover.jpg', $analysis->input_snapshot['ig_thumbnail_url']);
+    }
+
     public function test_analyze_draft_endpoint_returns_review(): void
     {
         Prism::fake([StructuredResponseFake::make()->withStructured($this->reviewPayload())]);
