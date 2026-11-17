@@ -11,6 +11,7 @@ use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\NumberSchema;
 use Prism\Prism\Schema\ObjectSchema;
 use Prism\Prism\Schema\StringSchema;
+use Prism\Prism\ValueObjects\Media\Image;
 use Throwable;
 
 /**
@@ -47,6 +48,7 @@ class ContentAnalyzerService
             system: self::PRE_PUBLISH_SYSTEM,
             prompt: $this->draftPrompt($snapshot),
             schema: $this->reviewSchema(),
+            images: $this->draftImages($snapshot),
         );
     }
 
@@ -122,6 +124,7 @@ class ContentAnalyzerService
         string $system,
         string $prompt,
         ObjectSchema $schema,
+        array $images = [],
     ): AiAnalysis {
         if (! $this->isConfigured()) {
             throw new \RuntimeException('Kredensial AI belum dikonfigurasi. Isi API key di Pengaturan › AI.');
@@ -143,7 +146,7 @@ class ContentAnalyzerService
                 ->using(AiSetting::provider(), $this->model())
                 ->withSchema($schema)
                 ->withSystemPrompt($system)
-                ->withPrompt($prompt)
+                ->withPrompt($prompt, $images)
                 ->withMaxTokens(2000)
                 ->withClientOptions(['timeout' => $this->timeout()])
                 ->asStructured();
@@ -180,9 +183,40 @@ class ContentAnalyzerService
         }
         $lines[] = 'Caption:';
         $lines[] = $snapshot['caption'];
+        if ($this->draftImages($snapshot) !== []) {
+            $lines[] = 'Gambar desain/referensi dilampirkan: nilai keterbacaan visualnya (hierarki teks, kontras, kepadatan) di visual_readability.';
+        }
         $lines[] = 'Aturan: skor 0-100 untuk overall_score; status_label salah satu "Perlu Perbaikan Utama", "Cukup Baik", "Siap Tayang"; beri 2-4 kekuatan, 2-4 perbaikan, 2-3 langkah aksi, dan tepat 2 alternatif caption dengan gaya berbeda. Alternatif caption harus mempertahankan fakta pada brief.';
 
         return implode("\n", $lines);
+    }
+
+    /**
+     * Reference images the reviewer may read (design or moodboard), when the item has one.
+     *
+     * @param  array<string, mixed>  $snapshot
+     * @return list<Image>
+     */
+    private function draftImages(array $snapshot): array
+    {
+        $urls = array_filter([
+            (string) ($snapshot['result_design_url'] ?? ''),
+            (string) ($snapshot['ref_design_url'] ?? ''),
+        ]);
+
+        $images = [];
+        foreach (array_unique($urls) as $url) {
+            if (! preg_match('#^https?://#i', $url)) {
+                continue;
+            }
+            if (preg_match('#(drive\.google\.com|canva\.com|figma\.com|docs\.google\.com)#i', $url)) {
+                continue;
+            }
+
+            $images[] = Image::fromUrl($url);
+        }
+
+        return $images;
     }
 
     /**
@@ -308,6 +342,7 @@ class ContentAnalyzerService
                         new NumberSchema('hook_strength', 'Kekuatan pembuka, 0-100.', minimum: 0, maximum: 100),
                         new NumberSchema('message_clarity', 'Kejelasan pesan, 0-100.', minimum: 0, maximum: 100),
                         new NumberSchema('cta_effectiveness', 'Efektivitas ajakan bertindak, 0-100.', minimum: 0, maximum: 100),
+                        new NumberSchema('visual_readability', 'Keterbacaan desain, 0-100. Null bila tidak ada gambar.', nullable: true, minimum: 0, maximum: 100),
                     ],
                     requiredFields: ['hook_strength', 'message_clarity', 'cta_effectiveness'],
                 ),
@@ -376,6 +411,9 @@ class ContentAnalyzerService
                 'hook_strength' => $this->score($breakdown['hook_strength'] ?? 0),
                 'message_clarity' => $this->score($breakdown['message_clarity'] ?? 0),
                 'cta_effectiveness' => $this->score($breakdown['cta_effectiveness'] ?? 0),
+                'visual_readability' => isset($breakdown['visual_readability']) && $breakdown['visual_readability'] !== null
+                    ? $this->score($breakdown['visual_readability'])
+                    : null,
             ],
             'executive_summary' => trim((string) ($raw['executive_summary'] ?? '')),
             'strengths' => $this->stringList($raw['strengths'] ?? []),

@@ -97,6 +97,12 @@ export const AiInsightPanel: React.FC<{
                     <span>Pesan {result.metrics_breakdown.message_clarity}</span>
                     <span>·</span>
                     <span>CTA {result.metrics_breakdown.cta_effectiveness}</span>
+                    {result.metrics_breakdown.visual_readability !== null && (
+                        <>
+                            <span>·</span>
+                            <span>Visual {result.metrics_breakdown.visual_readability}</span>
+                        </>
+                    )}
                 </div>
             </div>
 

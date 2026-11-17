@@ -42,6 +42,8 @@ class AiAnalysisController extends Controller
                 'format' => (string) ($data['format'] ?? $item?->format ?? ''),
                 'pillar' => (string) ($data['pillar'] ?? $item?->pillar ?? ''),
                 'brief' => (string) ($data['brief'] ?? $item?->brief ?? ''),
+                'ref_design_url' => (string) ($item?->ref_design_url ?? ''),
+                'result_design_url' => (string) ($item?->result_design_url ?? ''),
             ], $item, (bool) ($data['force'] ?? false));
         } catch (Throwable $exception) {
             report($exception);

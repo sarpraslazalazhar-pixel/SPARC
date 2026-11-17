@@ -1,8 +1,10 @@
 <?php
 
 use App\Http\Controllers\WorkspaceV3Controller;
+use App\Jobs\GenerateStrategyDigestJob;
 use App\Jobs\RefreshTrendsJob;
 use App\Models\InstagramSchedule;
+use App\Services\ContentAnalyzerService;
 use App\Services\HaloApuClientService;
 use App\Services\InstagramGraphService;
 use App\Services\TrendFinderService;
@@ -185,3 +187,19 @@ Schedule::command('instagram:sync-metrics')->everyThirtyMinutes()->withoutOverla
 Schedule::command('instagram:refresh-token')->dailyAt('02:00')->withoutOverlapping();
 Schedule::command('haloapu:sync-tickets')->everyFifteenMinutes()->withoutOverlapping();
 Schedule::command('trends:refresh')->dailyAt('05:00')->withoutOverlapping();
+
+Artisan::command('ai:strategy-digest', function (ContentAnalyzerService $analyzer): int {
+    if (! $analyzer->isConfigured()) {
+        $this->warn('Kredensial AI belum dikonfigurasi, ringkasan strategi dilewati.');
+
+        return 0;
+    }
+
+    GenerateStrategyDigestJob::dispatch();
+
+    $this->info('Ringkasan strategi AI dikirim ke antrean. Hasilnya muncul di widget Dashboard.');
+
+    return 0;
+})->purpose('Buat ringkasan strategi konten AI untuk periode berjalan');
+
+Schedule::command('ai:strategy-digest')->weeklyOn(1, '04:30')->withoutOverlapping();

@@ -12,6 +12,8 @@ export interface AiReviewResult {
         hook_strength: number;
         message_clarity: number;
         cta_effectiveness: number;
+        /** Null when no design image was attached to the review. */
+        visual_readability: number | null;
     };
     executive_summary: string;
     strengths: string[];

@@ -44,6 +44,7 @@ class ContentAnalyzerTest extends TestCase
                 'hook_strength' => 140,
                 'message_clarity' => 85,
                 'cta_effectiveness' => -10,
+                'visual_readability' => 120,
             ],
             'executive_summary' => 'Konten sudah jelas dan layak tayang.',
             'strengths' => ['Hook langsung menyentuh masalah audiens.', '  '],
@@ -74,6 +75,7 @@ class ContentAnalyzerTest extends TestCase
         $this->assertSame(82, $first->result['overall_score']);
         $this->assertSame(100, $first->result['metrics_breakdown']['hook_strength']);
         $this->assertSame(0, $first->result['metrics_breakdown']['cta_effectiveness']);
+        $this->assertSame(100, $first->result['metrics_breakdown']['visual_readability']);
         $this->assertCount(1, $first->result['strengths']);
         $this->assertCount(1, $first->result['suggested_captions']);
 
@@ -103,6 +105,26 @@ class ContentAnalyzerTest extends TestCase
 
         $this->assertSame(88, $second->result['overall_score']);
         $this->assertSame(2, AiAnalysis::count());
+    }
+
+    public function test_draft_review_attaches_only_direct_image_urls(): void
+    {
+        $item = ContentItem::factory()->create([
+            'caption' => 'Caption dengan gambar desain terlampir.',
+            'result_design_url' => 'https://cdn.example.com/design.jpg',
+            'ref_design_url' => 'https://www.canva.com/design/abc/view',
+        ]);
+
+        Prism::fake([StructuredResponseFake::make()->withStructured($this->reviewPayload())]);
+
+        $analysis = $this->app->make(ContentAnalyzerService::class)->analyzeDraft([
+            'caption' => 'Caption dengan gambar desain terlampir.',
+            'result_design_url' => 'https://cdn.example.com/design.jpg',
+            'ref_design_url' => 'https://www.canva.com/design/abc/view',
+        ], $item);
+
+        $this->assertSame(AiAnalysis::STATUS_COMPLETED, $analysis->status);
+        $this->assertSame(100, $analysis->result['metrics_breakdown']['visual_readability']);
     }
 
     public function test_analyze_draft_endpoint_returns_review(): void
