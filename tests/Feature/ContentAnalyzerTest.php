@@ -9,6 +9,7 @@ use App\Services\ContentAnalyzerService;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Testing\StructuredResponseFake;
 use Tests\TestCase;
@@ -142,6 +143,31 @@ class ContentAnalyzerTest extends TestCase
 
         $this->assertSame(71, $analysis->result['overall_score']);
         $this->assertSame('https://scontent.cdninstagram.com/cover.jpg', $analysis->input_snapshot['ig_thumbnail_url']);
+    }
+
+    public function test_cached_thumbnail_is_read_from_the_public_disk(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('ig_cache/media_1_abc.jpg', 'jpeg-bytes');
+
+        $item = ContentItem::factory()->create([
+            'status' => 'published',
+            'reach' => 900,
+            'likes' => 30,
+            'ig_thumbnail_url' => 'https://sparc.test/storage/ig_cache/media_1_abc.jpg',
+        ]);
+
+        Prism::fake([StructuredResponseFake::make()->withStructured($this->reviewPayload(66))]);
+
+        $analyzer = $this->app->make(ContentAnalyzerService::class);
+        $analysis = $analyzer->analyzePerformance($item);
+
+        $this->assertSame(66, $analysis->result['overall_score']);
+
+        $resolve = new \ReflectionMethod($analyzer, 'cachedThumbnailPath');
+        $this->assertSame('ig_cache/media_1_abc.jpg', $resolve->invoke($analyzer, 'https://sparc.test/storage/ig_cache/media_1_abc.jpg'));
+        $this->assertNull($resolve->invoke($analyzer, 'https://sparc.test/storage/ig_cache/missing.jpg'));
+        $this->assertNull($resolve->invoke($analyzer, 'https://scontent.cdninstagram.com/cover.jpg'));
     }
 
     public function test_analyze_draft_endpoint_returns_review(): void

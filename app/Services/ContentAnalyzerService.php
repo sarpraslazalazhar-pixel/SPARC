@@ -6,6 +6,7 @@ use App\Models\AiAnalysis;
 use App\Models\AiSetting;
 use App\Models\ContentItem;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Storage;
 use Prism\Prism\Facades\Prism;
 use Prism\Prism\Schema\ArraySchema;
 use Prism\Prism\Schema\NumberSchema;
@@ -218,10 +219,31 @@ class ContentAnalyzerService
                 continue;
             }
 
+            // Thumbnails already cached on the public disk: read bytes directly so the
+            // review never depends on APP_URL, the storage symlink, or a live CDN link.
+            $cached = $this->cachedThumbnailPath($url);
+            if ($cached !== null) {
+                $images[] = Image::fromStoragePath($cached, 'public');
+
+                continue;
+            }
+
             $images[] = Image::fromUrl($url);
         }
 
         return $images;
+    }
+
+    /**
+     * Map a stored `/storage/ig_cache/...` URL back to its file on the public disk.
+     */
+    private function cachedThumbnailPath(string $url): ?string
+    {
+        if (! preg_match('#/storage/(ig_cache/[A-Za-z0-9_\-]+\.(?:jpg|jpeg|png|webp))$#i', $url, $matches)) {
+            return null;
+        }
+
+        return Storage::disk('public')->exists($matches[1]) ? $matches[1] : null;
     }
 
     /**
