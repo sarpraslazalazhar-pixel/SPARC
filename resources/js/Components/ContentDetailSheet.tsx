@@ -19,12 +19,14 @@ import {
     RefreshCw,
     Save,
     Send,
+    Sparkles,
     TableProperties,
     Trash2,
     Video,
 } from 'lucide-react';
 import type { SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
+import { AiInsightPanel, AiScoreBadge } from '@/Components/AiInsightPanel';
 import { TraceApuChat } from '@/Components/TraceApuChat';
 import { Badge } from '@/Components/UI/Badge';
 import { Input } from '@/Components/UI/Input';
@@ -47,6 +49,8 @@ import { Tabs } from '@/Components/UI/Tabs';
 import { Textarea } from '@/Components/UI/Textarea';
 import { useToast } from '@/Components/UI/Toast';
 import type { SparcContentItem, SparcTeamMember } from '@/types/sparc';
+import { analyzeDraft, analyzePost } from '@/lib/aiAnalysis';
+import type { AiReviewResult } from '@/types/aiAnalysis';
 
 interface ContentDetailSheetProps {
     item: SparcContentItem | null;
@@ -120,6 +124,10 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
     const [igReplyDrafts, setIgReplyDrafts] = useState<Record<string, string>>({});
     const [igReplyingId, setIgReplyingId] = useState<string | null>(null);
     const [igBusyCommentId, setIgBusyCommentId] = useState<string | null>(null);
+    const [draftReview, setDraftReview] = useState<AiReviewResult | null>(null);
+    const [isReviewingDraft, setIsReviewingDraft] = useState(false);
+    const [perfReview, setPerfReview] = useState<AiReviewResult | null>(null);
+    const [isAnalyzingPerf, setIsAnalyzingPerf] = useState(false);
 
     const igHandleLabel = props.instagramStatus?.username
         ? `@${props.instagramStatus.username}`
@@ -342,6 +350,46 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                 onFinish: () => setIsStatusUpdating(false),
             }
         );
+    };
+
+    const handleReviewDraft = async (force = false) => {
+        const caption = editForm.data.caption?.trim() ?? '';
+        if (caption.length < 10) {
+            toastError('Caption Terlalu Pendek', 'Isi minimal 10 karakter sebelum meminta penilaian AI.');
+            return;
+        }
+
+        setIsReviewingDraft(true);
+        const { analysis, error } = await analyzeDraft({
+            contentItemId: item.id,
+            title: editForm.data.title,
+            caption,
+            format: item.format,
+            pillar: item.pillar,
+            brief: editForm.data.brief,
+            force,
+        });
+        setIsReviewingDraft(false);
+
+        if (error || !analysis?.result) {
+            toastError('Analisis Draft Gagal', error ?? 'AI tidak mengembalikan hasil.');
+            return;
+        }
+
+        setDraftReview(analysis.result as AiReviewResult);
+    };
+
+    const handleAnalyzePerformance = async (force = false) => {
+        setIsAnalyzingPerf(true);
+        const { analysis, error } = await analyzePost(item.id, force);
+        setIsAnalyzingPerf(false);
+
+        if (error || !analysis?.result) {
+            toastError('Analisis Performa Gagal', error ?? 'AI tidak mengembalikan hasil.');
+            return;
+        }
+
+        setPerfReview(analysis.result as AiReviewResult);
     };
 
     const handleSaveOverview = (e: React.FormEvent) => {
@@ -1126,6 +1174,38 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                 disabled={!can?.editContent}
                             />
 
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <p className="text-[11px] font-bold text-[var(--md-sys-color-on-surface)] flex items-center gap-1.5">
+                                            <Sparkles className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
+                                            Cek Kualitas Draft (AI)
+                                        </p>
+                                        {draftReview && <AiScoreBadge score={draftReview.overall_score} />}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            isLoading={isReviewingDraft}
+                                            onClick={() => handleReviewDraft(draftReview !== null)}
+                                        >
+                                            {draftReview ? 'Analisis Ulang' : 'Cek Kualitas Draft'}
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                {draftReview && (
+                                    <div className="p-3.5 rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)]/60">
+                                        <AiInsightPanel
+                                            result={draftReview}
+                                            onApplyCaption={(caption) => editForm.setData('caption', caption)}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
                             <TraceApuChat
                                 scope="global"
                                 compact
@@ -1893,6 +1973,28 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                     setPerfForm((f) => ({ ...f, performance_notes: e.target.value }))
                                 }
                             />
+
+                            <div className="p-3.5 rounded-2xl border border-[var(--md-sys-color-outline-variant)] bg-[var(--md-sys-color-surface-container-low)]/60 space-y-3">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        <p className="text-[11px] font-bold text-[var(--md-sys-color-on-surface)] flex items-center gap-1.5">
+                                            <Sparkles className="w-3.5 h-3.5 text-[var(--md-sys-color-primary)]" />
+                                            Analisis Performa dengan AI
+                                        </p>
+                                        {perfReview && <AiScoreBadge score={perfReview.overall_score} />}
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        isLoading={isAnalyzingPerf}
+                                        onClick={() => handleAnalyzePerformance(perfReview !== null)}
+                                    >
+                                        {perfReview ? 'Analisis Ulang' : 'Analisis Performa'}
+                                    </Button>
+                                </div>
+                                {perfReview && <AiInsightPanel result={perfReview} />}
+                            </div>
                             <div className="pt-2 border-t border-[var(--md-sys-color-outline-variant)] flex justify-end">
                                 <Button
                                     type="button"

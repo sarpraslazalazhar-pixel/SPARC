@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AiAnalysisController;
 use App\Http\Controllers\AiSettingsController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\ContentPillarController;
@@ -263,4 +264,15 @@ Route::middleware('auth')->group(function () {
     Route::post('/trends/refresh', [TrendsController::class, 'refresh'])
         ->middleware('throttle:10,1')->name('trends.refresh');
     Route::get('/trends/data', [TrendsController::class, 'data'])->name('trends.data');
+
+    // =====================================================================
+    // 10. AI CONTENT ANALYZER — draft review, performance read, period digest
+    // =====================================================================
+    Route::post('/ai/analyze-draft', [AiAnalysisController::class, 'analyzeDraft'])
+        ->middleware('throttle:20,1')->name('ai.analyzeDraft');
+    Route::post('/ai/analyze-post/{id}', [AiAnalysisController::class, 'analyzePost'])
+        ->middleware('throttle:20,1')->name('ai.analyzePost');
+    Route::get('/ai/analysis/{id}', [AiAnalysisController::class, 'show'])->name('ai.analysis');
+    Route::get('/ai/digest', [AiAnalysisController::class, 'digest'])
+        ->middleware('throttle:10,1')->name('ai.digest');
 });

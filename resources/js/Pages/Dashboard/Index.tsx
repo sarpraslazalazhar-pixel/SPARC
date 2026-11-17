@@ -29,6 +29,7 @@ import {
 import { InstagramIcon, TikTokIcon, YoutubeIcon } from '@/Components/Icons';
 import { AppLayout, type SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { ContentDetailSheet } from '@/Components/ContentDetailSheet';
+import { DashboardAiDigestWidget } from '@/Components/DashboardAiDigestWidget';
 import { Badge } from '@/Components/UI/Badge';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
@@ -988,6 +989,13 @@ export default function DashboardIndex({
                 animate="show"
                 className="space-y-6"
             >
+                {/* =================================================================
+                    AI PERIOD DIGEST — newest strategy summary (hidden until generated)
+                   ================================================================= */}
+                <motion.div variants={staggerItemVariants}>
+                    <DashboardAiDigestWidget />
+                </motion.div>
+
                 {/* =================================================================
                     HERO HEADER ROW: Eyebrow + Bold Title & Pill Spotlight Search
                    ================================================================= */}
