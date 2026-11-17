@@ -38,6 +38,11 @@ class AppServiceProvider extends ServiceProvider
      */
     private function registerOpenAiCompatibleGateway(): void
     {
+        if (! class_exists(PrismManager::class)) {
+            // Vendor server belum berisi prism-php/prism (composer install belum dijalankan).
+            return;
+        }
+
         app(PrismManager::class)->extend('openai', fn ($app, array $config): OpenAiCompatibleGateway => new OpenAiCompatibleGateway(
             apiKey: (string) ($config['api_key'] ?? ''),
             url: (string) ($config['url'] ?? ''),
