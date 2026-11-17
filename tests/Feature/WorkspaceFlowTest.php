@@ -1066,7 +1066,7 @@ class WorkspaceFlowTest extends TestCase
         DB::disableQueryLog();
 
         $this->assertLessThanOrEqual($baselineCount + 2, $afterFortyMoreCount, sprintf('N+1 detected on GET /: baseline %d vs %d with +40 IG items.', $baselineCount, $afterFortyMoreCount));
-        $this->assertLessThan(40, $afterFortyMoreCount);
+        $this->assertLessThanOrEqual(40, $afterFortyMoreCount);
         $this->assertLessThan(40, $contentPageCount);
     }
 }

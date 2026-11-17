@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\TraceApuCorpusService;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -67,6 +68,25 @@ class ContentItem extends Model
         'ad_spend' => 'float',
         'grid_position' => 'integer',
     ];
+
+    /**
+     * Cached text embedding for TRACE APU retrieval; null until embedded.
+     *
+     * @var list<float>|null
+     */
+    protected ?array $traceApuEmbedding = null;
+
+    /**
+     * Embed title + caption + brief for retrieval scoring (see TraceApuCorpusService).
+     *
+     * @return list<float>|null
+     */
+    public function embedForTraceApu(): ?array
+    {
+        return $this->traceApuEmbedding ??= app(TraceApuCorpusService::class)->embed(
+            trim($this->title.' '.$this->caption.' '.$this->brief)
+        );
+    }
 
     public function tasks(): HasMany
     {

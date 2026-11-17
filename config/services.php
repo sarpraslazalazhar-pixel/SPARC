@@ -48,4 +48,10 @@ return [
         ),
     ],
 
+    'gemini' => [
+        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'embedding_model' => env('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001'),
+        'timeout' => (int) env('GEMINI_TIMEOUT', 120),
+    ],
+
 ];

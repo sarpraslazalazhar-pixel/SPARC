@@ -21,6 +21,8 @@ import { Modal } from '@/Components/UI/Modal';
 import { useToast } from '@/Components/UI/Toast';
 import { MD3_EASING, MD3_SPRING } from '@/lib/motion';
 import { copyToClipboard } from '@/lib/utils';
+import { TraceApuChat } from '@/Components/TraceApuChat';
+import type { TrendHook } from '@/types/traceApu';
 
 export interface ScriptSlide {
     id: string;
@@ -62,6 +64,7 @@ interface StudioShowProps {
     projectId?: string;
     project?: StudioProjectDetail;
     sessionProject?: Partial<StudioProjectDetail> | null;
+    trendHooks?: TrendHook[];
 }
 
 const SAMPLE_HOOKS = [
@@ -140,6 +143,7 @@ export default function StudioShow({
     projectId,
     project: initialProject,
     sessionProject,
+    trendHooks = [],
 }: StudioShowProps) {
     const { success, info, warning } = useToast();
 
@@ -183,7 +187,12 @@ export default function StudioShow({
     const [copiedCaption, setCopiedCaption] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
 
-    const filteredHooks = SAMPLE_HOOKS.filter(
+    const allHooks = useMemo(
+        () => [...trendHooks, ...SAMPLE_HOOKS.filter((hook) => !trendHooks.some((trend) => trend.text === hook.text))],
+        [trendHooks]
+    );
+
+    const filteredHooks = allHooks.filter(
         (h) =>
             h.text.toLowerCase().includes(hookSearch.toLowerCase()) ||
             h.category.toLowerCase().includes(hookSearch.toLowerCase())
@@ -687,6 +696,15 @@ export default function StudioShow({
                         />
                     </div>
 
+                    <TraceApuChat
+                        scope={`studio:${project.id}`}
+                        onApplyHook={handleApplyHook}
+                        onApplyCaption={(caption) => {
+                            setProject((prev) => ({ ...prev, caption }));
+                            success('Caption Diterapkan', 'Caption Studio diperbarui dari usulan TRACE APU.');
+                        }}
+                    />
+
                     {/* Production Links & Published URL */}
                     <div className="bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] p-5 rounded-3xl border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] space-y-4">
                         <h3 className="text-sm font-bold text-[var(--md-sys-color-on-surface)] pb-3 border-b border-[var(--md-sys-color-outline-variant)]">
@@ -755,6 +773,15 @@ export default function StudioShow({
                     </div>
 
                     <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                        {filteredHooks.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-[var(--md-sys-color-outline-variant)] p-4 text-center text-xs text-[var(--md-sys-color-on-surface-variant)]">
+                                Belum ada hook yang cocok. Cari tren baru di{' '}
+                                <Link href="/trends" className="font-semibold text-[var(--md-sys-color-primary)]">
+                                    halaman Tren
+                                </Link>
+                                .
+                            </div>
+                        )}
                         {filteredHooks.map((h) => (
                             <div
                                 key={h.id}

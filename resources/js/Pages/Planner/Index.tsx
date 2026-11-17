@@ -34,6 +34,7 @@ import { Input } from '@/Components/UI/Input';
 import { DroppableColumn, SortableCardItem, useKanbanSensors } from '@/Components/UI/KanbanDnd';
 import { Modal } from '@/Components/UI/Modal';
 import { Select } from '@/Components/UI/Select';
+import { PillarSelect } from '@/Components/UI/PillarSelect';
 import {
     ContentIdBadge,
     DeadlineBadge,
@@ -675,21 +676,12 @@ export default function PlannerIndex({
                             <option value="facebook">Facebook</option>
                         </select>
 
-                        <select
+                        <PillarSelect
                             aria-label="Filter berdasarkan pilar"
                             value={pillarFilter}
                             onChange={(e) => setPillarFilter(e.target.value)}
-                            className="h-9 text-xs bg-[var(--md-sys-color-surface-container-low)] border border-[var(--md-sys-color-outline-variant)] rounded-xl px-3 text-[var(--md-sys-color-on-surface)] font-medium focus:outline-none focus:ring-2 focus:ring-[var(--md-sys-color-primary)]/25 cursor-pointer"
-                        >
-                            <option value="all">Pilar: Semua</option>
-                            <option value="edukasi">Edukasi</option>
-                            <option value="program">Program</option>
-                            <option value="kelembagaan">Kelembagaan</option>
-                            <option value="inspirasi">Inspirasi</option>
-                            <option value="fundraising">Fundraising</option>
-                            <option value="event">Event & Liputan</option>
-                            <option value="pengumuman">Pengumuman</option>
-                        </select>
+                            className="w-auto h-9"
+                        />
 
                         <select
                             aria-label="Filter berdasarkan prioritas"
@@ -1130,19 +1122,13 @@ export default function PlannerIndex({
                             <option value="artikel">Artikel Website</option>
                         </Select>
 
-                        <Select
+                        <PillarSelect
                             label="Pilar Komunikasi"
                             value={createForm.data.pillar}
                             onChange={(e) =>
                                 createForm.setData('pillar', e.target.value as ContentPillarKey)
                             }
-                        >
-                            <option value="edukasi">Edukasi</option>
-                            <option value="program">Program</option>
-                            <option value="kelembagaan">Kelembagaan</option>
-                            <option value="inspirasi">Inspirasi</option>
-                            <option value="fundraising">Fundraising</option>
-                        </Select>
+                        />
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1179,7 +1165,7 @@ export default function PlannerIndex({
                             }
                         >
                             <option value="inbox">Inbox Request</option>
-                            <option value="briefing">Briefing & Ideasi</option>
+                            <option value="briefing">Briefing & Ide</option>
                             <option value="in_progress">Produksi</option>
                         </Select>
                     </div>

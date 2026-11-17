@@ -3,7 +3,9 @@
 namespace App\Http\Middleware;
 
 use App\Http\Controllers\WorkspaceV3Controller;
+use App\Models\ContentPillar;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Inertia\Middleware;
 
@@ -43,6 +45,12 @@ class HandleInertiaRequests extends Middleware
             'workspaceNotifications' => fn (): array => $this->resolveNotificationsContext($request),
             'workspaceBadges' => fn (): array => $this->resolveNavigationBadges($request),
             'instagramStatus' => fn (): array => $this->resolveInstagramStatus($request),
+            // Kolom taksonomi jarang berubah; cache per proses agar tidak menambah satu query
+            // di setiap request Inertia. Diinvalidasi oleh ContentPillarController.
+            'contentPillars' => fn (): array => Cache::rememberForever(
+                ContentPillar::CACHE_KEY,
+                static fn (): array => ContentPillar::options()
+            ),
             'flash' => [
                 'toast' => fn (): ?array => $this->resolveFlashToast($request),
             ],

@@ -446,7 +446,6 @@ export interface SparcSystemSettings {
     pollingIntervalSeconds: number;
     lastSyncAt: string;
     tokenHealthy: boolean;
-    contentPilars: Array<{ key: string; label: string }>;
     platforms: Array<{ key: string; label: string }>;
     haloApuLogs: Array<{
         id: string;
@@ -462,6 +461,15 @@ export interface SparcSystemSettings {
         autoSolveOnPublish: boolean;
         lastSyncAt: string;
         lastStatus: string;
+    };
+    ai?: {
+        provider: 'gemini' | 'openai';
+        base_url: string;
+        resolved_base_url: string;
+        model: string;
+        embedding_model: string;
+        has_api_key: boolean;
+        key_source: 'database' | 'env' | 'none' | string;
     };
     instagram?: {
         appId?: string;

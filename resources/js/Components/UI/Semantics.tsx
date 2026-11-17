@@ -1,4 +1,5 @@
 import React from 'react';
+import { usePage } from '@inertiajs/react';
 import {
     AlertOctagon,
     AlertTriangle,
@@ -121,7 +122,7 @@ export const WORKFLOW_STATUS_META: Record<
         icon: Inbox,
     },
     briefing: {
-        label: 'Briefing & Ideasi',
+        label: 'Briefing & Ide',
         shortLabel: 'Briefing',
         styleVars: {
             backgroundColor: 'var(--sparc-status-briefing-bg)',
@@ -341,34 +342,55 @@ export const PlatformChip: React.FC<{
     );
 };
 
-const PILLAR_LABELS: Record<string, { label: string; accent: string }> = {
-    edukasi: { label: 'Edukasi', accent: 'border-l-blue-500' },
-    program: { label: 'Program', accent: 'border-l-indigo-500' },
-    fundraising: { label: 'Fundraising', accent: 'border-l-emerald-500' },
-    inspirasi: { label: 'Inspirasi', accent: 'border-l-violet-500' },
-    kelembagaan: { label: 'Kelembagaan', accent: 'border-l-slate-500' },
-    promosi: { label: 'Promosi', accent: 'border-l-indigo-500' },
-    event: { label: 'Event & Liputan', accent: 'border-l-violet-500' },
-    pengumuman: { label: 'Kelembagaan', accent: 'border-l-slate-500' },
-    hiburan: { label: 'Inspirasi', accent: 'border-l-teal-500' },
+export interface PillarOption {
+    id: number;
+    key: string;
+    label: string;
+    accent: string;
+}
+
+const PILLAR_ACCENTS: Record<string, string> = {
+    blue: 'border-l-blue-500',
+    indigo: 'border-l-indigo-500',
+    violet: 'border-l-violet-500',
+    emerald: 'border-l-emerald-500',
+    teal: 'border-l-teal-500',
+    amber: 'border-l-amber-500',
+    rose: 'border-l-rose-500',
+    slate: 'border-l-slate-500',
+};
+
+/**
+ * Pilar aktif dari prop Inertia bersama `contentPillars` (dikelola di Pengaturan).
+ * Fallback ke label `key` bila pilar sudah dinonaktifkan/dihapus tetapi konten lama masih memakainya.
+ */
+export const usePillars = (): PillarOption[] => usePage<{ contentPillars?: PillarOption[] }>().props.contentPillars ?? [];
+
+export const pillarLabel = (key: string, pillars: PillarOption[]): string =>
+    pillars.find((p) => p.key === key)?.label ?? key;
+
+const pillarAccent = (key: string, pillars: PillarOption[]): string => {
+    const accent = pillars.find((p) => p.key === key)?.accent ?? 'slate';
+
+    return PILLAR_ACCENTS[accent] ?? PILLAR_ACCENTS.slate;
 };
 
 export const PillarTag: React.FC<{
     pillar?: string;
     className?: string;
 }> = ({ pillar = 'edukasi', className }) => {
-    const meta = PILLAR_LABELS[pillar] || { label: pillar, accent: 'border-l-slate-400' };
+    const pillars = usePillars();
 
     return (
         <span
             className={cn(
                 'inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 rounded-r-md border-l-2 bg-[var(--md-sys-color-surface-container-low)] text-[10px] font-semibold tracking-wide uppercase text-[var(--md-sys-color-on-surface-variant)] select-none',
-                meta.accent,
+                pillarAccent(pillar, pillars),
                 className
             )}
         >
             <Layers className="w-2.5 h-2.5 opacity-70 shrink-0" />
-            <span>{meta.label}</span>
+            <span>{pillarLabel(pillar, pillars)}</span>
         </span>
     );
 };

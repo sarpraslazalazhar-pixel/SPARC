@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\ContentItemResource;
+use App\Models\AiSetting;
 use App\Models\ContentItem;
+use App\Models\ContentPillar;
 use App\Models\ContentTask;
 use App\Models\HaloApuConnection;
 use App\Models\HaloApuSyncLog;
@@ -365,6 +367,14 @@ class WorkspaceV3Controller extends Controller
             'manual_non_ig_posts' => $manualNonIg,
             'total_posts' => $uniqueIg + $manualNonIg,
         ];
+    }
+
+    /**
+     * Jumlah konten yang memakai satu pilar; dipakai sebelum penghapusan pilar.
+     */
+    public static function countContentItemsByPillar(string $pillarKey): int
+    {
+        return ContentItem::query()->where('pillar', $pillarKey)->count();
     }
 
     /**
@@ -1276,6 +1286,7 @@ class WorkspaceV3Controller extends Controller
 
         $state = [
             'currentUser' => $currentUser,
+            'activeRole' => $activeRole,
             'can' => self::permissionsForRole($activeRole),
             'personas' => array_values($personas),
             'contentItems' => $contentItems,
@@ -1295,6 +1306,7 @@ class WorkspaceV3Controller extends Controller
                 $s = $session->get('sparc_v3.settings', []);
                 $s['instagram'] = self::resolveInstagramSettingsPayload($request);
                 $s['haloApu'] = self::resolveHaloApuSettingsPayload();
+                $s['ai'] = self::resolveAiSettingsPayload();
 
                 return $s;
             })(),
@@ -2364,11 +2376,23 @@ class WorkspaceV3Controller extends Controller
         }
 
         $settings = $request->hasSession() ? $request->session()->get('sparc_v3.settings', []) : [];
+        $settings = array_merge([
+            'monthlyContentTarget' => 24,
+            'workingHoursStart' => '08:00',
+            'workingHoursEnd' => '17:00',
+            'pollingIntervalSeconds' => 30,
+        ], $settings);
         $settings['instagram'] = self::resolveInstagramSettingsPayload($request);
         $settings['haloApu'] = self::resolveHaloApuSettingsPayload();
+        $settings['ai'] = self::resolveAiSettingsPayload();
 
         return Inertia::render('Settings/Index', [
             'settings' => $settings,
+            'inactivePillars' => ContentPillar::query()
+                ->where('is_active', false)
+                ->orderBy('label')
+                ->get(['id', 'key', 'label', 'accent'])
+                ->toArray(),
         ]);
     }
 
@@ -4652,6 +4676,39 @@ class WorkspaceV3Controller extends Controller
         return back();
     }
 
+    /**
+     * AI provider payload for the Settings page (no secrets exposed).
+     */
+    public static function resolveAiSettingsPayload(): array
+    {
+        if (! Schema::hasTable('ai_settings')) {
+            $provider = AiSetting::PROVIDER_GEMINI;
+            $apiKey = (string) config('prism.providers.gemini.api_key');
+
+            return [
+                'provider' => $provider,
+                'base_url' => '',
+                'resolved_base_url' => (string) config('prism.providers.gemini.url'),
+                'model' => (string) config('services.gemini.model'),
+                'embedding_model' => (string) config('services.gemini.embedding_model'),
+                'has_api_key' => filled($apiKey),
+                'key_source' => filled($apiKey) ? 'env' : 'none',
+            ];
+        }
+
+        $setting = AiSetting::current();
+
+        return [
+            'provider' => $setting->provider ?: AiSetting::PROVIDER_GEMINI,
+            'base_url' => (string) ($setting->base_url ?? ''),
+            'resolved_base_url' => $setting->resolvedBaseUrl(),
+            'model' => (string) ($setting->model ?: config('services.gemini.model')),
+            'embedding_model' => (string) ($setting->embedding_model ?: config('services.gemini.embedding_model')),
+            'has_api_key' => $setting->resolvedApiKey() !== '',
+            'key_source' => filled($setting->api_key) ? 'database' : (filled(config('prism.providers.'.($setting->provider ?: AiSetting::PROVIDER_GEMINI).'.api_key')) ? 'env' : 'none'),
+        ];
+    }
+
     public static function resolveHaloApuSettingsPayload(): array
     {
         if (! Schema::hasTable('haloapu_connections')) {
@@ -5456,13 +5513,6 @@ class WorkspaceV3Controller extends Controller
                 'pollingIntervalSeconds' => 30,
                 'lastSyncAt' => 'Belum pernah',
                 'tokenHealthy' => true,
-                'contentPilars' => [
-                    ['key' => 'edukasi', 'label' => 'Edukasi Publik'],
-                    ['key' => 'program', 'label' => 'Program Prioritas'],
-                    ['key' => 'kelembagaan', 'label' => 'Kelembagaan & Layanan'],
-                    ['key' => 'inspirasi', 'label' => 'Inspirasi & Humanis'],
-                    ['key' => 'fundraising', 'label' => 'Kemitraan & Kolaborasi'],
-                ],
                 'platforms' => [
                     ['key' => 'instagram', 'label' => 'Instagram Resmi'],
                     ['key' => 'tiktok', 'label' => 'TikTok Resmi'],

@@ -25,10 +25,12 @@ import {
 } from 'lucide-react';
 import type { SharedWorkspaceProps } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
+import { TraceApuChat } from '@/Components/TraceApuChat';
 import { Badge } from '@/Components/UI/Badge';
 import { Input } from '@/Components/UI/Input';
 import { Modal } from '@/Components/UI/Modal';
 import { Select } from '@/Components/UI/Select';
+import { PillarSelect } from '@/Components/UI/PillarSelect';
 import {
     ContentIdBadge,
     DeadlineBadge,
@@ -1036,20 +1038,14 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                     <option value="x">X</option>
                                 </Select>
 
-                                <Select
+                                <PillarSelect
                                     label="Pilar Komunikasi"
                                     value={editForm.data.pillar}
                                     onChange={(e) =>
                                         editForm.setData('pillar', e.target.value as typeof editForm.data.pillar)
                                     }
                                     disabled={!can?.editContent}
-                                >
-                                    <option value="edukasi">Edukasi</option>
-                                    <option value="program">Program</option>
-                                    <option value="kelembagaan">Kelembagaan</option>
-                                    <option value="inspirasi">Inspirasi</option>
-                                    <option value="fundraising">Fundraising</option>
-                                </Select>
+                                />
 
                                 <Select
                                     label="Tingkat Prioritas"
@@ -1128,6 +1124,12 @@ export const ContentDetailSheet: React.FC<ContentDetailSheetProps> = ({
                                 value={editForm.data.caption}
                                 onChange={(e) => editForm.setData('caption', e.target.value)}
                                 disabled={!can?.editContent}
+                            />
+
+                            <TraceApuChat
+                                scope="global"
+                                compact
+                                onApplyCaption={(caption) => editForm.setData('caption', caption)}
                             />
 
                             {/* SECTION: TAUTAN MATERI, REVIEW VIDEO & PUBLIKASI */}

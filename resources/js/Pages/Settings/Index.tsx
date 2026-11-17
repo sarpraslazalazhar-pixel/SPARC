@@ -19,16 +19,19 @@ import {
 import { AppLayout } from '@/Layouts/AppLayout';
 import { Button } from '@/Components/UI/Button';
 import { Input } from '@/Components/UI/Input';
-import { PillarTag, PlatformChip } from '@/Components/UI/Semantics';
+import { AiProviderCard } from '@/Components/AiProviderCard';
+import { PillarManager } from '@/Components/PillarManager';
+import { PlatformChip } from '@/Components/UI/Semantics';
 import { useToast } from '@/Components/UI/Toast';
 import { copyToClipboard } from '@/lib/utils';
 import type { SparcSystemSettings } from '@/types/sparc';
 
 interface SettingsPageProps {
     settings: SparcSystemSettings;
+    inactivePillars: Array<{ id: number; key: string; label: string; accent: string }>;
 }
 
-export default function SettingsIndex({ settings }: SettingsPageProps) {
+export default function SettingsIndex({ settings, inactivePillars }: SettingsPageProps) {
     const { success: toastSuccess, error: toastError } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [isConnectingFb, setIsConnectingFb] = useState(false);
@@ -248,6 +251,8 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
                 {/* Left Column: Operational Parameters & Taxonomy */}
                 <div className="lg:col-span-7 space-y-5">
+                    <AiProviderCard ai={settings.ai} />
+
                     <form
                         onSubmit={handleSaveSettings}
                         className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] space-y-4"
@@ -260,7 +265,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                     Parameter Operasional Ruang Kerja
                                 </h3>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    Berlaku bagi kalkulasi target dashboard, jam kerja tim, dan polling notifikasi cPanel
+                                    Target dashboard, jam kerja, dan polling notifikasi
                                 </p>
                             </div>
                         </div>
@@ -283,7 +288,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                 type="number"
                                 min={15}
                                 max={120}
-                                label="Interval Short-Polling Notifikasi (Detik)"
+                                label="Interval Polling Notifikasi (Detik)"
                                 required
                                 value={form.data.polling_interval_seconds}
                                 onChange={(e) =>
@@ -294,7 +299,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
 
                             <Input
                                 type="time"
-                                label="Jam Mulai Operasional HUMAS"
+                                label="Jam Mulai Kerja"
                                 required
                                 value={form.data.working_hours_start}
                                 onChange={(e) =>
@@ -305,7 +310,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
 
                             <Input
                                 type="time"
-                                label="Jam Selesai Operasional HUMAS"
+                                label="Jam Selesai Kerja"
                                 required
                                 value={form.data.working_hours_end}
                                 onChange={(e) => form.setData('working_hours_end', e.target.value)}
@@ -326,7 +331,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                         </div>
                     </form>
 
-                    {/* Active Taxonomy Reference */}
+                {/* Active Taxonomy Reference */}
                     <div className="p-5 rounded-2xl bg-[var(--md-sys-color-surface)] dark:bg-[var(--md-sys-color-surface-container)] border border-[var(--md-sys-color-outline-variant)] shadow-[var(--md-elevation-1)] space-y-4">
                         <div className="flex items-center gap-2 pb-3 border-b border-[var(--md-sys-color-outline-variant)]">
                             <Layers className="w-4 h-4 text-[var(--md-sys-color-secondary)]" />
@@ -335,7 +340,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                                     Standar Pilar Komunikasi & Kanal Resmi
                                 </h3>
                                 <p className="text-xs text-[var(--md-sys-color-on-surface-muted)]">
-                                    Token semantik terpisah agar status alur, prioritas, kanal, dan pilar tidak saling tertukar
+                                    Kelola pilar (taksonomi konten) dan kanal resmi. Pilar yang dinonaktifkan tetap tampil pada konten lama.
                                 </p>
                             </div>
                         </div>
@@ -343,11 +348,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                         <div className="space-y-3">
                             <div>
                                 <span className="sparc-eyebrow block mb-2">Pilar Komunikasi Aktif</span>
-                                <div className="flex flex-wrap gap-2">
-                                    {(settings.contentPilars ?? []).map((p) => (
-                                        <PillarTag key={p.key} pillar={p.key} />
-                                    ))}
-                                </div>
+                                <PillarManager inactivePillars={inactivePillars} />
                             </div>
 
                             <div>
@@ -360,6 +361,7 @@ export default function SettingsIndex({ settings }: SettingsPageProps) {
                             </div>
                         </div>
                     </div>
+
                 </div>
 
                 {/* Right Column: HALO APU Integration & Sync Logs */}

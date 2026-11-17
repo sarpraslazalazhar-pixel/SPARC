@@ -29,6 +29,7 @@ import {
     RefreshCw,
     Send,
     Settings,
+    Sparkles,
     Shield,
     TableProperties,
     Trash2,
@@ -571,6 +572,12 @@ export const PersistentAppShell: React.FC<{ children: React.ReactNode }> = ({ ch
                         matchHref: ['/studio'],
                         label: 'Script Studio',
                         icon: FileText,
+                    },
+                    {
+                        href: '/trends',
+                        matchHref: ['/trends'],
+                        label: 'Tren Konten',
+                        icon: Sparkles,
                     },
                     {
                         href: '/grid',

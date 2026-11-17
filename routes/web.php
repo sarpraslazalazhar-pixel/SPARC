@@ -1,11 +1,16 @@
 <?php
 
+use App\Http\Controllers\AiSettingsController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\ContentPillarController;
 use App\Http\Controllers\HaloApuOperationsController;
 use App\Http\Controllers\InstagramOperationsController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\TraceApuController;
+use App\Http\Controllers\TrendsController;
 use App\Http\Controllers\WorkspaceActionController;
 use App\Http\Controllers\WorkspaceV3Controller;
+use App\Services\TrendFinderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -170,6 +175,7 @@ Route::middleware('auth')->group(function () {
         return Inertia::render('Studio/Show', [
             'projectId' => $id,
             'sessionProject' => $matched,
+            'trendHooks' => app(TrendFinderService::class)->hookIdeas(),
         ]);
     })->name('studio.show');
 
@@ -196,6 +202,9 @@ Route::middleware('auth')->group(function () {
     // =====================================================================
     Route::get('/settings', [WorkspaceV3Controller::class, 'settings'])->name('settings.index');
     Route::patch('/settings', [WorkspaceV3Controller::class, 'updateSettings'])->name('settings.update');
+    Route::post('/settings/pilars', [ContentPillarController::class, 'store'])->name('settings.pilars.store');
+    Route::patch('/settings/pilars/{contentPillar}', [ContentPillarController::class, 'update'])->name('settings.pilars.update');
+    Route::delete('/settings/pilars/{contentPillar}', [ContentPillarController::class, 'destroy'])->name('settings.pilars.destroy');
     Route::post('/settings/haloapu/sync', [WorkspaceV3Controller::class, 'syncHaloApu'])->name('settings.haloapu.sync');
     Route::post('/settings/haloapu/test', [WorkspaceV3Controller::class, 'testHaloApuConnection'])->name('settings.haloapu.test');
     Route::patch('/settings/haloapu', [WorkspaceV3Controller::class, 'updateHaloApuSettings'])->name('settings.haloapu.update');
@@ -226,10 +235,33 @@ Route::middleware('auth')->group(function () {
     Route::post('/notifications/read-all', [WorkspaceV3Controller::class, 'markAllNotificationsRead'])->name('notifications.readAll');
 
     // =====================================================================
-    // 7. USER PROFILE & ACCOUNT MANAGEMENT
+    // 7. HERMES — agent konten, hook bank, dan pencarian tren
+    // =====================================================================
+    Route::prefix('trace-apu')->name('traceapu.')->group(function () {
+        Route::get('/panel', [TraceApuController::class, 'panel'])->name('panel');
+        Route::post('/chat', [TraceApuController::class, 'chat'])->middleware('throttle:20,1')->name('chat');
+        Route::put('/instructions', [TraceApuController::class, 'updateInstructions'])->name('instructions');
+        Route::delete('/history', [TraceApuController::class, 'forget'])->name('forget');
+        Route::post('/draft', [TraceApuController::class, 'draft'])->middleware('throttle:10,1')->name('draft');
+        Route::post('/caption', [TraceApuController::class, 'applyCaption'])->name('caption.apply');
+        Route::get('/trends', [TraceApuController::class, 'trends'])->name('trends');
+        Route::put('/provider', [AiSettingsController::class, 'update'])->name('provider.update');
+        Route::get('/provider/models', [AiSettingsController::class, 'models'])->name('provider.models');
+    });
+
+    // =====================================================================
+    // 8. USER PROFILE & ACCOUNT MANAGEMENT
     // =====================================================================
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::post('/profile/avatar', [ProfileController::class, 'updateAvatar'])->name('profile.avatar');
     Route::put('/profile/password', [ProfileController::class, 'updatePassword'])->name('profile.password');
+
+    // =====================================================================
+    // 9. AI TRENDS — Trend Finder (Gemini grounded search via Prism)
+    // =====================================================================
+    Route::get('/trends', [TrendsController::class, 'index'])->name('trends.index');
+    Route::post('/trends/refresh', [TrendsController::class, 'refresh'])
+        ->middleware('throttle:10,1')->name('trends.refresh');
+    Route::get('/trends/data', [TrendsController::class, 'data'])->name('trends.data');
 });

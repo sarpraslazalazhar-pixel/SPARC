@@ -1,9 +1,11 @@
 <?php
 
 use App\Http\Controllers\WorkspaceV3Controller;
+use App\Jobs\RefreshTrendsJob;
 use App\Models\InstagramSchedule;
 use App\Services\HaloApuClientService;
 use App\Services\InstagramGraphService;
+use App\Services\TrendFinderService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -164,7 +166,22 @@ Artisan::command('instagram:deduplicate', function (): int {
     return 0;
 })->purpose('Bersihkan duplikat postingan Instagram (ig_media_id ganda) dan hitung total unik');
 
+Artisan::command('trends:refresh', function (TrendFinderService $service): int {
+    if (! $service->isConfigured()) {
+        $this->warn('Gemini API key belum dikonfigurasi, refresh tren dilewati.');
+
+        return 0;
+    }
+
+    RefreshTrendsJob::dispatch();
+
+    $this->info('Pencarian tren dikirim ke antrean. Hasilnya akan muncul di halaman Tren.');
+
+    return 0;
+})->purpose('Cari tren konten media sosial terbaru dengan AI dan simpan ke halaman Tren');
+
 Schedule::command('instagram:process-scheduled')->everyMinute()->withoutOverlapping();
 Schedule::command('instagram:sync-metrics')->everyThirtyMinutes()->withoutOverlapping();
 Schedule::command('instagram:refresh-token')->dailyAt('02:00')->withoutOverlapping();
 Schedule::command('haloapu:sync-tickets')->everyFifteenMinutes()->withoutOverlapping();
+Schedule::command('trends:refresh')->dailyAt('05:00')->withoutOverlapping();
